@@ -1,0 +1,23 @@
+from pydantic import BaseModel, EmailStr
+from typing import Optional
+
+
+class LoginRequest(BaseModel):
+    username: str  # Puede ser email o número de empleado
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: dict
+
+
+class UserInfo(BaseModel):
+    id: int
+    numero_empleado: str
+    nombre: str
+    apellido_paterno: Optional[str]
+    apellido_materno: Optional[str]
+    email: Optional[str]
+    rol_id: Optional[int]

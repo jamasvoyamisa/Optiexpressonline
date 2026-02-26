@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# Frontend
+node_modules/
+dist/
+build/
+
+# Agent Local
+agent-local/buffer.db
+agent-local/*.log
+agent-local/config.yaml
+
+# OS
+.DS_Store
+
+# Archives (no subir zips del agente)
+*.zip
