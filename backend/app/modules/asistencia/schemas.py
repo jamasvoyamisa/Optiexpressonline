@@ -73,6 +73,29 @@ class MarkEnrollDoneRequest(BaseModel):
     success: bool = True
 
 
+class UploadTemplateRequest(BaseModel):
+    numero_empleado: str
+    finger_index: int = 0
+    template_data: str
+
+
+class FingerprintTemplateResponse(BaseModel):
+    id: int
+    numero_empleado: str
+    finger_index: int
+    source_device_id: Optional[int] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ReplicateRequest(BaseModel):
+    numero_empleado: str
+    dispositivo_ids: List[int]
+
+
 class DispositivoResponse(DispositivoBase):
     id: int
     api_key: str
@@ -152,16 +175,19 @@ class AsistenciaSync(BaseModel):
     user_id: str  # ID del usuario en el dispositivo
     timestamp: str  # Timestamp en formato ISO
     device_id: str  # Identificador del dispositivo
-    tipo: Optional[str] = "entrada"  # entrada o salida
+    tipo: Optional[str] = "checada"  # el sistema auto-asigna el tipo
 
 
 class AsistenciaResponse(AsistenciaBase):
     id: int
     empleado_id: int
     dispositivo_id: int
+    es_tiempo_extra: bool = False
     sincronizado: bool
     created_at: datetime
-    
+    empleado_nombre: Optional[str] = None
+    empleado_numero: Optional[str] = None
+
     class Config:
         from_attributes = True
 

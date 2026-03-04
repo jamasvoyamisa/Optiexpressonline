@@ -155,16 +155,45 @@ class AsistenciaService:
 
     @staticmethod
     def enqueue_user(db: Session, device_id: int, data: schemas.EnqueueUserRequest) -> models.UsuarioPendienteDispositivo:
-        """Agregar usuario a la cola para alta remota en el dispositivo"""
+        """Agregar usuario a la cola para alta remota (agente o ADMS).
+        Tambien crea el empleado en el sistema si no existe, para que sus checadas se registren."""
         dispositivo = db.query(models.Dispositivo).filter(models.Dispositivo.id == device_id).first()
         if not dispositivo:
             raise ValueError("Dispositivo no encontrado")
-        if not dispositivo.serial_number:
-            raise ValueError("El dispositivo debe tener SN configurado para altas remotas")
+
+        numero = data.numero_empleado.strip()
+        nombre_completo = data.nombre.strip()
+
+        empleado = db.query(personal_models.Empleado).filter(
+            personal_models.Empleado.numero_empleado == numero
+        ).first()
+
+        if not empleado:
+            partes = nombre_completo.split(" ", 2)
+            nombre = partes[0] if partes else nombre_completo
+            apellido_p = partes[1] if len(partes) > 1 else ""
+            apellido_m = partes[2] if len(partes) > 2 else ""
+            empleado = personal_models.Empleado(
+                numero_empleado=numero,
+                nombre=nombre,
+                apellido_paterno=apellido_p,
+                apellido_materno=apellido_m,
+                estado=personal_models.EstadoEmpleado.ACTIVO
+            )
+            db.add(empleado)
+            db.commit()
+            db.refresh(empleado)
+        elif empleado.apellido_paterno == "(No registrado)":
+            partes = nombre_completo.split(" ", 2)
+            empleado.nombre = partes[0] if partes else nombre_completo
+            empleado.apellido_paterno = partes[1] if len(partes) > 1 else ""
+            empleado.apellido_materno = partes[2] if len(partes) > 2 else ""
+            db.commit()
+
         pendiente = models.UsuarioPendienteDispositivo(
             dispositivo_id=device_id,
-            numero_empleado=data.numero_empleado.strip(),
-            nombre=data.nombre.strip(),
+            numero_empleado=numero,
+            nombre=nombre_completo,
             enviado=False
         )
         db.add(pendiente)
@@ -200,29 +229,60 @@ class AsistenciaService:
 
     @staticmethod
     def start_enroll(db: Session, device_id: int, numero_empleado: str) -> models.PendingEnroll:
-        """Agregar usuario a la cola de registro de huella"""
+        """Agregar usuario a la cola de registro de huella. Si no esta enviado, lo encola automaticamente."""
         dispositivo = db.query(models.Dispositivo).filter(models.Dispositivo.id == device_id).first()
         if not dispositivo:
             raise ValueError("Dispositivo no encontrado")
-        # Verificar que el usuario fue enviado al dispositivo
+
+        numero = numero_empleado.strip()
+        from app.modules.personal import models as pm
+        empleado = db.query(pm.Empleado).filter(pm.Empleado.numero_empleado == numero).first()
+        if not empleado:
+            raise ValueError(f"Empleado {numero} no encontrado en el sistema")
+
         enviado = db.query(models.UsuarioPendienteDispositivo).filter(
             models.UsuarioPendienteDispositivo.dispositivo_id == device_id,
-            models.UsuarioPendienteDispositivo.numero_empleado == numero_empleado.strip(),
+            models.UsuarioPendienteDispositivo.numero_empleado == numero,
             models.UsuarioPendienteDispositivo.enviado == True
         ).first()
         if not enviado:
-            raise ValueError("El usuario debe estar enviado al dispositivo antes de registrar huella. Agrega a la cola y espera a que el agente lo envíe.")
-        # Evitar duplicados pendientes
+            existe_en_cola = db.query(models.UsuarioPendienteDispositivo).filter(
+                models.UsuarioPendienteDispositivo.dispositivo_id == device_id,
+                models.UsuarioPendienteDispositivo.numero_empleado == numero,
+            ).first()
+            if not existe_en_cola:
+                nombre = f"{empleado.nombre} {empleado.apellido_paterno or ''}".strip()
+                nuevo = models.UsuarioPendienteDispositivo(
+                    dispositivo_id=device_id,
+                    numero_empleado=numero,
+                    nombre=nombre,
+                )
+                db.add(nuevo)
+                db.flush()
+
         existente = db.query(models.PendingEnroll).filter(
             models.PendingEnroll.dispositivo_id == device_id,
-            models.PendingEnroll.numero_empleado == numero_empleado.strip(),
+            models.PendingEnroll.numero_empleado == numero,
             models.PendingEnroll.status == "pending"
         ).first()
         if existente:
             return existente
+
+        fallido = db.query(models.PendingEnroll).filter(
+            models.PendingEnroll.dispositivo_id == device_id,
+            models.PendingEnroll.numero_empleado == numero,
+            models.PendingEnroll.status == "failed"
+        ).first()
+        if fallido:
+            fallido.status = "pending"
+            fallido.completed_at = None
+            db.commit()
+            db.refresh(fallido)
+            return fallido
+
         pe = models.PendingEnroll(
             dispositivo_id=device_id,
-            numero_empleado=numero_empleado.strip(),
+            numero_empleado=numero,
             status="pending"
         )
         db.add(pe)
@@ -265,10 +325,10 @@ class AsistenciaService:
         dispositivo_id: Optional[int] = None,
         fecha_inicio: Optional[datetime] = None,
         fecha_fin: Optional[datetime] = None
-    ) -> List[models.Asistencia]:
-        """Listar asistencias con filtros"""
+    ) -> list:
+        """Listar asistencias con filtros, incluye nombre del empleado"""
         query = db.query(models.Asistencia)
-        
+
         if empleado_id:
             query = query.filter(models.Asistencia.empleado_id == empleado_id)
         if dispositivo_id:
@@ -277,8 +337,29 @@ class AsistenciaService:
             query = query.filter(models.Asistencia.timestamp >= fecha_inicio)
         if fecha_fin:
             query = query.filter(models.Asistencia.timestamp <= fecha_fin)
-        
-        return query.order_by(models.Asistencia.timestamp.desc()).offset(skip).limit(limit).all()
+
+        asistencias = query.order_by(models.Asistencia.timestamp.desc()).offset(skip).limit(limit).all()
+
+        emp_ids = {a.empleado_id for a in asistencias}
+        empleados = {
+            e.id: e for e in db.query(personal_models.Empleado).filter(
+                personal_models.Empleado.id.in_(emp_ids)
+            ).all()
+        } if emp_ids else {}
+
+        result = []
+        for a in asistencias:
+            emp = empleados.get(a.empleado_id)
+            nombre = ""
+            numero = ""
+            if emp:
+                nombre = f"{emp.nombre} {emp.apellido_paterno or ''} {emp.apellido_materno or ''}".strip()
+                numero = emp.numero_empleado or ""
+            a.empleado_nombre = nombre
+            a.empleado_numero = numero
+            result.append(a)
+
+        return result
     
     # ========== HORARIOS ==========
     

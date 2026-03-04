@@ -18,6 +18,14 @@ app.add_middleware(
 )
 
 
+@app.on_event("startup")
+def on_startup():
+    from app.core.database import engine, Base
+    from app.modules.personal import models as _pm
+    from app.modules.asistencia import models as _am
+    Base.metadata.create_all(bind=engine)
+
+
 @app.get("/")
 async def root():
     return {
@@ -38,14 +46,11 @@ from app.modules.personal.routes import router as personal_router
 from app.modules.vacaciones.routes import router as vacaciones_router
 from app.modules.rh.routes import router as rh_router
 from app.modules.asistencia.routes import router as asistencia_router
-from app.modules.asistencia.biometric.iclock_routes import router as iclock_router
-
 app.include_router(auth_router)
 app.include_router(personal_router)
 app.include_router(vacaciones_router)
 app.include_router(rh_router)
 app.include_router(asistencia_router)
-app.include_router(iclock_router)  # /iclock/* - ZKTeco ADMS push directo
 
 if __name__ == "__main__":
     import uvicorn

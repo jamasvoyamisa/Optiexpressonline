@@ -1,44 +1,15 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Layout } from './components/Layout';
-import { ProtectedRoute } from './components/ProtectedRoute';
 import { Login } from './components/Login';
-import { PersonalPage } from './modules/personal/PersonalPage';
-import { VacacionesPage } from './modules/vacaciones/VacacionesPage';
 import { RHPage } from './modules/rh/RHPage';
-import { AsistenciaPage } from './modules/asistencia/AsistenciaPage';
+import { ConfiguracionPage } from './modules/configuracion/ConfiguracionPage';
 
 function App() {
   return (
     <Router>
       <Routes>
         <Route path="/login" element={<Login />} />
-        <Route
-          path="/"
-          element={
-            <Layout>
-              <div>
-                <h1>Dashboard</h1>
-                <p>Bienvenido al Sistema de Gestión Interna</p>
-              </div>
-            </Layout>
-          }
-        />
-        <Route
-          path="/personal"
-          element={
-            <Layout>
-              <PersonalPage />
-            </Layout>
-          }
-        />
-        <Route
-          path="/vacaciones"
-          element={
-            <Layout>
-              <VacacionesPage />
-            </Layout>
-          }
-        />
+        <Route path="/" element={<Navigate to="/rh" replace />} />
         <Route
           path="/rh"
           element={
@@ -48,14 +19,14 @@ function App() {
           }
         />
         <Route
-          path="/asistencia"
+          path="/configuracion"
           element={
             <Layout>
-              <AsistenciaPage />
+              <ConfiguracionPage />
             </Layout>
           }
         />
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<Navigate to="/rh" replace />} />
       </Routes>
     </Router>
   );

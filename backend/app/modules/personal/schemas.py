@@ -1,10 +1,42 @@
 from pydantic import BaseModel, EmailStr
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 from .models import EstadoEmpleado
 
 
-# Schemas para Rol
+# ---- Schemas para Empresa ----
+
+class EmpresaBase(BaseModel):
+    nombre: str
+    rfc: Optional[str] = None
+    direccion: Optional[str] = None
+    telefono: Optional[str] = None
+
+
+class EmpresaCreate(EmpresaBase):
+    pass
+
+
+class EmpresaUpdate(BaseModel):
+    nombre: Optional[str] = None
+    rfc: Optional[str] = None
+    direccion: Optional[str] = None
+    telefono: Optional[str] = None
+    activo: Optional[bool] = None
+
+
+class EmpresaResponse(EmpresaBase):
+    id: int
+    activo: bool
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+# ---- Schemas para Rol ----
+
 class RolBase(BaseModel):
     nombre: str
     descripcion: Optional[str] = None
@@ -25,12 +57,44 @@ class RolResponse(RolBase):
     activo: bool
     created_at: datetime
     updated_at: Optional[datetime] = None
-    
+
     class Config:
         from_attributes = True
 
 
-# Schemas para Empleado
+# ---- Schemas para Departamento ----
+
+class DepartamentoBase(BaseModel):
+    nombre: str
+    empresa_id: int
+    jefe_id: Optional[int] = None
+
+
+class DepartamentoCreate(DepartamentoBase):
+    pass
+
+
+class DepartamentoUpdate(BaseModel):
+    nombre: Optional[str] = None
+    empresa_id: Optional[int] = None
+    jefe_id: Optional[int] = None
+    activo: Optional[bool] = None
+
+
+class DepartamentoResponse(DepartamentoBase):
+    id: int
+    activo: bool
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    empresa: Optional[EmpresaResponse] = None
+    jefe_nombre: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+# ---- Schemas para Empleado ----
+
 class EmpleadoBase(BaseModel):
     numero_empleado: str
     nombre: str
@@ -38,6 +102,16 @@ class EmpleadoBase(BaseModel):
     apellido_materno: Optional[str] = None
     email: Optional[EmailStr] = None
     telefono: Optional[str] = None
+    empresa_id: Optional[int] = None
+    departamento_id: Optional[int] = None
+    puesto: Optional[str] = None
+    curp: Optional[str] = None
+    rfc: Optional[str] = None
+    nss: Optional[str] = None
+    direccion: Optional[str] = None
+    fecha_nacimiento: Optional[datetime] = None
+    contacto_emergencia: Optional[str] = None
+    telefono_emergencia: Optional[str] = None
     rol_id: Optional[int] = None
     jefe_id: Optional[int] = None
     fecha_ingreso: Optional[datetime] = None
@@ -45,6 +119,8 @@ class EmpleadoBase(BaseModel):
 
 class EmpleadoCreate(EmpleadoBase):
     estado: EstadoEmpleado = EstadoEmpleado.ACTIVO
+    registrar_en_checador: Optional[bool] = False
+    dispositivo_ids: Optional[list] = None
 
 
 class EmpleadoUpdate(BaseModel):
@@ -53,6 +129,16 @@ class EmpleadoUpdate(BaseModel):
     apellido_materno: Optional[str] = None
     email: Optional[EmailStr] = None
     telefono: Optional[str] = None
+    empresa_id: Optional[int] = None
+    departamento_id: Optional[int] = None
+    puesto: Optional[str] = None
+    curp: Optional[str] = None
+    rfc: Optional[str] = None
+    nss: Optional[str] = None
+    direccion: Optional[str] = None
+    fecha_nacimiento: Optional[datetime] = None
+    contacto_emergencia: Optional[str] = None
+    telefono_emergencia: Optional[str] = None
     rol_id: Optional[int] = None
     jefe_id: Optional[int] = None
     estado: Optional[EstadoEmpleado] = None
@@ -68,10 +154,11 @@ class EmpleadoResponse(EmpleadoBase):
     updated_at: Optional[datetime] = None
     rol: Optional[RolResponse] = None
     jefe: Optional['EmpleadoResponse'] = None
-    
+    empresa: Optional[EmpresaResponse] = None
+    departamento: Optional[DepartamentoResponse] = None
+
     class Config:
         from_attributes = True
 
 
-# Actualizar referencia forward
 EmpleadoResponse.model_rebuild()

@@ -1,15 +1,24 @@
 // Tipos compartidos del sistema - alineados con backend
 
-export {
+export type {
   DispositivoCreate,
   DispositivoResponse,
   AsistenciaResponse,
   EmpleadoResponse,
+  EmpleadoCreate,
+  EmpresaResponse,
+  EmpresaCreate,
+  EmpresaUpdate,
+  DepartamentoResponse,
+  DepartamentoCreate,
+  DepartamentoUpdate,
 } from './api';
 
 export type Dispositivo = import('./api').DispositivoResponse;
 export type Asistencia = import('./api').AsistenciaResponse;
 export type Empleado = import('./api').EmpleadoResponse;
+export type Empresa = import('./api').EmpresaResponse;
+export type Departamento = import('./api').DepartamentoResponse;
 
 export interface User {
   id: number;

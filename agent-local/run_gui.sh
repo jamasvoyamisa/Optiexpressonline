@@ -11,7 +11,4 @@ if [ ! -f "venv/bin/activate" ]; then
 fi
 
 source venv/bin/activate
-echo "=== Iniciando Agente Local ZKTeco ==="
-echo "Presiona Ctrl+C para detener"
-echo ""
-python main.py
+python agent_gui.py

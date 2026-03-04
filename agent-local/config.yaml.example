@@ -1,30 +1,25 @@
-# Configuración del Agente Local - ZKTeco MB160
+# Configuracion del Agente Local Multi-Dispositivo ZKTeco
 # Copia este archivo a config.yaml y ajusta los valores
 
-device:
-  ip: "192.168.2.74"    # IP del MB160 (misma red que este PC)
-  port: 4370             # Puerto ZK (por defecto 4370 para ZKTeco)
-  timeout: 5             # Timeout de conexión en segundos
+# URL base del backend (sin /device-sync)
+api_url: "http://192.168.2.55:9081/api/v1/asistencia/device-sync"
 
-cloud:
-  # URL completa del endpoint device-sync del backend
-  # Si el backend está en este mismo PC: http://127.0.0.1:9081/api/v1/asistencia/device-sync
-  # Si está en otro servidor: http://IP_SERVIDOR:9081/api/v1/asistencia/device-sync
-  api_url: "http://192.168.2.55:9081/api/v1/asistencia/device-sync"
-  # API Key: Asistencia → tarjeta del dispositivo en la web
-  api_key: "COPIAR_DE_LA_WEB"
-  # ID del dispositivo (ej: OFFICE_01) - debe coincidir con el registrado en la web
-  device_id: "OFFICE_01"
+# Lista de dispositivos a gestionar
+devices:
+  - name: "Entrada Principal"
+    ip: "192.168.2.74"
+    port: 4370
+    api_key: "COPIAR_DE_LA_WEB"
+  # - name: "Cafeteria"
+  #   ip: "192.168.2.75"
+  #   port: 4370
+  #   api_key: "COPIAR_DE_LA_WEB_2"
 
 sync:
   interval_seconds: 30
-  retry_on_error: true
-  max_retries: 3
-  retry_delay_seconds: 5
 
 buffer:
   enabled: true
-  db_path: "buffer.db"
 
 logging:
   level: "INFO"

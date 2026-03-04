@@ -20,6 +20,7 @@ export interface DispositivoResponse {
   activo: boolean;
   ultima_llamada_getrequest?: string | null;
   ultima_ip_conexion?: string | null;
+  ultima_sync_agente?: string | null;
   created_at?: string;
   updated_at?: string | null;
 }
@@ -30,9 +31,65 @@ export interface AsistenciaResponse {
   empleado_id: number;
   dispositivo_id: number;
   timestamp: string;
-  tipo: 'entrada' | 'salida';
+  tipo: 'entrada' | 'salida_comer' | 'regreso_comer' | 'salida';
+  es_tiempo_extra?: boolean;
   sincronizado: boolean;
   created_at?: string;
+  empleado_nombre?: string;
+  empleado_numero?: string;
+}
+
+// ========== EMPRESA ==========
+export interface EmpresaResponse {
+  id: number;
+  nombre: string;
+  rfc?: string | null;
+  direccion?: string | null;
+  telefono?: string | null;
+  activo: boolean;
+  created_at?: string;
+  updated_at?: string | null;
+}
+
+export interface EmpresaCreate {
+  nombre: string;
+  rfc?: string;
+  direccion?: string;
+  telefono?: string;
+}
+
+export interface EmpresaUpdate {
+  nombre?: string;
+  rfc?: string;
+  direccion?: string;
+  telefono?: string;
+  activo?: boolean;
+}
+
+// ========== DEPARTAMENTO ==========
+export interface DepartamentoResponse {
+  id: number;
+  nombre: string;
+  empresa_id: number;
+  jefe_id?: number | null;
+  jefe_nombre?: string | null;
+  activo: boolean;
+  empresa?: EmpresaResponse | null;
+  created_at?: string;
+  updated_at?: string | null;
+}
+
+export interface DepartamentoCreate {
+  nombre: string;
+  empresa_id: number;
+  jefe_id?: number | null;
+}
+
+export interface DepartamentoUpdate {
+  nombre?: string;
+  empresa_id?: number;
+  jefe_id?: number | null;
+  activo?: boolean;
 }
 
 // ========== EMPLEADO ==========
@@ -44,6 +101,16 @@ export interface EmpleadoResponse {
   apellido_materno?: string | null;
   email?: string | null;
   telefono?: string | null;
+  empresa_id?: number | null;
+  departamento_id?: number | null;
+  puesto?: string | null;
+  curp?: string | null;
+  rfc?: string | null;
+  nss?: string | null;
+  direccion?: string | null;
+  fecha_nacimiento?: string | null;
+  contacto_emergencia?: string | null;
+  telefono_emergencia?: string | null;
   rol_id?: number | null;
   jefe_id?: number | null;
   estado: string;
@@ -51,4 +118,28 @@ export interface EmpleadoResponse {
   fecha_baja?: string | null;
   created_at?: string;
   updated_at?: string | null;
+  empresa?: EmpresaResponse | null;
+  departamento?: DepartamentoResponse | null;
+}
+
+export interface EmpleadoCreate {
+  numero_empleado: string;
+  nombre: string;
+  apellido_paterno?: string;
+  apellido_materno?: string;
+  email?: string;
+  telefono?: string;
+  empresa_id?: number;
+  departamento_id?: number;
+  puesto?: string;
+  curp?: string;
+  rfc?: string;
+  nss?: string;
+  direccion?: string;
+  fecha_nacimiento?: string;
+  contacto_emergencia?: string;
+  telefono_emergencia?: string;
+  fecha_ingreso?: string;
+  registrar_en_checador?: boolean;
+  dispositivo_ids?: number[];
 }

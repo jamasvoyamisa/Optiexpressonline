@@ -150,11 +150,73 @@ def enqueue_user(
     data: schemas.EnqueueUserRequest,
     db: Session = Depends(get_db)
 ):
-    """Agregar usuario a la cola para alta remota en el dispositivo (prueba MB160)"""
+    """Agregar usuario a la cola para alta remota en un dispositivo"""
     try:
         return service.AsistenciaService.enqueue_user(db, device_id, data)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post("/enqueue-user-multi")
+def enqueue_user_multi(
+    data: schemas.EnqueueUserRequest,
+    dispositivo_ids: List[int] = Query(..., description="IDs de dispositivos destino"),
+    db: Session = Depends(get_db)
+):
+    """Agregar usuario a la cola en multiples dispositivos a la vez"""
+    results = []
+    for did in dispositivo_ids:
+        try:
+            service.AsistenciaService.enqueue_user(db, did, data)
+            results.append({"dispositivo_id": did, "ok": True})
+        except ValueError as e:
+            results.append({"dispositivo_id": did, "ok": False, "error": str(e)})
+    return {"results": results}
+
+
+@router.get("/fingerprint-templates/{numero_empleado}", response_model=List[schemas.FingerprintTemplateResponse])
+def get_templates_for_employee(numero_empleado: str, db: Session = Depends(get_db)):
+    """Ver si un empleado tiene templates de huella almacenados"""
+    return db.query(models.FingerprintTemplate).filter(
+        models.FingerprintTemplate.numero_empleado == numero_empleado.strip()
+    ).all()
+
+
+@router.post("/replicate-fingerprint")
+def replicate_fingerprint(data: schemas.ReplicateRequest, db: Session = Depends(get_db)):
+    """Replica huella de un empleado a dispositivos seleccionados.
+    Agrega al usuario en la cola de cada dispositivo y el agente se encarga
+    de subir el template cuando detecte que hay uno disponible."""
+    templates = db.query(models.FingerprintTemplate).filter(
+        models.FingerprintTemplate.numero_empleado == data.numero_empleado.strip()
+    ).all()
+    if not templates:
+        raise HTTPException(status_code=400, detail="No hay huella registrada para este empleado. Primero registre la huella en un dispositivo.")
+
+    results = []
+    for did in data.dispositivo_ids:
+        try:
+            enqueue_data = schemas.EnqueueUserRequest(
+                numero_empleado=data.numero_empleado.strip(),
+                nombre=data.numero_empleado.strip(),
+            )
+            from app.modules.personal import models as pm
+            emp = db.query(pm.Empleado).filter(pm.Empleado.numero_empleado == data.numero_empleado.strip()).first()
+            if emp:
+                enqueue_data.nombre = f"{emp.nombre} {emp.apellido_paterno or ''}".strip()
+
+            existing_pending = db.query(models.UsuarioPendienteDispositivo).filter(
+                models.UsuarioPendienteDispositivo.dispositivo_id == did,
+                models.UsuarioPendienteDispositivo.numero_empleado == data.numero_empleado.strip(),
+            ).first()
+            if not existing_pending:
+                service.AsistenciaService.enqueue_user(db, did, enqueue_data)
+
+            results.append({"dispositivo_id": did, "ok": True})
+        except Exception as e:
+            results.append({"dispositivo_id": did, "ok": False, "error": str(e)})
+
+    return {"results": results, "templates_count": len(templates)}
 
 
 @router.get("/devices/{device_id}/preview-getrequest")
@@ -202,7 +264,7 @@ def retry_pending_user(device_id: int, pending_id: int, db: Session = Depends(ge
     pendiente.enviado = False
     pendiente.enviado_at = None
     db.commit()
-    return {"status": "ok", "message": "Se reenviará en el próximo getrequest del dispositivo"}
+    return {"status": "ok", "message": "Se reenviará cuando el agente sincronice (o en el próximo getrequest)"}
 
 
 @router.get("/devices/{device_id}/pending-users", response_model=List[schemas.UsuarioPendienteResponse])
@@ -235,7 +297,24 @@ def _get_device_from_api_key(x_api_key: str = Header(..., alias="X-API-Key"), db
     dispositivo = verify_api_key(db, x_api_key)
     if not dispositivo:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="API Key inválida o dispositivo inactivo")
+    dispositivo.ultima_sync_agente = datetime.utcnow()
+    db.commit()
     return dispositivo
+
+
+@router.get("/agent/diagnostic")
+def agent_diagnostic(
+    dispositivo: models.Dispositivo = Depends(_get_device_from_api_key),
+    db: Session = Depends(get_db)
+):
+    """Diagnostico: verifica API Key y muestra usuarios pendientes (para depurar)"""
+    pendientes = service.AsistenciaService.get_pending_users(db, dispositivo.id, include_sent=False)
+    return {
+        "ok": True,
+        "dispositivo": {"id": dispositivo.id, "nombre": dispositivo.nombre},
+        "pendientes": len(pendientes),
+        "usuarios": [{"id": p.id, "numero_empleado": p.numero_empleado, "nombre": p.nombre} for p in pendientes]
+    }
 
 
 @router.get("/agent/pending-users", response_model=List[schemas.UsuarioPendienteResponse])
@@ -281,6 +360,95 @@ def agent_mark_enroll_done(
     return {"ok": True}
 
 
+@router.post("/agent/upload-template")
+def agent_upload_template(
+    data: schemas.UploadTemplateRequest,
+    dispositivo: models.Dispositivo = Depends(_get_device_from_api_key),
+    db: Session = Depends(get_db)
+):
+    """El agente sube un template de huella despues del enroll exitoso"""
+    existing = db.query(models.FingerprintTemplate).filter(
+        models.FingerprintTemplate.numero_empleado == data.numero_empleado.strip(),
+        models.FingerprintTemplate.finger_index == data.finger_index,
+    ).first()
+    if existing:
+        existing.template_data = data.template_data
+        existing.source_device_id = dispositivo.id
+    else:
+        tpl = models.FingerprintTemplate(
+            numero_empleado=data.numero_empleado.strip(),
+            finger_index=data.finger_index,
+            template_data=data.template_data,
+            source_device_id=dispositivo.id,
+        )
+        db.add(tpl)
+    db.commit()
+    return {"ok": True, "numero_empleado": data.numero_empleado.strip(), "finger_index": data.finger_index}
+
+
+@router.get("/agent/pending-templates")
+def agent_get_pending_templates(
+    dispositivo: models.Dispositivo = Depends(_get_device_from_api_key),
+    db: Session = Depends(get_db)
+):
+    """Obtiene templates pendientes de replicar a ESTE dispositivo.
+    Busca usuarios enviados a este dispositivo que tengan template pero que el template
+    venga de otro dispositivo (no de este)."""
+    sent_users = db.query(models.UsuarioPendienteDispositivo).filter(
+        models.UsuarioPendienteDispositivo.dispositivo_id == dispositivo.id,
+        models.UsuarioPendienteDispositivo.enviado == True,
+    ).all()
+    numeros = [u.numero_empleado for u in sent_users]
+    if not numeros:
+        return []
+    templates = db.query(models.FingerprintTemplate).filter(
+        models.FingerprintTemplate.numero_empleado.in_(numeros),
+        models.FingerprintTemplate.source_device_id != dispositivo.id,
+    ).all()
+    return [
+        {
+            "numero_empleado": t.numero_empleado,
+            "finger_index": t.finger_index,
+            "template_data": t.template_data,
+        }
+        for t in templates
+    ]
+
+
+@router.get("/agent/pending-deletes")
+def agent_get_pending_deletes(
+    dispositivo: models.Dispositivo = Depends(_get_device_from_api_key),
+    db: Session = Depends(get_db)
+):
+    """Obtiene usuarios pendientes de eliminar de este dispositivo"""
+    pending = db.query(models.PendingDelete).filter(
+        models.PendingDelete.dispositivo_id == dispositivo.id,
+        models.PendingDelete.procesado == False,
+    ).all()
+    return [{"id": p.id, "numero_empleado": p.numero_empleado} for p in pending]
+
+
+@router.post("/agent/pending-deletes/{delete_id}/mark-done")
+def agent_mark_delete_done(
+    delete_id: int,
+    dispositivo: models.Dispositivo = Depends(_get_device_from_api_key),
+    db: Session = Depends(get_db)
+):
+    """Marcar eliminacion como procesada"""
+    pd = db.query(models.PendingDelete).filter(
+        models.PendingDelete.id == delete_id,
+        models.PendingDelete.dispositivo_id == dispositivo.id,
+        models.PendingDelete.procesado == False,
+    ).first()
+    if not pd:
+        raise HTTPException(status_code=404, detail="No encontrado o ya procesado")
+    from datetime import datetime
+    pd.procesado = True
+    pd.procesado_at = datetime.utcnow()
+    db.commit()
+    return {"ok": True}
+
+
 # ========== ASISTENCIAS ==========
 
 @router.get("/checadas", response_model=List[schemas.AsistenciaResponse])
@@ -318,6 +486,33 @@ def get_checadas(
         fecha_inicio=fecha_inicio_dt,
         fecha_fin=fecha_fin_dt
     )
+
+
+@router.post("/cleanup-employees")
+def cleanup_employees(
+    keep_numeros: List[str] = Query(..., description="Numeros de empleado a conservar"),
+    db: Session = Depends(get_db)
+):
+    """
+    Elimina empleados que NO estan en la lista keep_numeros.
+    Tambien elimina sus checadas y registros pendientes.
+    """
+    from app.modules.personal import models as pm
+    all_emps = db.query(pm.Empleado).all()
+    deleted_names = []
+    for emp in all_emps:
+        if emp.numero_empleado not in keep_numeros:
+            db.query(models.Asistencia).filter(models.Asistencia.empleado_id == emp.id).delete()
+            db.query(models.UsuarioPendienteDispositivo).filter(
+                models.UsuarioPendienteDispositivo.numero_empleado == emp.numero_empleado
+            ).delete()
+            db.query(models.PendingEnroll).filter(
+                models.PendingEnroll.numero_empleado == emp.numero_empleado
+            ).delete()
+            deleted_names.append(f"{emp.numero_empleado} ({emp.nombre})")
+            db.delete(emp)
+    db.commit()
+    return {"deleted": deleted_names, "kept": keep_numeros}
 
 
 # ========== HORARIOS ==========

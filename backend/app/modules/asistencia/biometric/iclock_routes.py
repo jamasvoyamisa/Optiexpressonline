@@ -167,40 +167,39 @@ def _process_attlog(db: Session, raw_data: str, dispositivo: models.Dispositivo)
         try:
             user_id = str(parts[0]).strip()
             timestamp_str = parts[1].strip()
-            punch = int(parts[2]) if parts[2] else 0
-            tipo = models.TipoChecada.SALIDA if punch == 1 else models.TipoChecada.ENTRADA
-
             timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
         except (ValueError, IndexError) as e:
             logger.warning(f"Error parseando ATTLOG: {line} - {e}")
             continue
 
-        # Buscar empleado por número
         empleado = db.query(personal_models.Empleado).filter(
             personal_models.Empleado.numero_empleado == user_id
         ).first()
 
         if not empleado:
-            empleado = personal_models.Empleado(
-                numero_empleado=user_id,
-                nombre=f"Usuario {user_id}",
-                apellido_paterno="(No registrado)",
-                estado=personal_models.EstadoEmpleado.ACTIVO
-            )
-            db.add(empleado)
-            db.commit()
-            db.refresh(empleado)
-            logger.info(f"Empleado temporal creado: {user_id}")
+            logger.info(f"ADMS checada ignorada: empleado {user_id} no registrado en el sistema.")
+            continue
+
+        existente = db.query(models.Asistencia).filter(
+            models.Asistencia.empleado_id == empleado.id,
+            models.Asistencia.timestamp == timestamp,
+        ).first()
+        if existente:
+            continue
+
+        from .sync_service import SyncService
+        tipo, es_tiempo_extra = SyncService._determinar_tipo(db, empleado.id, timestamp)
 
         asistencia = models.Asistencia(
             empleado_id=empleado.id,
             dispositivo_id=dispositivo.id,
             timestamp=timestamp,
             tipo=tipo,
+            es_tiempo_extra=es_tiempo_extra,
             sincronizado=True
         )
         db.add(asistencia)
-        logger.info(f"Checada ADMS: user={user_id}, {tipo.value}, {timestamp}")
+        logger.info(f"Checada ADMS: user={user_id}, {tipo.value}, extra={es_tiempo_extra}, {timestamp}")
 
     db.commit()
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Agente Local para sincronizar dispositivo ZKTeco MB160 con sistema en la nube
+Agente Local Multi-Dispositivo para sincronizar checadores ZKTeco con el sistema en la nube.
+Soporta 1 o mas dispositivos configurados en config.yaml.
 """
 import yaml
 import time
@@ -8,262 +9,366 @@ import logging
 import sys
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
 
 from zkteco_client import ZKTecoClient
 from cloud_sync import CloudSync
 from local_buffer import LocalBuffer
 
-# Configurar logging
+_handlers = []
+if getattr(sys, 'stdout', None):
+    _handlers.append(logging.StreamHandler(sys.stdout))
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
+    handlers=_handlers if _handlers else [logging.NullHandler()]
 )
 logger = logging.getLogger(__name__)
 
 
+class DeviceHandler:
+    """Maneja la sincronizacion de un dispositivo individual."""
+
+    def __init__(self, name: str, zkteco: ZKTecoClient, cloud: CloudSync, buffer=None):
+        self.name = name
+        self.zkteco = zkteco
+        self.cloud = cloud
+        self.buffer = buffer
+        self.sync_cycle = 0
+        self.synced_checadas_file = f"synced_{name.replace(' ', '_').lower()}.txt"
+        self.synced_checadas = self._load_synced_checadas()
+
+    def _load_synced_checadas(self) -> set:
+        try:
+            p = Path(self.synced_checadas_file)
+            if p.exists():
+                with open(p, 'r') as f:
+                    return set(line.strip() for line in f if line.strip())
+            return set()
+        except Exception as e:
+            logger.warning(f"[{self.name}] No se pudo cargar checadas sincronizadas: {e}")
+            return set()
+
+    def _save_synced_checada(self, checada_id: str):
+        try:
+            with open(self.synced_checadas_file, 'a') as f:
+                f.write(f"{checada_id}\n")
+        except Exception as e:
+            logger.warning(f"[{self.name}] No se pudo guardar checada: {e}")
+
+    def test_device(self) -> bool:
+        ok = self.zkteco.test_connection()
+        if ok:
+            logger.info(f"[{self.name}] Conexion con dispositivo OK")
+        else:
+            logger.error(f"[{self.name}] No se puede conectar al dispositivo. Verifica IP y puerto.")
+        return ok
+
+    def sync_attendance(self):
+        try:
+            logs = self.zkteco.get_attendance_logs()
+            if not logs:
+                return
+
+            nuevas = 0
+            errores = 0
+            for log_entry in logs:
+                user_id = log_entry.get("user_id")
+                timestamp = log_entry.get("timestamp")
+                tipo = log_entry.get("type", "checada")
+                if not user_id or not timestamp:
+                    continue
+
+                rec_no = log_entry.get("rec_no", "")
+                checada_id = f"{user_id}_{rec_no}_{timestamp}" if rec_no else f"{user_id}_{timestamp}_{tipo}"
+                if checada_id in self.synced_checadas:
+                    continue
+
+                success = self.cloud.sync_attendance(user_id, timestamp, tipo)
+                if success:
+                    self.synced_checadas.add(checada_id)
+                    self._save_synced_checada(checada_id)
+                    nuevas += 1
+                else:
+                    errores += 1
+                    if self.buffer:
+                        self.buffer.add_checada(user_id, timestamp, "local", tipo)
+
+            if nuevas or errores:
+                logger.info(f"[{self.name}] Checadas: {nuevas} sincronizadas, {errores} errores")
+        except Exception as e:
+            logger.error(f"[{self.name}] Error al sincronizar asistencia: {e}")
+
+    def sync_buffer(self):
+        if not self.buffer:
+            return
+        pendientes = self.buffer.get_pendientes(limit=50)
+        if not pendientes:
+            return
+        logger.info(f"[{self.name}] Sincronizando {len(pendientes)} checadas del buffer")
+        for c in pendientes:
+            if self.cloud.sync_attendance(c["user_id"], c["timestamp"], c.get("tipo", "checada")):
+                self.buffer.mark_synced(c["id"])
+            else:
+                self.buffer.increment_retry(c["id"])
+
+    def sync_pending_users(self):
+        try:
+            pending = self.cloud.get_pending_users()
+            self.sync_cycle += 1
+            if not pending:
+                return
+            logger.info(f"[{self.name}] Enviando {len(pending)} usuario(s) al dispositivo...")
+            sent_ids = []
+            for u in pending:
+                ok = self.zkteco.set_user(user_id=str(u["numero_empleado"]), name=u.get("nombre", ""))
+                if ok:
+                    sent_ids.append(u["id"])
+                else:
+                    logger.warning(f"[{self.name}] set_user fallo: {u.get('numero_empleado')}")
+            if sent_ids:
+                self.cloud.mark_users_sent(sent_ids)
+                logger.info(f"[{self.name}] {len(sent_ids)} usuarios enviados OK")
+        except Exception as e:
+            logger.error(f"[{self.name}] Error sync_pending_users: {e}")
+
+    def sync_pending_enroll(self):
+        try:
+            pending = self.cloud.get_pending_enroll()
+            if not pending:
+                return
+            pe = pending[0]
+            enroll_id = pe["id"]
+            numero = str(pe["numero_empleado"]).strip()
+            logger.info(f"[{self.name}] ENROLL: id={enroll_id}, empleado={numero}")
+
+            device_users = self.zkteco.get_users()
+            if not any(str(u.get("user_id", "")) == numero for u in device_users):
+                logger.info(f"[{self.name}] Usuario {numero} no existe en dispositivo, creando...")
+                if not self.zkteco.set_user(user_id=numero, name=pe.get("nombre", numero)):
+                    logger.error(f"[{self.name}] No se pudo crear usuario {numero}, marcando enroll como fallido")
+                    self.cloud.mark_enroll_done(enroll_id, success=False)
+                    return
+
+            logger.info(f"[{self.name}] Iniciando registro de huella para {numero}. Esperando dedo en dispositivo...")
+            try:
+                ok = self.zkteco.enroll_user(user_id=numero)
+            except Exception as enroll_err:
+                logger.error(f"[{self.name}] Excepcion en enroll_user: {enroll_err}")
+                self.cloud.mark_enroll_done(enroll_id, success=False)
+                return
+
+            self.cloud.mark_enroll_done(enroll_id, success=ok)
+
+            if ok:
+                logger.info(f"[{self.name}] Huella registrada para {numero}")
+                for tpl in self.zkteco.get_user_templates(user_id=numero):
+                    self.cloud.upload_template(numero, tpl["finger_index"], tpl["template_data"])
+            else:
+                logger.warning(f"[{self.name}] Enroll fallo para {numero} (timeout o el empleado no coloco el dedo)")
+        except Exception as e:
+            logger.error(f"[{self.name}] Error sync_pending_enroll: {e}")
+            try:
+                if 'enroll_id' in locals():
+                    self.cloud.mark_enroll_done(enroll_id, success=False)
+            except Exception:
+                pass
+
+    def sync_device_templates_to_backend(self):
+        try:
+            device_users = self.zkteco.get_users()
+            if not device_users:
+                return
+            uploaded = 0
+            for u in device_users:
+                numero = str(u.get("user_id", "")).strip()
+                if not numero:
+                    continue
+                if self.cloud.get_employee_templates(numero):
+                    continue
+                templates = self.zkteco.get_user_templates(user_id=numero)
+                if not templates:
+                    continue
+                for tpl in templates:
+                    self.cloud.upload_template(numero, tpl["finger_index"], tpl["template_data"])
+                    uploaded += 1
+            if uploaded:
+                logger.info(f"[{self.name}] {uploaded} huella(s) sincronizadas al backend")
+        except Exception as e:
+            logger.error(f"[{self.name}] Error sync_device_templates: {e}")
+
+    def sync_pending_deletes(self):
+        try:
+            pending = self.cloud.get_pending_deletes()
+            if not pending:
+                return
+            for pd in pending:
+                delete_id = pd["id"]
+                numero = str(pd["numero_empleado"]).strip()
+                logger.info(f"[{self.name}] Eliminando usuario {numero} del dispositivo...")
+                ok = self.zkteco.delete_user(user_id=numero)
+                if ok:
+                    self.cloud.mark_delete_done(delete_id)
+                    logger.info(f"[{self.name}] Usuario {numero} eliminado OK")
+                else:
+                    logger.warning(f"[{self.name}] No se pudo eliminar usuario {numero}")
+        except Exception as e:
+            logger.error(f"[{self.name}] Error sync_pending_deletes: {e}")
+
+    def sync_pending_templates(self):
+        try:
+            pending = self.cloud.get_pending_templates()
+            if not pending:
+                return
+            for tpl in pending:
+                numero = tpl["numero_empleado"]
+                finger = tpl["finger_index"]
+                ok = self.zkteco.upload_template(numero, finger, tpl["template_data"])
+                if ok:
+                    logger.info(f"[{self.name}] Huella replicada: {numero} dedo={finger}")
+                else:
+                    logger.warning(f"[{self.name}] Fallo replicar huella: {numero}")
+        except Exception as e:
+            logger.error(f"[{self.name}] Error sync_pending_templates: {e}")
+
+
 class Agent:
-    """Agente principal que coordina la sincronización"""
+    """Agente multi-dispositivo que coordina la sincronizacion."""
 
     def __init__(self, config_path: str = "config.yaml"):
         self.config = self._load_config(config_path)
         self._setup_logging()
-
-        # Inicializar clientes
-        device_config = self.config["device"]
-        self.zkteco_client = ZKTecoClient(
-            ip=device_config["ip"],
-            port=device_config.get("port", 4370),
-            timeout=device_config.get("timeout", 5)
-        )
-
-        cloud_config = self.config["cloud"]
-        self.cloud_sync = CloudSync(
-            api_url=cloud_config["api_url"],
-            api_key=cloud_config["api_key"],
-            device_id=cloud_config["device_id"]
-        )
-
-        # Inicializar buffer si está habilitado
-        self.buffer = None
-        if self.config.get("buffer", {}).get("enabled", True):
-            buffer_path = self.config.get("buffer", {}).get("db_path", "buffer.db")
-            self.buffer = LocalBuffer(buffer_path)
-
-        self.last_sync_index = 0
         self.running = True
-        self.synced_checadas_file = "synced_checadas.txt"
-        self.synced_checadas = self._load_synced_checadas()
+        self.handlers = []
+        self._init_devices()
 
     def _load_config(self, config_path: str) -> dict:
-        """Carga la configuración desde archivo YAML"""
         try:
             with open(config_path, 'r') as f:
                 config = yaml.safe_load(f)
-            logger.info(f"Configuración cargada desde {config_path}")
+            logger.info(f"Configuracion cargada desde {config_path}")
             return config
         except FileNotFoundError:
-            logger.error(f"Archivo de configuración no encontrado: {config_path}")
-            logger.error("Por favor, copia config.yaml.example a config.yaml y configúralo")
+            logger.error(f"Archivo no encontrado: {config_path}")
+            logger.error("Copia config.yaml.example a config.yaml y configuralo")
             sys.exit(1)
         except Exception as e:
-            logger.error(f"Error al cargar configuración: {e}")
+            logger.error(f"Error al cargar configuracion: {e}")
             sys.exit(1)
 
     def _setup_logging(self):
-        """Configura el logging según la configuración"""
         log_config = self.config.get("logging", {})
         level = log_config.get("level", "INFO")
-        log_file = log_config.get("file")
-
-        logging.getLogger().setLevel(getattr(logging, level))
-
+        log_file = log_config.get("file", "agent.log")
+        logging.getLogger().setLevel(getattr(logging, level, logging.INFO))
         if log_file:
-            file_handler = logging.FileHandler(log_file)
-            file_handler.setFormatter(
-                logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            )
-            logging.getLogger().addHandler(file_handler)
+            fh = logging.FileHandler(log_file, encoding="utf-8")
+            fh.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+            logging.getLogger().addHandler(fh)
 
-    def _load_synced_checadas(self) -> set:
-        """Carga las checadas ya sincronizadas desde archivo"""
-        try:
-            synced_file = Path(self.synced_checadas_file)
-            if synced_file.exists():
-                with open(synced_file, 'r') as f:
-                    return set(line.strip() for line in f if line.strip())
-            return set()
-        except Exception as e:
-            logger.warning(f"No se pudo cargar checadas sincronizadas: {e}")
-            return set()
+    def _init_devices(self):
+        api_url = self.config.get("api_url", "").strip()
+        buffer_enabled = self.config.get("buffer", {}).get("enabled", True)
 
-    def _save_synced_checada(self, checada_id: str):
-        """Guarda una checada sincronizada en archivo"""
-        try:
-            synced_file = Path(self.synced_checadas_file)
-            with open(synced_file, 'a') as f:
-                f.write(f"{checada_id}\n")
-        except Exception as e:
-            logger.warning(f"No se pudo guardar checada sincronizada: {e}")
+        # Soporte formato viejo (device singular) y nuevo (devices lista)
+        devices_cfg = self.config.get("devices", [])
+        if not devices_cfg:
+            old_device = self.config.get("device", {})
+            old_cloud = self.config.get("cloud", {})
+            if old_device.get("ip"):
+                devices_cfg = [{
+                    "name": old_cloud.get("device_id", "Dispositivo"),
+                    "ip": old_device["ip"],
+                    "port": old_device.get("port", 4370),
+                    "api_key": old_cloud.get("api_key", ""),
+                }]
+                if not api_url:
+                    api_url = old_cloud.get("api_url", "")
 
-    def sync_new_attendance(self):
-        """Sincroniza nuevas checadas del dispositivo"""
-        try:
-            logger.info("")
-            logger.info("=" * 60)
-            logger.info(f"🔄 [{datetime.now().strftime('%H:%M:%S')}] Iniciando sincronización")
-            logger.info(f"   Checadas ya sincronizadas: {len(self.synced_checadas)}")
-            logger.info("=" * 60)
+        if not devices_cfg:
+            logger.error("No hay dispositivos configurados. Agrega al menos uno en config.yaml")
+            sys.exit(1)
 
-            logs = self.zkteco_client.get_attendance_logs()
+        for i, dev in enumerate(devices_cfg):
+            name = dev.get("name", f"Dispositivo_{i+1}")
+            ip = dev.get("ip", "").strip()
+            port = int(dev.get("port", 4370))
+            api_key = (dev.get("api_key") or "").strip()
 
-            if not logs:
-                logger.info("")
-                logger.info("ℹ️ RESULTADO: No hay checadas en el dispositivo")
-                logger.info("   💡 Para ver datos: Haz una checada en el dispositivo físico")
-                logger.info("")
-                return
+            if not ip:
+                logger.warning(f"[{name}] Sin IP configurada, omitiendo")
+                continue
+            if not api_key or api_key == "COPIAR_DE_LA_WEB":
+                logger.warning(f"[{name}] API Key no configurada, omitiendo")
+                continue
 
-            logger.info(f"📥 Obtenidas {len(logs)} checadas del dispositivo ZKTeco")
+            zkteco = ZKTecoClient(ip=ip, port=port, timeout=dev.get("timeout", 5))
+            cloud = CloudSync(api_url=api_url, api_key=api_key, device_id=name)
+            buffer = LocalBuffer(f"buffer_{name.replace(' ', '_').lower()}.db") if buffer_enabled else None
 
-            sincronizadas = 0
-            errores = 0
+            handler = DeviceHandler(name=name, zkteco=zkteco, cloud=cloud, buffer=buffer)
+            self.handlers.append(handler)
+            logger.info(f"[{name}] Configurado: {ip}:{port}")
 
-            for i, log in enumerate(logs, 1):
-                user_id = log.get("user_id")
-                timestamp = log.get("timestamp")
-                tipo = log.get("type", "entrada")
+        if not self.handlers:
+            logger.error("Ningun dispositivo valido configurado. Verifica config.yaml")
+            sys.exit(1)
 
-                if not user_id or not timestamp:
-                    logger.warning(f"⚠️ Checada incompleta, omitiendo: user_id={user_id}, timestamp={timestamp}")
-                    continue
-
-                rec_no = log.get("rec_no", "")
-                checada_id = f"{user_id}_{rec_no}_{timestamp}" if rec_no else f"{user_id}_{timestamp}_{tipo}"
-
-                if checada_id in self.synced_checadas:
-                    continue
-
-                logger.info(f"📤 [{i}/{len(logs)}] Enviando checada a la nube: Usuario={user_id}, Hora={timestamp}, Tipo={tipo}")
-
-                success = self.cloud_sync.sync_attendance(user_id, timestamp, tipo)
-
-                if success:
-                    self.synced_checadas.add(checada_id)
-                    self._save_synced_checada(checada_id)
-                    self.last_sync_index += 1
-                    sincronizadas += 1
-                    logger.info(f"✅ Checada sincronizada exitosamente")
-                else:
-                    errores += 1
-                    if self.buffer:
-                        self.buffer.add_checada(user_id, timestamp, self.config["cloud"]["device_id"], tipo)
-                    logger.warning(f"❌ No se pudo sincronizar: {user_id} - {timestamp}")
-
-            logger.info(f"📊 Resumen: {sincronizadas} sincronizadas, {errores} errores")
-
-        except Exception as e:
-            logger.error(f"❌ Error al sincronizar asistencia: {e}", exc_info=True)
-
-    def sync_buffer(self):
-        """Sincroniza checadas pendientes del buffer"""
-        if not self.buffer:
-            return
-
-        pendientes = self.buffer.get_pendientes(limit=50)
-
-        if not pendientes:
-            return
-
-        logger.info(f"Sincronizando {len(pendientes)} checadas del buffer")
-
-        for checada in pendientes:
-            success = self.cloud_sync.sync_attendance(
-                checada["user_id"],
-                checada["timestamp"],
-                checada["tipo"]
-            )
-
-            if success:
-                self.buffer.mark_synced(checada["id"])
-            else:
-                self.buffer.increment_retry(checada["id"])
-
-    def sync_pending_users(self):
-        """Envía usuarios pendientes al dispositivo con set_user y marca como enviados"""
-        if not self.cloud_sync.test_connection():
-            return
-        try:
-            pending = self.cloud_sync.get_pending_users()
-            if not pending:
-                return
-            logger.info(f"📤 Enviando {len(pending)} usuarios pendientes al dispositivo...")
-            sent_ids = []
-            for u in pending:
-                ok = self.zkteco_client.set_user(
-                    user_id=str(u["numero_empleado"]),
-                    name=u.get("nombre", "")
-                )
-                if ok:
-                    sent_ids.append(u["id"])
-            if sent_ids:
-                self.cloud_sync.mark_users_sent(sent_ids)
-                logger.info(f"✅ {len(sent_ids)} usuarios enviados al dispositivo")
-        except Exception as e:
-            logger.error(f"Error al sincronizar usuarios pendientes: {e}", exc_info=True)
-
-    def sync_pending_enroll(self):
-        """Procesa enrolls pendientes: inicia enroll_user en el dispositivo"""
-        if not self.cloud_sync.test_connection():
-            return
-        try:
-            pending = self.cloud_sync.get_pending_enroll()
-            if not pending:
-                return
-            for pe in pending:
-                enroll_id = pe["id"]
-                numero = pe["numero_empleado"]
-                logger.info(f"👆 Iniciando registro de huella para {numero}. El empleado debe colocar el dedo en el dispositivo.")
-                ok = self.zkteco_client.enroll_user(user_id=numero)
-                self.cloud_sync.mark_enroll_done(enroll_id, success=ok)
-                if ok:
-                    logger.info(f"✅ Enroll completado para {numero}")
-                else:
-                    logger.warning(f"⚠️ Enroll falló para {numero}")
-                # Solo procesamos uno por ciclo para no bloquear
-                break
-        except Exception as e:
-            logger.error(f"Error al procesar enroll: {e}", exc_info=True)
+        logger.info(f"Total: {len(self.handlers)} dispositivo(s) configurado(s)")
 
     def run(self):
-        """Loop principal del agente"""
-        logger.info("Iniciando agente local (ZKTeco MB160)...")
+        logger.info("=" * 60)
+        logger.info(f"Agente Multi-Dispositivo iniciando ({len(self.handlers)} dispositivo(s))")
+        logger.info("=" * 60)
 
-        if not self.zkteco_client.test_connection():
-            logger.error("No se puede conectar con el dispositivo ZKTeco. Verifica IP y puerto (4370).")
+        active_handlers = []
+        for h in self.handlers:
+            if h.test_device():
+                active_handlers.append(h)
+
+        if not active_handlers:
+            logger.error("Ningun dispositivo responde. Verifica IPs y que esten en la misma red.")
             return
 
-        logger.info("Conexión con dispositivo ZKTeco establecida")
+        logger.info(f"{len(active_handlers)} de {len(self.handlers)} dispositivo(s) activo(s)")
 
-        if not self.cloud_sync.test_connection():
-            logger.warning("No se puede conectar con la nube. Las checadas se guardarán en buffer.")
+        for h in active_handlers:
+            if h.cloud.test_connection():
+                logger.info(f"[{h.name}] Sincronizacion inicial de huellas...")
+                h.sync_device_templates_to_backend()
 
         interval = self.config.get("sync", {}).get("interval_seconds", 30)
-        logger.info(f"Agente iniciado. Sincronizando cada {interval} segundos...")
+        logger.info(f"Ciclo de sincronizacion: cada {interval} segundos")
+        template_sync_counter = 0
+        template_sync_every = max(1, 300 // interval)
 
         try:
             while self.running:
-                if self.cloud_sync.test_connection():
-                    self.sync_pending_users()
-                    self.sync_pending_enroll()
+                for h in active_handlers:
+                    tag = h.name
+                    try:
+                        has_cloud = h.cloud.test_connection()
+                        if has_cloud:
+                            h.sync_pending_users()
+                            h.sync_pending_enroll()
+                            h.sync_pending_templates()
+                            h.sync_pending_deletes()
 
-                self.sync_new_attendance()
+                        h.sync_attendance()
 
-                if self.cloud_sync.test_connection():
-                    self.sync_buffer()
+                        if has_cloud:
+                            h.sync_buffer()
+                    except Exception as e:
+                        logger.error(f"[{tag}] Error en ciclo: {e}")
+
+                template_sync_counter += 1
+                if template_sync_counter >= template_sync_every:
+                    for h in active_handlers:
+                        try:
+                            if h.cloud.test_connection():
+                                h.sync_device_templates_to_backend()
+                        except Exception as e:
+                            logger.error(f"[{h.name}] Error sync templates: {e}")
+                    template_sync_counter = 0
 
                 time.sleep(interval)
 
@@ -276,9 +381,7 @@ class Agent:
 
 
 def main():
-    """Función principal"""
     config_path = sys.argv[1] if len(sys.argv) > 1 else "config.yaml"
-
     agent = Agent(config_path)
     agent.run()
 

@@ -1,0 +1,3 @@
+# Forzar CRLF en Windows para que los .bat funcionen
+*.bat text eol=crlf
+*.cmd text eol=crlf

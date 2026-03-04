@@ -1,52 +1,50 @@
 @echo off
 cd /d "%~dp0"
+echo === Instalando Agente Local ZKTeco ===
 
-echo ========================================
-echo  Instalando Agente ZKTeco MB160
-echo ========================================
-echo.
-
-if not exist "venv\Scripts\activate.bat" (
-    if exist "venv" (
-        echo Eliminando venv anterior (incompatible con Windows)...
-        rmdir /s /q venv
-    )
-    echo Creando entorno virtual...
-    python -m venv venv
-    if errorlevel 1 (
-        echo ERROR: No se encontro Python. Instala Python 3.8+ desde python.org
+where python >nul 2>&1
+if %ERRORLEVEL% equ 0 (
+    set PYTHON_CMD=python
+) else (
+    where py >nul 2>&1
+    if %ERRORLEVEL% equ 0 (
+        set PYTHON_CMD=py -3
+    ) else (
+        echo ERROR: Python no encontrado. Instala Python 3.8+ desde https://python.org
         pause
         exit /b 1
     )
-) else (
-    echo Entorno virtual ya existe.
 )
 
-echo.
-echo Activando entorno e instalando dependencias...
-call venv\Scripts\activate.bat
-pip install -r requirements.txt -q
+if not exist "venv\Scripts\activate.bat" (
+    if exist "venv" (
+        echo Eliminando venv incompatible...
+        rmdir /s /q venv
+    )
+    echo Creando entorno virtual...
+    %PYTHON_CMD% -m venv venv
+    if %ERRORLEVEL% neq 0 (
+        echo ERROR: No se pudo crear el entorno virtual.
+        pause
+        exit /b 1
+    )
+)
 
-if errorlevel 1 (
+call venv\Scripts\activate.bat
+pip install -r requirements.txt
+if %ERRORLEVEL% neq 0 (
     echo ERROR al instalar dependencias.
     pause
     exit /b 1
 )
 
-echo.
 if not exist "config.yaml" (
-    if exist "config.yaml.example" (
-        copy config.yaml.example config.yaml
-        echo Creado config.yaml desde plantilla.
-        echo EDITA config.yaml con la IP del dispositivo, API Key y URL del backend.
-    )
-) else (
-    echo config.yaml ya existe. No se sobrescribe.
+    copy config.yaml.example config.yaml
+    echo Archivo config.yaml creado. Editalo con los datos de tu dispositivo.
 )
 
 echo.
-echo ========================================
-echo  Instalacion completada.
-echo  Edita config.yaml y ejecuta run.bat
-echo ========================================
+echo === Instalacion completada ===
+echo Edita config.yaml con la IP del dispositivo y la API Key del backend.
+echo Luego ejecuta: run.bat
 pause

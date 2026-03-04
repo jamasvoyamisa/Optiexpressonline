@@ -12,8 +12,4 @@ if not exist "venv\Scripts\activate.bat" (
 )
 
 call venv\Scripts\activate.bat
-echo === Iniciando Agente Local ZKTeco ===
-echo Presiona Ctrl+C para detener
-echo.
-python main.py
-pause
+python agent_gui.py

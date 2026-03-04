@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Enum, Text
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Enum, Text, LargeBinary, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import enum
@@ -7,6 +7,8 @@ from app.core.database import Base
 
 class TipoChecada(str, enum.Enum):
     ENTRADA = "entrada"
+    SALIDA_COMER = "salida_comer"
+    REGRESO_COMER = "regreso_comer"
     SALIDA = "salida"
 
 
@@ -27,8 +29,9 @@ class Dispositivo(Base):
     api_key = Column(String(255), unique=True, nullable=False, index=True)
     serial_number = Column(String(100), unique=True, nullable=True, index=True)  # SN para ADMS/iClock
     activo = Column(Boolean, default=True)
-    ultima_llamada_getrequest = Column(DateTime(timezone=True), nullable=True)  # Cuándo llamó el dispositivo por última vez
-    ultima_ip_conexion = Column(String(50), nullable=True)  # IP desde la que conectó (getrequest/cdata)
+    ultima_llamada_getrequest = Column(DateTime(timezone=True), nullable=True)
+    ultima_ip_conexion = Column(String(50), nullable=True)
+    ultima_sync_agente = Column(DateTime(timezone=True), nullable=True)
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -70,6 +73,39 @@ class PendingEnroll(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     dispositivo = relationship("Dispositivo", back_populates="pending_enrolls")
+
+
+class PendingDelete(Base):
+    """Cola de usuarios pendientes de eliminar del dispositivo"""
+    __tablename__ = "pending_delete"
+
+    id = Column(Integer, primary_key=True, index=True)
+    dispositivo_id = Column(Integer, ForeignKey("dispositivos.id"), nullable=False)
+    numero_empleado = Column(String(50), nullable=False)
+    procesado = Column(Boolean, default=False)
+    procesado_at = Column(DateTime(timezone=True), nullable=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    dispositivo = relationship("Dispositivo")
+
+
+class FingerprintTemplate(Base):
+    """Almacena templates de huellas digitales para replicacion entre dispositivos"""
+    __tablename__ = "fingerprint_templates"
+    __table_args__ = (
+        UniqueConstraint('numero_empleado', 'finger_index', name='uq_emp_finger'),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    numero_empleado = Column(String(50), nullable=False, index=True)
+    finger_index = Column(Integer, default=0)
+    template_data = Column(Text, nullable=False)
+    source_device_id = Column(Integer, ForeignKey("dispositivos.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    source_device = relationship("Dispositivo")
 
 
 class Agente(Base):
@@ -134,6 +170,7 @@ class Asistencia(Base):
     dispositivo_id = Column(Integer, ForeignKey("dispositivos.id"), nullable=False)
     timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
     tipo = Column(Enum(TipoChecada), nullable=False)
+    es_tiempo_extra = Column(Boolean, default=False)
     sincronizado = Column(Boolean, default=True)
     
     # Timestamps
