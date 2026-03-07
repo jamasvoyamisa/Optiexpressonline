@@ -55,14 +55,10 @@ export const AsistenciaPage = () => {
   };
 
   const getEmpleadoNombre = (checada: AsistenciaConEmpleado) => {
-    if (checada.empleado_nombre) {
-      return checada.empleado_numero
-        ? `${checada.empleado_numero} - ${checada.empleado_nombre}`
-        : checada.empleado_nombre;
-    }
+    if (checada.empleado_nombre) return checada.empleado_nombre;
     const empleado = empleados.find(e => e.id === checada.empleado_id);
     if (!empleado) return `ID: ${checada.empleado_id}`;
-    return `${empleado.numero_empleado || ''} - ${empleado.nombre} ${empleado.apellido_paterno || ''}`.trim();
+    return `${empleado.nombre} ${empleado.apellido_paterno || ''}`.trim();
   };
 
   const estadisticas = {
@@ -76,6 +72,7 @@ export const AsistenciaPage = () => {
 
   type DayRow = {
     key: string;
+    numeroEmpleado: string;
     empleadoNombre: string;
     empresa: string;
     departamento: string;
@@ -86,6 +83,31 @@ export const AsistenciaPage = () => {
     regreso_comer?: string;
     salida?: string;
     esTiempoExtra: boolean;
+    totalHoras: string;
+    /** Timestamp (ms) de la primera checada del día */
+    primeraChecada?: number;
+    /** Timestamp (ms) de la última checada del día */
+    ultimaChecada?: number;
+    /** Timestamp (ms) de salida a comer y regreso (para restar del total) */
+    salidaComerTs?: number;
+    regresoComerTs?: number;
+  };
+
+  const calcularHorasDelDia = (row: DayRow): string => {
+    const primera = row.primeraChecada;
+    const ultima = row.ultimaChecada;
+    if (primera == null || ultima == null || ultima <= primera) return '--';
+    let totalMs = ultima - primera;
+    if (row.salidaComerTs != null && row.regresoComerTs != null && row.regresoComerTs > row.salidaComerTs) {
+      totalMs -= (row.regresoComerTs - row.salidaComerTs);
+    }
+    const mins = Math.floor(totalMs / (1000 * 60));
+    if (Number.isNaN(mins) || mins < 0) return '--';
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    if (Number.isNaN(h) || Number.isNaN(m)) return '--';
+    if (m === 0) return `${h}h`;
+    return `${h}h ${m}m`;
   };
 
   const dayRows: DayRow[] = (() => {
@@ -96,21 +118,29 @@ export const AsistenciaPage = () => {
       const fechaSort = d.toISOString().slice(0, 10);
       const empNombre = getEmpleadoNombre(c);
       const emp = empleados.find(e => e.id === c.empleado_id);
+      const numeroEmp = emp?.numero_empleado ?? c.empleado_numero ?? '-';
       const depto = emp?.departamento?.nombre || '-';
       const empresaNombre = emp?.empresa?.nombre || '-';
       const key = `${c.empleado_id}_${fechaSort}`;
       if (!map.has(key)) {
-        map.set(key, { key, empleadoNombre: empNombre, empresa: empresaNombre, departamento: depto, fecha: fechaStr, fechaSort, esTiempoExtra: false });
+        map.set(key, { key, numeroEmpleado: String(numeroEmp), empleadoNombre: empNombre, empresa: empresaNombre, departamento: depto, fecha: fechaStr, fechaSort, esTiempoExtra: false, totalHoras: '--' });
       }
       const row = map.get(key)!;
       if (c.es_tiempo_extra) row.esTiempoExtra = true;
+      const t = d.getTime();
+      if (row.primeraChecada == null) row.primeraChecada = t; else row.primeraChecada = Math.min(row.primeraChecada, t);
+      if (row.ultimaChecada == null) row.ultimaChecada = t; else row.ultimaChecada = Math.max(row.ultimaChecada, t);
       const hora = d.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
       if (c.tipo === 'entrada' && !row.entrada) row.entrada = hora;
-      else if (c.tipo === 'salida_comer' && !row.salida_comer) row.salida_comer = hora;
-      else if (c.tipo === 'regreso_comer' && !row.regreso_comer) row.regreso_comer = hora;
-      else if (c.tipo === 'salida' && !row.salida) row.salida = hora;
+      else if (c.tipo === 'salida_comer') {
+        if (!row.salida_comer) { row.salida_comer = hora; row.salidaComerTs = t; }
+      } else if (c.tipo === 'regreso_comer') {
+        if (!row.regreso_comer) { row.regreso_comer = hora; row.regresoComerTs = t; }
+      } else if (c.tipo === 'salida' && !row.salida) row.salida = hora;
     }
-    return Array.from(map.values()).sort((a, b) => b.fechaSort.localeCompare(a.fechaSort) || a.empleadoNombre.localeCompare(b.empleadoNombre));
+    const list = Array.from(map.values());
+    list.forEach(row => { row.totalHoras = calcularHorasDelDia(row); });
+    return list.sort((a, b) => b.fechaSort.localeCompare(a.fechaSort) || a.empleadoNombre.localeCompare(b.empleadoNombre));
   })();
 
   if (loading && checadas.length === 0) return <div style={{ padding: '20px' }}>Cargando...</div>;
@@ -175,6 +205,7 @@ export const AsistenciaPage = () => {
           <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
             <thead>
               <tr style={{ backgroundColor: '#f8f9fa' }}>
+                <th style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', fontWeight: 600, color: '#555' }}>No.</th>
                 <th style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', fontWeight: 600, color: '#555' }}>Empleado</th>
                 <th style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', fontWeight: 600, color: '#555' }}>Empresa</th>
                 <th style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', fontWeight: 600, color: '#555' }}>Departamento</th>
@@ -183,6 +214,7 @@ export const AsistenciaPage = () => {
                 <th style={{ padding: '12px 14px', textAlign: 'center', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', fontWeight: 600, color: '#856404', backgroundColor: '#fff8e1' }}>Salida Comer</th>
                 <th style={{ padding: '12px 14px', textAlign: 'center', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', fontWeight: 600, color: '#004085', backgroundColor: '#e3f2fd' }}>Regreso Comer</th>
                 <th style={{ padding: '12px 14px', textAlign: 'center', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', fontWeight: 600, color: '#721c24', backgroundColor: '#fce4ec' }}>Salida</th>
+                <th style={{ padding: '12px 14px', textAlign: 'center', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', fontWeight: 600, color: '#333', backgroundColor: '#f0f0f0' }}>Total horas</th>
               </tr>
             </thead>
             <tbody>
@@ -191,6 +223,7 @@ export const AsistenciaPage = () => {
                   borderBottom: '1px solid #eee',
                   backgroundColor: row.esTiempoExtra ? '#fff8e1' : 'transparent',
                 }}>
+                  <td style={{ padding: '10px 14px', color: '#555', fontWeight: 500 }}>{row.numeroEmpleado}</td>
                   <td style={{ padding: '10px 14px', fontWeight: 500 }}>{row.empleadoNombre}</td>
                   <td style={{ padding: '10px 14px', color: '#555' }}>{row.empresa}</td>
                   <td style={{ padding: '10px 14px', color: '#555' }}>{row.departamento}</td>
@@ -208,6 +241,7 @@ export const AsistenciaPage = () => {
                   <td style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: row.salida_comer ? '#856404' : '#ccc' }}>{row.salida_comer || '--:--'}</td>
                   <td style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: row.regreso_comer ? '#004085' : '#ccc' }}>{row.regreso_comer || '--:--'}</td>
                   <td style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: row.salida ? '#721c24' : '#ccc' }}>{row.salida || '--:--'}</td>
+                  <td style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: '#333' }}>{row.totalHoras}</td>
                 </tr>
               ))}
             </tbody>

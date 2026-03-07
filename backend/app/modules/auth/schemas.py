@@ -11,6 +11,7 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: dict
+    me: Optional[dict] = None  # Mismo payload que GET /auth/me, para no hacer otra petición
 
 
 class UserInfo(BaseModel):

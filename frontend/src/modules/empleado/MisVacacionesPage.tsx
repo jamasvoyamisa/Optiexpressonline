@@ -1,0 +1,601 @@
+import { useState, useEffect } from 'react';
+import api from '../../services/api';
+
+interface Solicitud {
+  id: number;
+  empleado_id: number;
+  fecha_inicio: string;
+  fecha_fin: string;
+  dias_solicitados: number;
+  motivo?: string | null;
+  estado: string;
+  jefe_aprobador_id?: number | null;
+  jefe_aprobador_nombre?: string | null;
+  fecha_aprobacion?: string | null;
+  comentarios_aprobacion?: string | null;
+  created_at: string;
+}
+
+interface PeriodoVacaciones {
+  anios_antiguedad: number;
+  dias_derecho: number;
+  dias_tomados: number;
+  dias_disponibles: number;
+  fecha_aniversario?: string | null;
+  fecha_limite_goce?: string | null;
+}
+
+interface Balance {
+  año: number;
+  dias_disponibles: number;
+  dias_tomados: number;
+  dias_pendientes: number;
+  periodo_actual?: PeriodoVacaciones | null;
+  periodo_anterior?: PeriodoVacaciones | null;
+  fecha_limite_goce?: string | null;
+}
+
+type TabKey = 'nueva' | 'pendientes' | 'registros';
+
+const tabStyle = (active: boolean): React.CSSProperties => ({
+  padding: '12px 20px',
+  cursor: 'pointer',
+  border: 'none',
+  borderBottom: active ? '3px solid #007bff' : '3px solid transparent',
+  backgroundColor: 'transparent',
+  fontWeight: active ? 700 : 400,
+  fontSize: '0.95rem',
+  color: active ? '#007bff' : '#666',
+});
+
+const th = { padding: '11px 13px', textAlign: 'left' as const, borderBottom: '2px solid #dee2e6', fontSize: '0.82rem', fontWeight: 600, color: '#555', backgroundColor: '#f8f9fa' };
+const td = { padding: '10px 13px', borderBottom: '1px solid #f0f0f0', fontSize: '0.9rem' };
+
+// Días en México: festivos y santoral (clave "mes-día", 1-12, 1-31)
+const MEXICO_DAY_LABELS: Record<string, string> = {
+  '1-1': 'Año Nuevo', '1-6': 'Día de Reyes', '1-17': 'San Antonio',
+  '2-2': 'Candelaria', '2-5': 'Constitución', '2-14': 'San Valentín', '2-19': 'Día del Ejército',
+  '3-8': 'Día de la Mujer', '3-19': 'San José', '3-21': 'Natalicio B. Juárez',
+  '4-30': 'Día del Niño', '5-1': 'Día del Trabajo', '5-5': 'Batalla de Puebla', '5-10': 'Día de las Madres', '5-15': 'San Isidro',
+  '6-1': 'Día de la Marina', '6-24': 'San Juan', '6-29': 'San Pedro y San Pablo',
+  '7-16': 'Virgen del Carmen', '7-25': 'Santiago Apóstol',
+  '8-15': 'Asunción', '8-24': 'San Bartolomé',
+  '9-8': 'Natividad María', '9-16': 'Día Independencia', '9-29': 'San Miguel',
+  '10-4': 'San Francisco', '10-12': 'Virgen del Pilar', '10-31': 'Halloween',
+  '11-1': 'Todos los Santos', '11-2': 'Día de Muertos', '11-20': 'Revolución Mexicana', '11-22': 'Santa Cecilia',
+  '12-8': 'Inmaculada Concepción', '12-12': 'Virgen de Guadalupe', '12-24': 'Nochebuena', '12-25': 'Navidad', '12-28': 'Santos Inocentes',
+};
+function getMexicoLabel(month: number, day: number): string | null {
+  return MEXICO_DAY_LABELS[`${month + 1}-${day}`] ?? null;
+}
+
+interface DiaFestivo {
+  id: number;
+  fecha: string;  // 'YYYY-MM-DD'
+  nombre: string;
+  tipo: string;
+  activo: boolean;
+}
+
+export const MisVacacionesPage = () => {
+  const [solicitudes, setSolicitudes] = useState<Solicitud[]>([]);
+  const [balance, setBalance] = useState<Balance | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [sending, setSending] = useState(false);
+  const [activeTab, setActiveTab] = useState<TabKey>('nueva');
+  const [calYear, setCalYear] = useState(() => new Date().getFullYear());
+  const [calMonth, setCalMonth] = useState(() => new Date().getMonth());
+  const [rangeStart, setRangeStart] = useState<string | null>(null);
+  const [rangeEnd, setRangeEnd] = useState<string | null>(null);
+  const [motivo, setMotivo] = useState('');
+  const [modalSolicitar, setModalSolicitar] = useState(false);
+  // Festivos: Set de strings 'YYYY-MM-DD' activos, y mapa fecha→nombre
+  const [festivosSet, setFestivosSet] = useState<Set<string>>(new Set());
+  const [festivosNombre, setFestivosNombre] = useState<Record<string, string>>({});
+
+  const loadFestivos = (year: number) => {
+    api.get<DiaFestivo[]>(`/asistencia/festivos?año=${year}&solo_activos=true`)
+      .then(res => {
+        const arr = Array.isArray(res.data) ? res.data : [];
+        setFestivosSet(new Set(arr.map(f => f.fecha)));
+        setFestivosNombre(Object.fromEntries(arr.map(f => [f.fecha, f.nombre])));
+      })
+      .catch(() => {});
+  };
+
+  const load = () => {
+    setLoading(true);
+    Promise.all([
+      api.get<Solicitud[]>('/vacaciones/mis-solicitudes?limit=500'),
+      api.get<Balance>('/vacaciones/mi-balance'),
+    ])
+      .then(([solRes, balRes]) => {
+        setSolicitudes(Array.isArray(solRes.data) ? solRes.data : []);
+        const b = balRes.data as Balance | null;
+        if (b) setBalance({ ...b, año: (b as Balance).año ?? new Date().getFullYear() });
+        else setBalance(null);
+      })
+      .catch(() => {
+        setSolicitudes([]);
+        setBalance(null);
+      })
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    load();
+    loadFestivos(new Date().getFullYear());
+  }, []);
+
+  const submitDesdeModal = () => {
+    const start = rangeStart || rangeEnd;
+    const end = rangeEnd || rangeStart;
+    if (!start || !end) return;
+    if (isPast(start)) {
+      alert('La fecha de inicio no puede ser anterior al día de hoy.');
+      return;
+    }
+    setSending(true);
+    api
+      .post('/vacaciones/mis-solicitudes', {
+        fecha_inicio: new Date(start + 'T12:00:00').toISOString(),
+        fecha_fin: new Date(end + 'T12:00:00').toISOString(),
+        motivo: motivo.trim() || null,
+      })
+      .then(() => {
+        setModalSolicitar(false);
+        setRangeStart(null);
+        setRangeEnd(null);
+        setMotivo('');
+        load();
+        setActiveTab('pendientes');
+      })
+      .catch((err) => alert(err.response?.data?.detail || 'Error al crear la solicitud'))
+      .finally(() => setSending(false));
+  };
+
+  // Calendario: lunes = 0, domingo = 6 (no elegible)
+  const weekDays = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+  const firstOfMonth = new Date(calYear, calMonth, 1);
+  const lastOfMonth = new Date(calYear, calMonth + 1, 0);
+  const startPad = (firstOfMonth.getDay() + 6) % 7;
+  const daysInMonth = lastOfMonth.getDate();
+  const totalCells = startPad + daysInMonth;
+  void Math.ceil(totalCells / 7); // rows — no se usa actualmente
+
+  const toISO = (d: Date) => d.toISOString().slice(0, 10);
+  const todayLocal = (() => {
+    const n = new Date();
+    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`;
+  })();
+  const isSunday = (y: number, m: number, day: number) => new Date(y, m, day).getDay() === 0;
+  const isPast = (iso: string) => iso < todayLocal;
+
+  const registros = solicitudes.filter((s) => s.estado === 'aprobada');
+  const pendientes = solicitudes.filter((s) => s.estado === 'pendiente');
+  const isDiaTomado = (iso: string) =>
+    registros.some((s) => {
+      const start = s.fecha_inicio.slice(0, 10);
+      const end = s.fecha_fin.slice(0, 10);
+      return iso >= start && iso <= end;
+    });
+
+  const handleDayClick = (iso: string, isSundayDay: boolean, isPastDay: boolean, isTomado: boolean) => {
+    if (isSundayDay || isPastDay || isTomado) return;
+    if (!rangeStart) {
+      setRangeStart(iso);
+      setRangeEnd(null);
+      return;
+    }
+    const end = rangeEnd || rangeStart;
+    if (!rangeEnd) {
+      if (iso < rangeStart) {
+        setRangeStart(iso);
+        setRangeEnd(rangeStart);
+      } else {
+        setRangeEnd(iso);
+      }
+      return;
+    }
+    // Clic en un día ya seleccionado: deseleccionar todo el rango
+    if (iso >= rangeStart && iso <= end) {
+      setRangeStart(null);
+      setRangeEnd(null);
+      return;
+    }
+    if (iso < rangeStart) setRangeStart(iso);
+    else if (iso > end) setRangeEnd(iso);
+  };
+
+  const isInRange = (iso: string) => {
+    if (!rangeStart) return false;
+    const end = rangeEnd || rangeStart;
+    return iso >= rangeStart && iso <= end;
+  };
+
+
+  const selectedCount = (() => {
+    if (!rangeStart) return 0;
+    const end = rangeEnd || rangeStart;
+    let count = 0;
+    const [sy, sm, sd] = rangeStart.split('-').map(Number);
+    const [ey, em, ed] = end.split('-').map(Number);
+    const startD = new Date(sy, sm - 1, sd);
+    const endD = new Date(ey, em - 1, ed);
+    for (let d = new Date(startD); d <= endD; d.setDate(d.getDate() + 1)) {
+      if (d.getDay() === 0) continue; // domingo
+      const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      if (festivosSet.has(iso)) continue; // festivo
+      count++;
+    }
+    return count;
+  })();
+
+  return (
+    <div style={{ padding: '24px' }}>
+      <h1 style={{ marginBottom: '20px' }}>Vacaciones</h1>
+
+      {/* Tarjetas siempre visibles */}
+      {balance && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+          <div style={{ padding: '18px', backgroundColor: 'white', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
+            <div style={{ color: '#666', fontSize: '0.85rem', marginBottom: '4px' }}>Días disponibles</div>
+            <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: '#15803d' }}>{Number(balance.dias_disponibles)}</div>
+          </div>
+          <div style={{ padding: '18px', backgroundColor: 'white', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
+            <div style={{ color: '#666', fontSize: '0.85rem', marginBottom: '4px' }}>Días tomados</div>
+            <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: '#0369a1' }}>{Number(balance.dias_tomados)}</div>
+          </div>
+          <div style={{ padding: '18px', backgroundColor: 'white', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
+            <div style={{ color: '#666', fontSize: '0.85rem', marginBottom: '4px' }}>Pendientes (solicitados)</div>
+            <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: '#b45309' }}>{Number(balance.dias_pendientes)}</div>
+          </div>
+          <div style={{ padding: '18px', backgroundColor: 'white', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
+            <div style={{ color: '#666', fontSize: '0.85rem', marginBottom: '8px' }}>Por vencer</div>
+            {(() => {
+              const porVencer: PeriodoVacaciones[] = [];
+              if (balance.periodo_anterior && Number(balance.periodo_anterior.dias_disponibles) > 0) {
+                porVencer.push(balance.periodo_anterior);
+              }
+              if (porVencer.length === 0) {
+                return <div style={{ fontSize: '0.9rem', color: '#888' }}>Ningún periodo por prescribir</div>;
+              }
+              return (
+                <div style={{ fontSize: '0.9rem' }}>
+                  {porVencer.map((p, idx) => (
+                    <div key={idx} style={{ marginBottom: idx < porVencer.length - 1 ? '8px' : 0 }}>
+                      <span style={{ fontWeight: 700, color: '#b91c1c' }}>{Number(p.dias_disponibles)} día{Number(p.dias_disponibles) !== 1 ? 's' : ''}</span>
+                      <span style={{ color: '#555' }}> ({p.anios_antiguedad} año{p.anios_antiguedad !== 1 ? 's' : ''})</span>
+                      {p.fecha_limite_goce && (
+                        <div style={{ fontSize: '0.8rem', color: '#6b7280', marginTop: '2px' }}>
+                          Vencen: {new Date(p.fecha_limite_goce + 'T12:00:00').toLocaleDateString('es-MX', { dateStyle: 'short' })}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* Pestañas debajo de las tarjetas */}
+      <div style={{ display: 'flex', borderBottom: '2px solid #e5e7eb', marginBottom: '24px' }}>
+        <button style={tabStyle(activeTab === 'nueva')} onClick={() => setActiveTab('nueva')}>
+          Nueva solicitud
+        </button>
+        <button style={tabStyle(activeTab === 'pendientes')} onClick={() => setActiveTab('pendientes')}>
+          Pendientes
+        </button>
+        <button style={tabStyle(activeTab === 'registros')} onClick={() => setActiveTab('registros')}>
+          Ya tomadas
+        </button>
+      </div>
+
+      {/* Tab Registros: vacaciones ya tomadas (aprobadas) - estilo asistencia, con quien autorizó y fecha autorización */}
+      {activeTab === 'registros' && (
+        <>
+          {loading && solicitudes.length === 0 ? (
+            <p style={{ color: '#666' }}>Cargando...</p>
+          ) : registros.length === 0 ? (
+            <p style={{ color: '#666', padding: '24px', backgroundColor: '#f8f9fa', borderRadius: '8px' }}>
+              No tienes vacaciones tomadas (aprobadas) registradas.
+            </p>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+                <thead>
+                  <tr>
+                    <th style={th}>Fecha inicio</th>
+                    <th style={th}>Fecha fin</th>
+                    <th style={{ ...th, textAlign: 'center' }}>Días</th>
+                    <th style={th}>Autorizó</th>
+                    <th style={th}>Fecha autorización</th>
+                    <th style={th}>Comentarios</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {registros.map((s) => (
+                    <tr key={s.id} style={{ borderBottom: '1px solid #eee' }}>
+                      <td style={td}>{new Date(s.fecha_inicio).toLocaleDateString('es-MX', { dateStyle: 'short' })}</td>
+                      <td style={td}>{new Date(s.fecha_fin).toLocaleDateString('es-MX', { dateStyle: 'short' })}</td>
+                      <td style={{ ...td, textAlign: 'center', fontWeight: 600 }}>{s.dias_solicitados}</td>
+                      <td style={td}>{s.jefe_aprobador_nombre || '—'}</td>
+                      <td style={td}>
+                        {s.fecha_aprobacion
+                          ? new Date(s.fecha_aprobacion).toLocaleDateString('es-MX', { dateStyle: 'short' })
+                          : '—'}
+                      </td>
+                      <td style={{ ...td, color: '#555' }}>{s.comentarios_aprobacion || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p style={{ marginTop: '8px', color: '#888', fontSize: '0.82rem' }}>
+                {registros.length} registro{registros.length !== 1 ? 's' : ''} de vacaciones tomadas
+              </p>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Tab Pendientes */}
+      {activeTab === 'pendientes' && (
+        <>
+          {loading && solicitudes.length === 0 ? (
+            <p style={{ color: '#666' }}>Cargando...</p>
+          ) : pendientes.length === 0 ? (
+            <p style={{ color: '#666', padding: '24px', backgroundColor: '#f8f9fa', borderRadius: '8px' }}>
+              No tienes solicitudes pendientes de aprobación.
+            </p>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+                <thead>
+                  <tr>
+                    <th style={th}>Fecha inicio</th>
+                    <th style={th}>Fecha fin</th>
+                    <th style={{ ...th, textAlign: 'center' }}>Días</th>
+                    <th style={th}>Motivo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pendientes.map((s) => (
+                    <tr key={s.id} style={{ borderBottom: '1px solid #eee' }}>
+                      <td style={td}>{new Date(s.fecha_inicio).toLocaleDateString('es-MX', { dateStyle: 'short' })}</td>
+                      <td style={td}>{new Date(s.fecha_fin).toLocaleDateString('es-MX', { dateStyle: 'short' })}</td>
+                      <td style={{ ...td, textAlign: 'center' }}>{s.dias_solicitados}</td>
+                      <td style={{ ...td, color: '#555' }}>{s.motivo || '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Tab Nueva solicitud: calendario a ancho total + botón Solicitar + modal */}
+      {activeTab === 'nueva' && (
+        <div style={{ width: '100%' }}>
+          {/* Barra superior: título + botón Solicitar (solo si hay selección) */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', marginBottom: '16px' }}>
+            <h2 style={{ margin: 0, fontSize: '1.1rem' }}>Selecciona el período de vacaciones</h2>
+            {rangeStart && (
+              <button
+                type="button"
+                onClick={() => setModalSolicitar(true)}
+                style={{
+                  padding: '12px 24px',
+                  backgroundColor: '#16a34a',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  fontWeight: 700,
+                  fontSize: '1rem',
+                }}
+              >
+                Solicitar
+              </button>
+            )}
+          </div>
+
+          {/* Navegación: flechas al lado del mes, grupo centrado */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', marginBottom: '12px' }}>
+            <button
+              type="button"
+              onClick={() => {
+                if (calMonth === 0) {
+                  setCalMonth(11); setCalYear(calYear - 1);
+                  loadFestivos(calYear - 1);
+                } else setCalMonth(calMonth - 1);
+              }}
+              style={{ padding: '8px 14px', backgroundColor: '#e5e7eb', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}
+            >
+              ←
+            </button>
+            <span style={{ fontSize: '1.25rem', fontWeight: 700, color: '#1f2937' }}>
+              {firstOfMonth.toLocaleDateString('es-MX', { month: 'long', year: 'numeric' }).replace(/^\w/, (c) => c.toUpperCase())}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                if (calMonth === 11) {
+                  setCalMonth(0); setCalYear(calYear + 1);
+                  loadFestivos(calYear + 1);
+                } else setCalMonth(calMonth + 1);
+              }}
+              style={{ padding: '8px 14px', backgroundColor: '#e5e7eb', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}
+            >
+              →
+            </button>
+          </div>
+
+          {/* Calendario a ancho total con datos México (santo/festivo) - días como tarjetas flotantes */}
+          <div style={{ backgroundColor: '#f1f5f9', borderRadius: '12px', border: '1px solid #e5e7eb', marginBottom: '20px', width: '100%', padding: '12px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px', marginBottom: '8px' }}>
+              {weekDays.map((w) => (
+                <div
+                  key={w}
+                  style={{
+                    minHeight: '44px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderRadius: '10px',
+                    border: '1px solid #e5e7eb',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+                    backgroundColor: '#1e40af',
+                    fontWeight: 700,
+                    fontSize: '0.85rem',
+                    color: 'white',
+                  }}
+                >
+                  {w}
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gridAutoRows: '80px', gap: '4px', padding: 0 }}>
+              {Array.from({ length: startPad }, (_, i) => (
+                <div key={`pad-${i}`} style={{ minHeight: '80px' }} />
+              ))}
+              {Array.from({ length: daysInMonth }, (_, i) => {
+                const day = i + 1;
+                const iso = toISO(new Date(calYear, calMonth, day));
+                const sun = isSunday(calYear, calMonth, day);
+                const past = isPast(iso);
+                const yaTomado = isDiaTomado(iso);
+                const esFestivo = festivosSet.has(iso);
+                const festivoNombre = festivosNombre[iso] ?? null;
+                // Festivos y domingos son no elegibles (no se pueden seleccionar)
+                const noElegible = sun || past || yaTomado || esFestivo;
+                const inRange = isInRange(iso);
+                const mexicoLabel = festivoNombre ?? getMexicoLabel(calMonth, day);
+
+                // Colores: festivo (naranja), pasado (gris), domingo (violeta), ya tomado (azul), en rango (verde), normal
+                const bg =
+                  past
+                    ? '#f3f4f6'
+                    : esFestivo
+                      ? '#fff7ed'
+                      : sun
+                        ? '#f5f3ff'
+                        : yaTomado
+                          ? '#dbeafe'
+                          : inRange
+                            ? '#dcfce7'
+                            : '#fff';
+                const fg =
+                  past
+                    ? '#9ca3af'
+                    : esFestivo
+                      ? '#c2410c'
+                      : sun
+                        ? '#8b7fa8'
+                        : yaTomado
+                          ? '#1e40af'
+                          : inRange
+                            ? '#15803d'
+                            : '#1f2937';
+                const labelColor = past ? '#9ca3af' : esFestivo ? '#ea580c' : sun ? '#8b7fa8' : yaTomado ? '#1e3a8a' : inRange ? '#15803d' : '#6b7280';
+                return (
+                  <button
+                    key={iso}
+                    type="button"
+                    title={esFestivo ? `🎉 ${festivoNombre}` : undefined}
+                    onClick={() => handleDayClick(iso, sun, past, yaTomado || esFestivo)}
+                    disabled={noElegible}
+                    style={{
+                      height: '100%',
+                      minHeight: '80px',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      borderRadius: '10px',
+                      border: esFestivo ? '1px solid #fed7aa' : '1px solid #e5e7eb',
+                      boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+                      fontSize: '1rem',
+                      fontWeight: 700,
+                      cursor: noElegible ? 'not-allowed' : 'pointer',
+                      backgroundColor: bg,
+                      color: fg,
+                      opacity: noElegible ? 0.85 : 1,
+                    }}
+                  >
+                    <span>{day}</span>
+                    {mexicoLabel && (
+                      <span style={{ fontSize: '0.6rem', fontWeight: 500, color: labelColor, marginTop: '1px', lineHeight: 1.1, textAlign: 'center', padding: '0 2px' }}>
+                        {esFestivo ? `🎉 ${mexicoLabel}` : mexicoLabel}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: confirmar solicitud (inicio, regreso, días a tomar, motivo) */}
+      {modalSolicitar && (
+        <div
+          style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.5)' }}
+          onClick={() => !sending && setModalSolicitar(false)}
+          role="presentation"
+        >
+          <div
+            style={{ backgroundColor: 'white', padding: '24px', borderRadius: '12px', maxWidth: '420px', width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+          >
+            <h2 style={{ marginTop: 0, marginBottom: '16px', fontSize: '1.2rem' }}>Confirmar solicitud de vacaciones</h2>
+            <dl style={{ margin: '0 0 16px 0', fontSize: '0.95rem' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <dt style={{ color: '#666', fontWeight: 500 }}>Inicio</dt>
+                <dd style={{ margin: 0, fontWeight: 600 }}>{rangeStart ? new Date(rangeStart + 'T12:00:00').toLocaleDateString('es-MX', { dateStyle: 'long' }) : '—'}</dd>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <dt style={{ color: '#666', fontWeight: 500 }}>Regreso</dt>
+                <dd style={{ margin: 0, fontWeight: 600 }}>{(rangeEnd || rangeStart) ? new Date((rangeEnd || rangeStart) + 'T12:00:00').toLocaleDateString('es-MX', { dateStyle: 'long' }) : '—'}</dd>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <dt style={{ color: '#666', fontWeight: 500 }}>Días a tomar</dt>
+                <dd style={{ margin: 0, fontWeight: 600, color: '#15803d' }}>{selectedCount} día{selectedCount !== 1 ? 's' : ''}</dd>
+              </div>
+            </dl>
+            <div style={{ marginBottom: '16px' }}>
+              <label style={{ display: 'block', fontWeight: 600, marginBottom: '6px', fontSize: '0.9rem' }}>Motivo (opcional)</label>
+              <textarea
+                value={motivo}
+                onChange={(e) => setMotivo(e.target.value)}
+                rows={2}
+                placeholder="Ej. vacaciones familiares"
+                style={{ width: '100%', padding: '10px', border: '1px solid #ddd', borderRadius: '6px', resize: 'vertical', fontSize: '0.9rem' }}
+              />
+            </div>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => !sending && setModalSolicitar(false)}
+                style={{ padding: '10px 20px', backgroundColor: '#e5e7eb', color: '#374151', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={submitDesdeModal}
+                disabled={sending}
+                style={{ padding: '10px 20px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: '6px', cursor: sending ? 'not-allowed' : 'pointer', fontWeight: 600 }}
+              >
+                {sending ? 'Enviando...' : 'Confirmar solicitud'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};

@@ -1,16 +1,56 @@
+import unicodedata
+import re
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import or_
+from sqlalchemy import or_, func
 from typing import List, Optional
 from . import models, schemas
+from app.core.security import get_password_hash
+
+
+def _normalize_str(text: str) -> str:
+    """Lowercase, remove accents and non-alphanumeric chars."""
+    nfkd = unicodedata.normalize('NFD', text.lower())
+    ascii_str = ''.join(c for c in nfkd if not unicodedata.combining(c))
+    return re.sub(r'[^a-z0-9]', '', ascii_str)
+
+
+def _generate_unique_username(db: Session, nombre: str, apellido_paterno: str, exclude_id: int = None) -> str:
+    """Generate username = first letter of nombre + apellido_paterno (normalized).
+    If taken, append a suffix number until unique."""
+    letra = _normalize_str(nombre)[:1]
+    ap = _normalize_str(apellido_paterno)
+    base = letra + ap
+    candidate = base
+    counter = 2
+    while True:
+        q = db.query(models.Empleado).filter(models.Empleado.username == candidate)
+        if exclude_id:
+            q = q.filter(models.Empleado.id != exclude_id)
+        if not q.first():
+            return candidate
+        candidate = f"{base}{counter}"
+        counter += 1
 
 
 class PersonalService:
 
     # ========== EMPRESAS ==========
 
+    BLOCK_SIZE = 1000  # Cada empresa obtiene un bloque de 1000 PINs
+
+    @staticmethod
+    def _assign_rango(db: Session) -> tuple:
+        """Calcula el siguiente rango libre en bloques de 1000.
+        Empresa 1 → 1-1000, Empresa 2 → 1001-2000, etc."""
+        max_fin = db.query(func.max(models.Empresa.rango_fin)).scalar() or 0
+        inicio = max_fin + 1
+        fin = inicio + PersonalService.BLOCK_SIZE - 1
+        return inicio, fin
+
     @staticmethod
     def create_empresa(db: Session, empresa: schemas.EmpresaCreate) -> models.Empresa:
-        db_empresa = models.Empresa(**empresa.dict())
+        inicio, fin = PersonalService._assign_rango(db)
+        db_empresa = models.Empresa(**empresa.dict(), rango_inicio=inicio, rango_fin=fin)
         db.add(db_empresa)
         db.commit()
         db.refresh(db_empresa)
@@ -99,6 +139,19 @@ class PersonalService:
         db.commit()
         return True
 
+    # ========== PUESTOS ==========
+
+    @staticmethod
+    def get_puestos(db: Session, activo: Optional[bool] = True) -> List[models.Puesto]:
+        query = db.query(models.Puesto).order_by(models.Puesto.orden.asc(), models.Puesto.id.asc())
+        if activo is not None:
+            query = query.filter(models.Puesto.activo == activo)
+        return query.all()
+
+    @staticmethod
+    def get_puesto(db: Session, puesto_id: int) -> Optional[models.Puesto]:
+        return db.query(models.Puesto).filter(models.Puesto.id == puesto_id).first()
+
     # ========== ROLES ==========
     
     @staticmethod
@@ -152,13 +205,80 @@ class PersonalService:
     # ========== EMPLEADOS ==========
     
     @staticmethod
+    def _next_pin_checador(db: Session, empresa_id: int) -> str:
+        """Devuelve el siguiente pin_checador disponible dentro del rango de la empresa."""
+        empresa = db.query(models.Empresa).filter(models.Empresa.id == empresa_id).first()
+        if not empresa or empresa.rango_inicio is None:
+            return None
+        # Obtener todos los pines usados en este rango y encontrar el siguiente libre
+        pines_usados = {
+            int(p.pin_checador)
+            for p in db.query(models.Empleado.pin_checador)
+            .filter(
+                models.Empleado.empresa_id == empresa_id,
+                models.Empleado.pin_checador.isnot(None)
+            ).all()
+            if p.pin_checador and p.pin_checador.isdigit()
+        }
+        for candidate in range(empresa.rango_inicio, empresa.rango_fin + 1):
+            if candidate not in pines_usados:
+                return str(candidate)
+        raise ValueError(f"La empresa ha alcanzado el límite de su pool de PINs ({empresa.rango_fin}). Contacte al administrador.")
+
+    @staticmethod
     def create_empleado(db: Session, empleado: schemas.EmpleadoCreate) -> models.Empleado:
-        """Crear nuevo empleado"""
-        data = empleado.dict(exclude={"registrar_en_checador", "dispositivo_ids"})
+        """Crear nuevo empleado y usuario del sistema (acceso con número de empleado/username y contraseña)."""
+        data = empleado.dict(exclude={"registrar_en_checador", "dispositivo_ids", "password", "horario_id"})
+        # Resolver username único
+        if not data.get("username") or not str(data["username"]).strip():
+            data["username"] = _generate_unique_username(
+                db, empleado.nombre, empleado.apellido_paterno or ""
+            )
+        else:
+            exists = db.query(models.Empleado).filter(
+                models.Empleado.username == data["username"]
+            ).first()
+            if exists:
+                data["username"] = _generate_unique_username(
+                    db, empleado.nombre, empleado.apellido_paterno or ""
+                )
+        # Asignar pin_checador desde el pool de la empresa
+        pin = None
+        if empleado.empresa_id:
+            pin = PersonalService._next_pin_checador(db, empleado.empresa_id)
+        data["pin_checador"] = pin  # puede ser None si no hay empresa (se actualiza post-insert)
         db_empleado = models.Empleado(**data)
+        # Contraseña para acceso al sistema
+        rfc_default = (empleado.rfc or '').strip()[:8]
+        password_plain = (
+            empleado.password if empleado.password and empleado.password.strip()
+            else rfc_default if rfc_default
+            else empleado.numero_empleado
+        )
+        db_empleado.password_hash = get_password_hash(password_plain)
         db.add(db_empleado)
         db.commit()
         db.refresh(db_empleado)
+        # Si no se pudo asignar pin_checador (sin empresa/rango), usar el id
+        if not db_empleado.pin_checador:
+            db_empleado.pin_checador = str(db_empleado.id)
+            db.commit()
+            db.refresh(db_empleado)
+        # Asignar horario si se proporcionó
+        if empleado.horario_id:
+            try:
+                from app.modules.asistencia import models as asist_models
+                from datetime import datetime
+                eh = asist_models.EmpleadoHorario(
+                    empleado_id=db_empleado.id,
+                    horario_id=empleado.horario_id,
+                    fecha_inicio=datetime.utcnow(),
+                    activo=True,
+                )
+                db.add(eh)
+                db.commit()
+            except Exception:
+                pass  # No interrumpir la creación del empleado si falla la asignación de horario
         return db_empleado
     
     @staticmethod
@@ -167,12 +287,26 @@ class PersonalService:
         return db.query(models.Empleado).options(
             joinedload(models.Empleado.empresa),
             joinedload(models.Empleado.departamento_rel).joinedload(models.Departamento.empresa),
+            joinedload(models.Empleado.puesto_rel),
         ).filter(models.Empleado.id == empleado_id).first()
     
     @staticmethod
     def get_empleado_by_numero(db: Session, numero_empleado: str) -> Optional[models.Empleado]:
         """Obtener empleado por número de empleado"""
         return db.query(models.Empleado).filter(models.Empleado.numero_empleado == numero_empleado).first()
+
+    @staticmethod
+    def check_username_available(db: Session, username: str, exclude_id: int = None) -> bool:
+        """Devuelve True si el username no está en uso."""
+        q = db.query(models.Empleado).filter(models.Empleado.username == username.strip().lower())
+        if exclude_id:
+            q = q.filter(models.Empleado.id != exclude_id)
+        return q.first() is None
+
+    @staticmethod
+    def suggest_username(db: Session, nombre: str, apellido_paterno: str, exclude_id: int = None) -> str:
+        """Genera y devuelve un username único."""
+        return _generate_unique_username(db, nombre, apellido_paterno, exclude_id)
     
     @staticmethod
     def get_empleados(
@@ -182,12 +316,15 @@ class PersonalService:
         estado: Optional[str] = None,
         rol_id: Optional[int] = None,
         jefe_id: Optional[int] = None,
+        departamento_id: Optional[int] = None,
         search: Optional[str] = None
     ) -> List[models.Empleado]:
         """Listar empleados con filtros"""
         query = db.query(models.Empleado).options(
             joinedload(models.Empleado.empresa),
             joinedload(models.Empleado.departamento_rel),
+            joinedload(models.Empleado.puesto_rel),
+            joinedload(models.Empleado.jefe),
         )
         
         if estado:
@@ -196,6 +333,8 @@ class PersonalService:
             query = query.filter(models.Empleado.rol_id == rol_id)
         if jefe_id:
             query = query.filter(models.Empleado.jefe_id == jefe_id)
+        if departamento_id:
+            query = query.filter(models.Empleado.departamento_id == departamento_id)
         if search:
             search_filter = or_(
                 models.Empleado.nombre.ilike(f"%{search}%"),
@@ -216,6 +355,10 @@ class PersonalService:
             return None
         
         update_data = empleado.dict(exclude_unset=True)
+        if "password" in update_data:
+            password = update_data.pop("password")
+            if password and str(password).strip():
+                db_empleado.password_hash = get_password_hash(password)
         for field, value in update_data.items():
             setattr(db_empleado, field, value)
         
@@ -259,3 +402,58 @@ class PersonalService:
     def get_subordinados(db: Session, jefe_id: int) -> List[models.Empleado]:
         """Obtener subordinados de un jefe"""
         return db.query(models.Empleado).filter(models.Empleado.jefe_id == jefe_id).all()
+
+    # ========== GERENTES Y SUPERVISORES DE ÁREA ==========
+    # Los gerentes (área a su cargo) y los supervisores en esa área pueden aprobar vacaciones y justificar incidencias.
+
+    GERENTE_GENERAL_ROL_NAMES = ("Gerente General", "Gerente general")
+
+    @staticmethod
+    def get_es_gerente_general(db: Session, empleado_id: int) -> bool:
+        """True si el empleado tiene rol Gerente General (aprueba vacaciones solo de gerentes/supervisores)."""
+        emp = db.query(models.Empleado).filter(models.Empleado.id == empleado_id).first()
+        if not emp or not emp.rol_id:
+            return False
+        rol = db.query(models.Rol).filter(models.Rol.id == emp.rol_id).first()
+        return rol is not None and rol.nombre in PersonalService.GERENTE_GENERAL_ROL_NAMES
+
+    @staticmethod
+    def get_ids_aprobadores_area(db: Session, departamento_id: Optional[int]) -> List[int]:
+        """IDs de empleados que pueden aprobar vacaciones/justificar del área: jefe del departamento, gerentes y supervisores del mismo."""
+        if not departamento_id:
+            return []
+        depto = db.query(models.Departamento).filter(models.Departamento.id == departamento_id).first()
+        if not depto:
+            return []
+        ids = []
+        if depto.jefe_id:
+            ids.append(depto.jefe_id)
+        # Gerentes y supervisores del departamento (por nombre de puesto)
+        gerentes_supervisores = db.query(models.Empleado).join(models.Puesto, models.Empleado.puesto_id == models.Puesto.id).filter(
+            models.Empleado.departamento_id == departamento_id,
+            or_(
+                models.Puesto.nombre.ilike("%gerente%"),
+                models.Puesto.nombre.ilike("%supervisor%"),
+            ),
+        ).all()
+        for e in gerentes_supervisores:
+            if e.id not in ids:
+                ids.append(e.id)
+        return ids
+
+    @staticmethod
+    def get_departamento_ids_que_administro(db: Session, empleado_id: int) -> List[int]:
+        """Departamentos que este empleado administra: donde es jefe, o donde es supervisor/gerente (por puesto) en ese departamento."""
+        deptos_como_jefe = db.query(models.Departamento.id).filter(
+            models.Departamento.jefe_id == empleado_id
+        ).all()
+        ids = [r[0] for r in deptos_como_jefe]
+        emp = db.query(models.Empleado).options(joinedload(models.Empleado.puesto_rel)).filter(
+            models.Empleado.id == empleado_id
+        ).first()
+        if emp and emp.departamento_id and emp.departamento_id not in ids:
+            puesto_nombre = (emp.puesto_rel.nombre or "").strip().lower() if emp.puesto_rel else ""
+            # Aceptar "Gerente", "Supervisor" o variantes (ej. "Gerente de Diseño", "Supervisor de Área")
+            if "gerente" in puesto_nombre or "supervisor" in puesto_nombre:
+                ids.append(emp.departamento_id)
+        return ids

@@ -7,19 +7,16 @@
 export interface DispositivoCreate {
   nombre: string;
   ubicacion?: string | null;
+  ip_local?: string | null;
   serial_number?: string | null;
 }
 
 export interface DispositivoResponse {
   id: number;
   nombre: string;
-  ip_local?: string | null;
   ubicacion?: string | null;
-  serial_number?: string | null;
   api_key: string;
   activo: boolean;
-  ultima_llamada_getrequest?: string | null;
-  ultima_ip_conexion?: string | null;
   ultima_sync_agente?: string | null;
   created_at?: string;
   updated_at?: string | null;
@@ -47,6 +44,8 @@ export interface EmpresaResponse {
   direccion?: string | null;
   telefono?: string | null;
   activo: boolean;
+  rango_inicio?: number | null;
+  rango_fin?: number | null;
   created_at?: string;
   updated_at?: string | null;
 }
@@ -64,6 +63,15 @@ export interface EmpresaUpdate {
   direccion?: string;
   telefono?: string;
   activo?: boolean;
+}
+
+// ========== PUESTO ==========
+export interface PuestoResponse {
+  id: number;
+  nombre: string;
+  orden: number;
+  activo: boolean;
+  created_at?: string;
 }
 
 // ========== DEPARTAMENTO ==========
@@ -101,19 +109,26 @@ export interface EmpleadoResponse {
   apellido_materno?: string | null;
   email?: string | null;
   telefono?: string | null;
+  username?: string | null;
   empresa_id?: number | null;
   departamento_id?: number | null;
-  puesto?: string | null;
+  puesto_id?: number | null;
+  puesto?: PuestoResponse | null;
   curp?: string | null;
   rfc?: string | null;
   nss?: string | null;
   direccion?: string | null;
+  colonia?: string | null;
+  cp?: string | null;
+  ciudad?: string | null;
   fecha_nacimiento?: string | null;
   contacto_emergencia?: string | null;
   telefono_emergencia?: string | null;
   rol_id?: number | null;
   jefe_id?: number | null;
+  jefe?: { nombre: string; apellido_paterno?: string | null; apellido_materno?: string | null } | null;
   estado: string;
+  pin_checador?: string | null;
   fecha_ingreso?: string | null;
   fecha_baja?: string | null;
   created_at?: string;
@@ -129,17 +144,23 @@ export interface EmpleadoCreate {
   apellido_materno?: string;
   email?: string;
   telefono?: string;
+  username?: string;
   empresa_id?: number;
   departamento_id?: number;
-  puesto?: string;
+  puesto_id?: number;
   curp?: string;
   rfc?: string;
   nss?: string;
   direccion?: string;
+  colonia?: string;
+  cp?: string;
+  ciudad?: string;
   fecha_nacimiento?: string;
   contacto_emergencia?: string;
   telefono_emergencia?: string;
   fecha_ingreso?: string;
   registrar_en_checador?: boolean;
   dispositivo_ids?: number[];
+  password?: string;
+  username?: string;
 }

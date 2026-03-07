@@ -1,18 +1,32 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
-import { Empleado, EmpleadoCreate, Dispositivo, Asistencia, EmpresaResponse, DepartamentoResponse } from '../../types';
+import { Empleado, EmpleadoCreate, Dispositivo, Asistencia, EmpresaResponse, DepartamentoResponse, PuestoResponse } from '../../types';
 
 interface FormData extends Omit<EmpleadoCreate, 'registrar_en_checador' | 'dispositivo_ids'> {
   registrar_en_checador: boolean;
   dispositivo_ids: number[];
+  password?: string;
+  username?: string;
+  horario_id?: number;
+}
+
+interface HorarioSimple {
+  id: number;
+  nombre: string;
+  hora_entrada: string;
+  hora_salida: string;
+  activo: boolean;
 }
 
 const emptyForm: FormData = {
   numero_empleado: '', nombre: '', apellido_paterno: '', apellido_materno: '',
-  email: '', telefono: '', empresa_id: undefined, departamento_id: undefined, puesto: '', curp: '', rfc: '', nss: '',
-  direccion: '', fecha_nacimiento: '', contacto_emergencia: '', telefono_emergencia: '',
-  fecha_ingreso: '', registrar_en_checador: false, dispositivo_ids: [],
+  email: '', telefono: '', username: '', empresa_id: undefined, departamento_id: undefined, puesto_id: undefined, curp: '', rfc: '', nss: '',
+  direccion: '', colonia: '', cp: '', ciudad: '', fecha_nacimiento: '', contacto_emergencia: '', telefono_emergencia: '',
+  fecha_ingreso: '', registrar_en_checador: false, dispositivo_ids: [], password: '', horario_id: undefined,
 };
+
+const normalizeStr = (s: string) =>
+  s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
 
 const estadoBadge = (estado: string) => {
   const map: Record<string, { bg: string; text: string }> = {
@@ -29,8 +43,8 @@ const estadoBadge = (estado: string) => {
 };
 
 const inputStyle: React.CSSProperties = {
-  width: '100%', padding: '9px 12px', border: '1px solid #d1d5db', borderRadius: '6px',
-  fontSize: '0.9rem', outline: 'none', boxSizing: 'border-box',
+  width: '100%', height: '38px', padding: '0 12px', border: '1px solid #d1d5db', borderRadius: '6px',
+  fontSize: '0.9rem', lineHeight: '38px', outline: 'none', boxSizing: 'border-box',
 };
 
 const labelStyle: React.CSSProperties = {
@@ -71,16 +85,128 @@ const modalLarge: React.CSSProperties = {
   ...modalSmall, maxWidth: '800px', maxHeight: '90vh', overflowY: 'auto',
 };
 
+// ---- Componente panel horario en perfil de empleado ----
+const HorarioEmpleadoPanel = ({ empleadoId, horarios }: { empleadoId: number; horarios: HorarioSimple[] }) => {
+  const [asignacion, setAsignacion] = useState<{ id: number; horario: HorarioSimple; activo: boolean } | null | 'loading'>('loading');
+  const [editMode, setEditMode] = useState(false);
+  const [selectedHorarioId, setSelectedHorarioId] = useState<number | ''>('');
+  const [saving, setSaving] = useState(false);
+
+  const DIAS_LABEL = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+
+  useEffect(() => {
+    api.get(`/asistencia/empleados/${empleadoId}/horario`)
+      .then(r => setAsignacion(r.data))
+      .catch(() => setAsignacion(null));
+  }, [empleadoId]);
+
+  const handleAsignar = async () => {
+    if (!selectedHorarioId) return;
+    setSaving(true);
+    try {
+      const r = await api.post(`/asistencia/empleados/${empleadoId}/horario`, { horario_id: selectedHorarioId });
+      setAsignacion(r.data);
+      setEditMode(false);
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } } };
+      alert(err.response?.data?.detail || 'Error al asignar horario');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleQuitar = async () => {
+    if (!confirm('¿Quitar el horario asignado a este empleado?')) return;
+    setSaving(true);
+    try {
+      await api.delete(`/asistencia/empleados/${empleadoId}/horario`);
+      setAsignacion(null);
+      setEditMode(false);
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } } };
+      alert(err.response?.data?.detail || 'Error al quitar horario');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (asignacion === 'loading') return null;
+
+  return (
+    <div style={{ marginBottom: '16px', padding: '14px 18px', backgroundColor: '#f0f4ff', borderRadius: '8px', border: '1px solid #c7d2fe' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+        <div>
+          <span style={{ fontWeight: 600, fontSize: '0.88rem', color: '#3730a3' }}>Horario asignado: </span>
+          {asignacion ? (
+            <span style={{ fontSize: '0.88rem', color: '#1e1b4b' }}>
+              {asignacion.horario.nombre} — {asignacion.horario.hora_entrada} a {asignacion.horario.hora_salida}
+              {asignacion.horario.activo === false && <span style={{ marginLeft: '6px', color: '#dc2626', fontSize: '0.78rem' }}>(inactivo)</span>}
+            </span>
+          ) : (
+            <span style={{ fontSize: '0.88rem', color: '#6b7280' }}>Sin horario</span>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: '6px' }}>
+          <button
+            onClick={() => { setEditMode(!editMode); setSelectedHorarioId(asignacion ? asignacion.horario.id : ''); }}
+            style={{ padding: '4px 12px', fontSize: '0.8rem', cursor: 'pointer', backgroundColor: '#6366f1', color: 'white', border: 'none', borderRadius: '4px' }}
+          >
+            {editMode ? 'Cancelar' : asignacion ? 'Cambiar' : 'Asignar'}
+          </button>
+          {asignacion && !editMode && (
+            <button
+              onClick={handleQuitar}
+              disabled={saving}
+              style={{ padding: '4px 12px', fontSize: '0.8rem', cursor: 'pointer', backgroundColor: '#ef4444', color: 'white', border: 'none', borderRadius: '4px' }}
+            >
+              Quitar
+            </button>
+          )}
+        </div>
+      </div>
+      {editMode && (
+        <div style={{ marginTop: '10px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <select
+            style={{ height: '34px', padding: '0 10px', border: '1px solid #c7d2fe', borderRadius: '6px', fontSize: '0.85rem', flex: 1, minWidth: '200px' }}
+            value={selectedHorarioId}
+            onChange={e => setSelectedHorarioId(e.target.value ? Number(e.target.value) : '')}
+          >
+            <option value="">-- Seleccione horario --</option>
+            {horarios.map(h => (
+              <option key={h.id} value={h.id}>{h.nombre} ({h.hora_entrada} - {h.hora_salida})</option>
+            ))}
+          </select>
+          {selectedHorarioId && (() => {
+            const h = horarios.find(x => x.id === Number(selectedHorarioId));
+            if (!h || !h.activo) return null;
+            const dias = DIAS_LABEL.join(', ');
+            return <span style={{ fontSize: '0.78rem', color: '#555' }}>{dias}</span>;
+          })()}
+          <button
+            onClick={handleAsignar}
+            disabled={!selectedHorarioId || saving}
+            style={{ padding: '4px 14px', fontSize: '0.85rem', cursor: 'pointer', backgroundColor: '#059669', color: 'white', border: 'none', borderRadius: '4px', opacity: !selectedHorarioId ? 0.5 : 1 }}
+          >
+            {saving ? 'Guardando...' : 'Guardar'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const PersonalPage = () => {
-  const [mainTab, setMainTab] = useState<'empleados' | 'empresas' | 'departamentos'>('empleados');
+  const [mainTab, setMainTab] = useState<'empleados' | 'departamentos'>('empleados');
   const [empleados, setEmpleados] = useState<Empleado[]>([]);
   const [empresas, setEmpresas] = useState<EmpresaResponse[]>([]);
   const [departamentos, setDepartamentos] = useState<DepartamentoResponse[]>([]);
+  const [puestos, setPuestos] = useState<PuestoResponse[]>([]);
   const [dispositivos, setDispositivos] = useState<Dispositivo[]>([]);
+  const [horarios, setHorarios] = useState<HorarioSimple[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [search, setSearch] = useState('');
-  const [filtroEstado, setFiltroEstado] = useState('');
+  const [filtroEstado, setFiltroEstado] = useState('activo');
   const [filtroEmpresa, setFiltroEmpresa] = useState('');
   const [selectedEmpleado, setSelectedEmpleado] = useState<Empleado | null>(null);
   const [showDetalle, setShowDetalle] = useState(false);
@@ -90,13 +216,12 @@ export const PersonalPage = () => {
 
   // Modal formulario empleado (crear / editar)
   const [showFormModal, setShowFormModal] = useState(false);
+  const [formTab, setFormTab] = useState<'personales' | 'laborales'>('personales');
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<FormData>({ ...emptyForm });
-
-  // Modal empresa (crear / editar)
-  const [showEmpresaModal, setShowEmpresaModal] = useState(false);
-  const [editingEmpresaId, setEditingEmpresaId] = useState<number | null>(null);
-  const [empresaForm, setEmpresaForm] = useState({ nombre: '', rfc: '', direccion: '', telefono: '' });
+  const [usernameManual, setUsernameManual] = useState(false);
+  const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle');
+  const [numeroManual, setNumeroManual] = useState(false);
 
   // Modal departamento (crear / editar)
   const [showDeptoModal, setShowDeptoModal] = useState(false);
@@ -115,7 +240,10 @@ export const PersonalPage = () => {
   const [enrollDevice, setEnrollDevice] = useState<number | null>(null);
   const [replicarDevices, setReplicarDevices] = useState<number[]>([]);
   const [tieneHuella, setTieneHuella] = useState(false);
+  const [huellaTemplates, setHuellaTemplates] = useState<{ id: number; finger_index: number; source_device_nombre: string | null; updated_at: string | null }[]>([]);
   const [enrollingHuella, setEnrollingHuella] = useState(false);
+  const [enrollStatus, setEnrollStatus] = useState<'idle' | 'completed'>('idle');
+  const [enrollId, setEnrollId] = useState<number | null>(null);
 
   const loadData = useCallback(async () => {
     try {
@@ -123,16 +251,20 @@ export const PersonalPage = () => {
       if (search) params.append('search', search);
       if (filtroEstado) params.append('estado', filtroEstado);
       params.append('limit', '500');
-      const [empRes, devRes, emprsRes, deptosRes] = await Promise.all([
+      const [empRes, devRes, emprsRes, deptosRes, puestosRes, horRes] = await Promise.all([
         api.get(`/personal/empleados?${params.toString()}`),
         api.get('/asistencia/devices'),
         api.get('/personal/empresas?limit=500'),
         api.get('/personal/departamentos?limit=500'),
+        api.get('/personal/puestos'),
+        api.get('/asistencia/horarios?activo=true'),
       ]);
       setEmpleados(empRes.data);
       setDispositivos(devRes.data);
       setEmpresas(emprsRes.data);
       setDepartamentos(deptosRes.data);
+      setPuestos(puestosRes.data);
+      setHorarios(Array.isArray(horRes.data) ? horRes.data : []);
     } catch (error) {
       console.error('Error al cargar datos:', error);
     } finally {
@@ -141,6 +273,41 @@ export const PersonalPage = () => {
   }, [search, filtroEstado]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Auto-generar username al escribir nombre/apellido (solo en alta, no edición, no si el usuario lo editó manualmente)
+  useEffect(() => {
+    if (editingId || usernameManual) return;
+    const letra = normalizeStr(form.nombre).charAt(0);
+    const ap = normalizeStr(form.apellido_paterno || '');
+    if (letra && ap) {
+      setForm(prev => ({ ...prev, username: letra + ap }));
+    }
+  }, [form.nombre, form.apellido_paterno, editingId, usernameManual]);
+
+  // Auto-rellenar numero_empleado al seleccionar empresa (solo en alta, no en edición, no si lo editó manualmente)
+  useEffect(() => {
+    if (editingId || numeroManual || !form.empresa_id) return;
+    let cancelled = false;
+    api.get(`/personal/empleados/next-numero?empresa_id=${form.empresa_id}`)
+      .then(res => { if (!cancelled) setForm(prev => ({ ...prev, numero_empleado: res.data.numero_empleado })); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [form.empresa_id, editingId, numeroManual]);
+
+  // Verificar disponibilidad del username cuando cambia
+  useEffect(() => {
+    if (!form.username || !showFormModal) { setUsernameStatus('idle'); return; }
+    setUsernameStatus('checking');
+    const timer = setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({ username: form.username! });
+        if (editingId) params.append('exclude_id', String(editingId));
+        const res = await api.get(`/personal/empleados/check-username?${params}`);
+        setUsernameStatus(res.data.available ? 'available' : 'taken');
+      } catch { setUsernameStatus('idle'); }
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [form.username, editingId, showFormModal]);
 
   const handleChange = (field: keyof FormData, value: string | boolean | number | number[] | undefined) => {
     setForm(prev => ({ ...prev, [field]: value }));
@@ -158,6 +325,10 @@ export const PersonalPage = () => {
   const openNewForm = () => {
     setForm({ ...emptyForm });
     setEditingId(null);
+    setUsernameManual(false);
+    setUsernameStatus('idle');
+    setNumeroManual(false);
+    setFormTab('personales');
     setShowFormModal(true);
   };
 
@@ -171,26 +342,45 @@ export const PersonalPage = () => {
       telefono: emp.telefono || '',
       empresa_id: emp.empresa_id ?? undefined,
       departamento_id: emp.departamento_id ?? undefined,
-      puesto: emp.puesto || '',
+      puesto_id: emp.puesto_id ?? undefined,
       curp: emp.curp || '',
       rfc: emp.rfc || '',
       nss: emp.nss || '',
       direccion: emp.direccion || '',
+      colonia: emp.colonia || '',
+      cp: emp.cp || '',
+      ciudad: emp.ciudad || '',
       fecha_nacimiento: emp.fecha_nacimiento ? emp.fecha_nacimiento.slice(0, 10) : '',
       contacto_emergencia: emp.contacto_emergencia || '',
       telefono_emergencia: emp.telefono_emergencia || '',
       fecha_ingreso: emp.fecha_ingreso ? emp.fecha_ingreso.slice(0, 10) : '',
       registrar_en_checador: false,
       dispositivo_ids: [],
+      password: '',
+      username: emp.username || '',
     });
     setEditingId(emp.id);
+    setUsernameManual(false);
+    setUsernameStatus('idle');
+    setFormTab('personales');
     setShowFormModal(true);
   };
 
+  const formTabStyle = (active: boolean): React.CSSProperties => ({
+    padding: '10px 16px', cursor: 'pointer', border: 'none',
+    borderBottom: active ? '3px solid #007bff' : '3px solid transparent',
+    backgroundColor: active ? 'rgba(0,123,255,0.08)' : 'transparent',
+    fontWeight: active ? 600 : 400, fontSize: '0.88rem', color: active ? '#007bff' : '#555',
+  });
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.numero_empleado.trim() || !form.nombre.trim()) {
-      alert('Numero de empleado y nombre son obligatorios');
+    if (!form.numero_empleado.trim() || !form.nombre.trim() || !form.apellido_paterno?.trim() || !form.apellido_materno?.trim() || !form.fecha_nacimiento) {
+      alert('Complete todos los datos personales obligatorios: No. empleado, nombre, apellidos y fecha de nacimiento.');
+      return;
+    }
+    if (!form.empresa_id || !form.departamento_id || !form.puesto_id || !form.fecha_ingreso) {
+      alert('Complete todos los datos laborales obligatorios: empresa, departamento, puesto y fecha de ingreso.');
       return;
     }
     setSaving(true);
@@ -211,13 +401,17 @@ export const PersonalPage = () => {
         delete payload.registrar_en_checador;
         delete payload.dispositivo_ids;
         await api.put(`/personal/empleados/${editingId}`, payload);
-        alert('Empleado actualizado');
+        alert(payload.password ? 'Empleado y contraseña actualizados' : 'Empleado actualizado');
       } else {
         await api.post('/personal/empleados', payload);
         const devCount = form.dispositivo_ids.length;
-        alert(form.registrar_en_checador && devCount > 0
-          ? `Empleado creado y agregado a ${devCount} checador(es)`
-          : 'Empleado creado correctamente');
+        const usuario = (form.username || form.numero_empleado || '').trim() || form.numero_empleado;
+        const msgLogin = form.password?.trim()
+          ? `Ya puede hacer login con usuario "${usuario}" (o número de empleado) y la contraseña indicada.`
+          : `Ya puede hacer login con usuario y contraseña: ${form.numero_empleado}`;
+        alert(
+          (form.registrar_en_checador && devCount > 0 ? `Empleado creado y agregado a ${devCount} checador(es). ` : 'Empleado creado. ') + msgLogin
+        );
       }
       setShowFormModal(false);
       loadData();
@@ -265,14 +459,19 @@ export const PersonalPage = () => {
     setHuellaTarget(emp);
     setReplicarDevices([]);
     setEnrollDevice(null);
+    setEnrollStatus('idle');
+    setEnrollId(null);
+    setHuellaTemplates([]);
     setShowHuellaModal(true);
     try {
       const res = await api.get(`/asistencia/fingerprint-templates/${emp.numero_empleado}`);
-      const tiene = Array.isArray(res.data) && res.data.length > 0;
-      setTieneHuella(tiene);
-      setHuellaTab(tiene ? 'replicar' : 'registrar');
+      const templates = Array.isArray(res.data) ? res.data : [];
+      setHuellaTemplates(templates);
+      setTieneHuella(templates.length > 0);
+      setHuellaTab(templates.length > 0 ? 'replicar' : 'registrar');
     } catch {
       setTieneHuella(false);
+      setHuellaTemplates([]);
       setHuellaTab('registrar');
     }
   };
@@ -282,11 +481,17 @@ export const PersonalPage = () => {
     setEnrollingHuella(true);
     try {
       await api.post(`/asistencia/devices/${enrollDevice}/start-enroll`, { numero_empleado: huellaTarget.numero_empleado });
-      alert('Registro de huella iniciado. El empleado debe colocar el dedo en el dispositivo cuando se le indique.');
+      setEnrollStatus('completed');
     } catch (error: unknown) {
       const err = error as { response?: { data?: { detail?: string } } };
-      alert(err.response?.data?.detail || 'Error al iniciar registro de huella');
+      alert(err.response?.data?.detail || 'Error al enviar solicitud de registro de huella');
     } finally { setEnrollingHuella(false); }
+  };
+
+  const cerrarHuellaModal = () => {
+    setEnrollStatus('idle');
+    setEnrollId(null);
+    setShowHuellaModal(false);
   };
 
   const replicarHuella = async () => {
@@ -298,51 +503,6 @@ export const PersonalPage = () => {
     } catch (error: unknown) {
       const err = error as { response?: { data?: { detail?: string } } };
       alert(err.response?.data?.detail || 'Error al replicar');
-    }
-  };
-
-  // ---- Empresa CRUD ----
-  const openNewEmpresa = () => {
-    setEmpresaForm({ nombre: '', rfc: '', direccion: '', telefono: '' });
-    setEditingEmpresaId(null);
-    setShowEmpresaModal(true);
-  };
-
-  const startEditEmpresa = (emp: EmpresaResponse) => {
-    setEmpresaForm({ nombre: emp.nombre, rfc: emp.rfc || '', direccion: emp.direccion || '', telefono: emp.telefono || '' });
-    setEditingEmpresaId(emp.id);
-    setShowEmpresaModal(true);
-  };
-
-  const handleEmpresaSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!empresaForm.nombre.trim()) { alert('El nombre de la empresa es obligatorio'); return; }
-    setSaving(true);
-    try {
-      const payload: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(empresaForm)) { if (v) payload[k] = v; }
-      if (editingEmpresaId) {
-        await api.put(`/personal/empresas/${editingEmpresaId}`, payload);
-        alert('Empresa actualizada');
-      } else {
-        await api.post('/personal/empresas', payload);
-        alert('Empresa creada');
-      }
-      setShowEmpresaModal(false);
-      loadData();
-    } catch (error: unknown) {
-      const err = error as { response?: { data?: { detail?: string } } };
-      alert(err.response?.data?.detail || 'Error al guardar empresa');
-    } finally { setSaving(false); }
-  };
-
-  const toggleEmpresaActivo = async (emp: EmpresaResponse) => {
-    try {
-      await api.put(`/personal/empresas/${emp.id}`, { activo: !emp.activo });
-      loadData();
-    } catch (error: unknown) {
-      const err = error as { response?: { data?: { detail?: string } } };
-      alert(err.response?.data?.detail || 'Error');
     }
   };
 
@@ -459,7 +619,7 @@ export const PersonalPage = () => {
   });
 
   return (
-    <div style={{ padding: '20px', maxWidth: '1300px', margin: '0 auto' }}>
+    <div style={{ padding: '20px' }}>
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '10px' }}>
         <h1 style={{ margin: 0 }}>Gestion de Personal</h1>
@@ -469,60 +629,7 @@ export const PersonalPage = () => {
       <div style={{ display: 'flex', borderBottom: '2px solid #e5e7eb', marginBottom: '20px' }}>
         <button style={mainTabStyle(mainTab === 'empleados')} onClick={() => setMainTab('empleados')}>Empleados</button>
         <button style={mainTabStyle(mainTab === 'departamentos')} onClick={() => setMainTab('departamentos')}>Departamentos</button>
-        <button style={mainTabStyle(mainTab === 'empresas')} onClick={() => setMainTab('empresas')}>Empresas</button>
       </div>
-
-      {/* ====== TAB: EMPRESAS ====== */}
-      {mainTab === 'empresas' && (
-        <>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-            <p style={{ margin: 0, color: '#555' }}>{empresas.length} empresa(s) registrada(s)</p>
-            <button onClick={openNewEmpresa} style={btnSuccess}>+ Nueva Empresa</button>
-          </div>
-          {empresas.length === 0 ? (
-            <p style={{ textAlign: 'center', color: '#888', padding: '40px 0' }}>No hay empresas registradas.</p>
-          ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '10px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
-                <thead>
-                  <tr style={{ backgroundColor: '#f8f9fa' }}>
-                    {['Nombre', 'RFC', 'Direccion', 'Telefono', 'Empleados', 'Estado', 'Acciones'].map(h => (
-                      <th key={h} style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {empresas.map(emp => {
-                    const count = empleados.filter(e => e.empresa_id === emp.id).length;
-                    return (
-                      <tr key={emp.id} style={{ borderBottom: '1px solid #eee' }}>
-                        <td style={{ padding: '11px 14px', fontWeight: 500 }}>{emp.nombre}</td>
-                        <td style={{ padding: '11px 14px', color: '#555' }}>{emp.rfc || '-'}</td>
-                        <td style={{ padding: '11px 14px', color: '#555', maxWidth: '250px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{emp.direccion || '-'}</td>
-                        <td style={{ padding: '11px 14px', color: '#555' }}>{emp.telefono || '-'}</td>
-                        <td style={{ padding: '11px 14px', fontWeight: 600 }}>{count}</td>
-                        <td style={{ padding: '11px 14px' }}>
-                          <span style={{ padding: '3px 10px', borderRadius: '4px', fontSize: '0.8rem', backgroundColor: emp.activo ? '#d4edda' : '#f8d7da', color: emp.activo ? '#155724' : '#721c24', fontWeight: 500 }}>
-                            {emp.activo ? 'Activa' : 'Inactiva'}
-                          </span>
-                        </td>
-                        <td style={{ padding: '11px 14px' }}>
-                          <div style={{ display: 'flex', gap: '5px' }}>
-                            <button onClick={() => startEditEmpresa(emp)} style={{ padding: '4px 10px', fontSize: '0.78rem', cursor: 'pointer', backgroundColor: '#ffc107', color: '#000', border: 'none', borderRadius: '4px' }}>Editar</button>
-                            <button onClick={() => toggleEmpresaActivo(emp)} style={{ padding: '4px 10px', fontSize: '0.78rem', cursor: 'pointer', backgroundColor: emp.activo ? '#dc3545' : '#28a745', color: 'white', border: 'none', borderRadius: '4px' }}>
-                              {emp.activo ? 'Desactivar' : 'Activar'}
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </>
-      )}
 
       {/* ====== TAB: DEPARTAMENTOS ====== */}
       {mainTab === 'departamentos' && (
@@ -625,7 +732,7 @@ export const PersonalPage = () => {
               <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '10px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
                 <thead>
                   <tr style={{ backgroundColor: '#f8f9fa' }}>
-                    {['No.', 'Nombre completo', 'Empresa', 'Depto.', 'Puesto', 'Telefono', 'Estado', 'Acciones'].map(h => (
+                    {['No.', 'Nombre completo', 'Empresa', 'Depto.', 'Puesto', 'Jefe inmediato', 'Telefono', 'Estado', 'Acciones'].map(h => (
                       <th key={h} style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>{h}</th>
                     ))}
                   </tr>
@@ -637,19 +744,12 @@ export const PersonalPage = () => {
                       <td style={{ padding: '11px 14px' }}>{nombreCompleto(emp)}</td>
                       <td style={{ padding: '11px 14px', color: '#555' }}>{emp.empresa?.nombre || getEmpresaNombre(emp.empresa_id)}</td>
                       <td style={{ padding: '11px 14px', color: '#555' }}>{emp.departamento?.nombre || getDeptoNombre(emp.departamento_id)}</td>
-                      <td style={{ padding: '11px 14px', color: '#555' }}>{emp.puesto || '-'}</td>
+                      <td style={{ padding: '11px 14px', color: '#555' }}>{emp.puesto?.nombre || '-'}</td>
+                      <td style={{ padding: '11px 14px', color: '#555' }}>{emp.jefe ? `${emp.jefe.nombre} ${emp.jefe.apellido_paterno || ''} ${emp.jefe.apellido_materno || ''}`.trim() : '-'}</td>
                       <td style={{ padding: '11px 14px', color: '#555' }}>{emp.telefono || '-'}</td>
                       <td style={{ padding: '11px 14px' }}>{estadoBadge(emp.estado)}</td>
                       <td style={{ padding: '11px 14px' }}>
-                        <div style={{ display: 'flex', gap: '5px', flexWrap: 'wrap' }}>
-                          <button onClick={() => viewDetail(emp)} style={{ padding: '4px 10px', fontSize: '0.78rem', cursor: 'pointer', backgroundColor: '#17a2b8', color: 'white', border: 'none', borderRadius: '4px' }}>Ver</button>
-                          <button onClick={() => startEdit(emp)} style={{ padding: '4px 10px', fontSize: '0.78rem', cursor: 'pointer', backgroundColor: '#ffc107', color: '#000', border: 'none', borderRadius: '4px' }}>Editar</button>
-                          <button onClick={() => openChecadorModal(emp)} style={{ padding: '4px 10px', fontSize: '0.78rem', cursor: 'pointer', backgroundColor: '#6f42c1', color: 'white', border: 'none', borderRadius: '4px' }}>Checadores</button>
-                          <button onClick={() => openHuellaModal(emp)} style={{ padding: '4px 10px', fontSize: '0.78rem', cursor: 'pointer', backgroundColor: '#20c997', color: 'white', border: 'none', borderRadius: '4px' }}>Huella</button>
-                          {emp.estado !== 'baja' && (
-                            <button onClick={() => handleBaja(emp)} style={{ padding: '4px 10px', fontSize: '0.78rem', cursor: 'pointer', backgroundColor: '#dc3545', color: 'white', border: 'none', borderRadius: '4px' }}>Baja</button>
-                          )}
-                        </div>
+                        <button onClick={() => viewDetail(emp)} style={{ padding: '4px 12px', fontSize: '0.78rem', cursor: 'pointer', backgroundColor: '#17a2b8', color: 'white', border: 'none', borderRadius: '4px' }}>Ver</button>
                       </td>
                     </tr>
                   ))}
@@ -669,156 +769,246 @@ export const PersonalPage = () => {
               <button onClick={() => setShowFormModal(false)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#999', lineHeight: 1 }}>&times;</button>
             </div>
             <form onSubmit={handleSubmit}>
-              <fieldset style={{ border: '1px solid #e5e7eb', borderRadius: '8px', padding: '20px', marginBottom: '20px' }}>
-                <legend style={{ fontWeight: 600, color: '#374151', padding: '0 8px' }}>Datos Basicos</legend>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
-                  <div>
-                    <label style={labelStyle}>No. Empleado *</label>
-                    <input style={inputStyle} value={form.numero_empleado} onChange={e => handleChange('numero_empleado', e.target.value)} required disabled={!!editingId} />
-                  </div>
-                  <div>
-                    <label style={labelStyle}>Nombre *</label>
-                    <input style={inputStyle} value={form.nombre} onChange={e => handleChange('nombre', e.target.value)} required />
-                  </div>
-                  <div>
-                    <label style={labelStyle}>Apellido Paterno</label>
-                    <input style={inputStyle} value={form.apellido_paterno} onChange={e => handleChange('apellido_paterno', e.target.value)} />
-                  </div>
-                  <div>
-                    <label style={labelStyle}>Apellido Materno</label>
-                    <input style={inputStyle} value={form.apellido_materno} onChange={e => handleChange('apellido_materno', e.target.value)} />
-                  </div>
-                  <div>
-                    <label style={labelStyle}>Fecha de Nacimiento</label>
-                    <input type="date" style={inputStyle} value={form.fecha_nacimiento} onChange={e => handleChange('fecha_nacimiento', e.target.value)} />
-                  </div>
-                  <div>
-                    <label style={labelStyle}>Fecha de Ingreso</label>
-                    <input type="date" style={inputStyle} value={form.fecha_ingreso} onChange={e => handleChange('fecha_ingreso', e.target.value)} />
-                  </div>
-                </div>
-              </fieldset>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', borderBottom: '2px solid #e5e7eb', marginBottom: '16px' }}>
+                <button type="button" style={formTabStyle(formTab === 'personales')} onClick={() => setFormTab('personales')}>
+                  Datos personales
+                </button>
+                <button type="button" style={formTabStyle(formTab === 'laborales')} onClick={() => setFormTab('laborales')}>
+                  Datos laborales
+                </button>
+              </div>
 
-              <fieldset style={{ border: '1px solid #e5e7eb', borderRadius: '8px', padding: '20px', marginBottom: '20px' }}>
-                <legend style={{ fontWeight: 600, color: '#374151', padding: '0 8px' }}>Contacto</legend>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
-                  <div>
-                    <label style={labelStyle}>Email</label>
-                    <input type="email" style={inputStyle} value={form.email} onChange={e => handleChange('email', e.target.value)} />
-                  </div>
-                  <div>
-                    <label style={labelStyle}>Telefono</label>
-                    <input style={inputStyle} value={form.telefono} onChange={e => handleChange('telefono', e.target.value)} placeholder="10 digitos" />
-                  </div>
-                  <div style={{ gridColumn: '1 / -1' }}>
-                    <label style={labelStyle}>Direccion</label>
-                    <input style={inputStyle} value={form.direccion} onChange={e => handleChange('direccion', e.target.value)} placeholder="Calle, numero, colonia, CP, ciudad" />
-                  </div>
-                </div>
-              </fieldset>
-
-              <fieldset style={{ border: '1px solid #e5e7eb', borderRadius: '8px', padding: '20px', marginBottom: '20px' }}>
-                <legend style={{ fontWeight: 600, color: '#374151', padding: '0 8px' }}>Contacto de Emergencia</legend>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
-                  <div>
-                    <label style={labelStyle}>Nombre del contacto</label>
-                    <input style={inputStyle} value={form.contacto_emergencia} onChange={e => handleChange('contacto_emergencia', e.target.value)} />
-                  </div>
-                  <div>
-                    <label style={labelStyle}>Telefono de emergencia</label>
-                    <input style={inputStyle} value={form.telefono_emergencia} onChange={e => handleChange('telefono_emergencia', e.target.value)} />
-                  </div>
-                </div>
-              </fieldset>
-
-              <fieldset style={{ border: '1px solid #e5e7eb', borderRadius: '8px', padding: '20px', marginBottom: '20px' }}>
-                <legend style={{ fontWeight: 600, color: '#374151', padding: '0 8px' }}>Datos Laborales</legend>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
-                  <div>
-                    <label style={labelStyle}>Empresa</label>
-                    <select style={inputStyle}
-                      value={form.empresa_id ?? ''}
-                      onChange={e => handleChange('empresa_id', e.target.value ? Number(e.target.value) : undefined)}>
-
-                      <option value="">-- Sin empresa --</option>
-                      {activeEmpresas.map(emp => (
-                        <option key={emp.id} value={emp.id}>{emp.nombre}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label style={labelStyle}>Departamento</label>
-                    <select style={inputStyle}
-                      value={form.departamento_id ?? ''}
-                      onChange={e => handleChange('departamento_id', e.target.value ? Number(e.target.value) : undefined)}>
-                      <option value="">-- Sin departamento --</option>
-                      {deptosForEmpresa(form.empresa_id).map(d => (
-                        <option key={d.id} value={d.id}>{d.nombre}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label style={labelStyle}>Puesto</label>
-                    <input style={inputStyle} value={form.puesto} onChange={e => handleChange('puesto', e.target.value)} placeholder="Ej: Gerente, Vendedor..." />
-                  </div>
-                  <div>
-                    <label style={labelStyle}>CURP</label>
-                    <input style={inputStyle} value={form.curp} onChange={e => handleChange('curp', e.target.value.toUpperCase())} maxLength={18} placeholder="18 caracteres" />
-                  </div>
-                  <div>
-                    <label style={labelStyle}>RFC</label>
-                    <input style={inputStyle} value={form.rfc} onChange={e => handleChange('rfc', e.target.value.toUpperCase())} maxLength={13} placeholder="13 caracteres" />
-                  </div>
-                  <div>
-                    <label style={labelStyle}>NSS (IMSS)</label>
-                    <input style={inputStyle} value={form.nss} onChange={e => handleChange('nss', e.target.value)} maxLength={11} placeholder="11 digitos" />
-                  </div>
-                </div>
-              </fieldset>
-
-              {!editingId && (
-                <fieldset style={{ border: '1px solid #c3e6cb', borderRadius: '8px', padding: '20px', marginBottom: '20px', backgroundColor: '#f0fff4' }}>
-                  <legend style={{ fontWeight: 600, color: '#2e7d32', padding: '0 8px' }}>Registrar en Checadores</legend>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                      <input type="checkbox" checked={form.registrar_en_checador}
-                        onChange={e => handleChange('registrar_en_checador', e.target.checked)}
-                        style={{ width: '18px', height: '18px' }} />
-                      <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>Dar de alta en checadores biometricos al crear</span>
-                    </label>
-                  </div>
-                  {form.registrar_en_checador && (
+              {formTab === 'personales' && (
+                <div style={{ padding: '8px 0 20px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '14px' }}>
                     <div>
-                      <p style={{ margin: '0 0 10px', fontSize: '0.85rem', color: '#555' }}>Selecciona los dispositivos:</p>
-                      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                        {activeDevices.map(d => (
-                          <label key={d.id} style={{
-                            ...checkboxDeviceStyle,
-                            backgroundColor: form.dispositivo_ids.includes(d.id) ? '#e8f5e9' : 'white',
-                            borderColor: form.dispositivo_ids.includes(d.id) ? '#4caf50' : '#d1d5db',
-                          }}>
-                            <input type="checkbox" checked={form.dispositivo_ids.includes(d.id)}
-                              onChange={() => toggleDeviceInForm(d.id)}
-                              style={{ width: '16px', height: '16px' }} />
-                            <div>
-                              <div style={{ fontWeight: 500, fontSize: '0.9rem' }}>{d.nombre}</div>
-                              {d.ubicacion && <div style={{ fontSize: '0.78rem', color: '#666' }}>{d.ubicacion}</div>}
-                            </div>
-                          </label>
+                      <label style={labelStyle}>Nombre *</label>
+                      <input style={inputStyle} value={form.nombre} onChange={e => handleChange('nombre', e.target.value)} required />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Apellido Paterno *</label>
+                      <input style={inputStyle} value={form.apellido_paterno} onChange={e => handleChange('apellido_paterno', e.target.value)} required />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Apellido Materno *</label>
+                      <input style={inputStyle} value={form.apellido_materno} onChange={e => handleChange('apellido_materno', e.target.value)} required />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Fecha de Nacimiento *</label>
+                      <input type="date" style={inputStyle} value={form.fecha_nacimiento} onChange={e => handleChange('fecha_nacimiento', e.target.value)} required />
+                    </div>
+                    <div style={{ gridColumn: '1 / -1' }}>
+                      <label style={labelStyle}>Direccion</label>
+                      <input style={inputStyle} value={form.direccion} onChange={e => handleChange('direccion', e.target.value)} placeholder="Calle y numero" />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Colonia</label>
+                      <input style={inputStyle} value={form.colonia} onChange={e => handleChange('colonia', e.target.value)} />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>CP</label>
+                      <input style={inputStyle} value={form.cp} onChange={e => handleChange('cp', e.target.value)} placeholder="5 digitos" maxLength={5} />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Ciudad</label>
+                      <input style={inputStyle} value={form.ciudad} onChange={e => handleChange('ciudad', e.target.value)} />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Telefono</label>
+                      <input style={inputStyle} value={form.telefono} onChange={e => handleChange('telefono', e.target.value)} placeholder="10 digitos" />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Email</label>
+                      <input type="email" style={inputStyle} value={form.email} onChange={e => handleChange('email', e.target.value)} />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Contacto de emergencia</label>
+                      <input style={inputStyle} value={form.contacto_emergencia} onChange={e => handleChange('contacto_emergencia', e.target.value)} />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Telefono de emergencia</label>
+                      <input style={inputStyle} value={form.telefono_emergencia} onChange={e => handleChange('telefono_emergencia', e.target.value)} />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {formTab === 'laborales' && (
+                <div style={{ padding: '8px 0 20px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px', marginBottom: '20px' }}>
+                    <div>
+                      <label style={labelStyle}>Empresa *</label>
+                      <select style={inputStyle}
+                        value={form.empresa_id ?? ''}
+                        onChange={e => {
+                          setNumeroManual(false);
+                          handleChange('empresa_id', e.target.value ? Number(e.target.value) : undefined);
+                        }}
+                        required>
+                        <option value="">-- Seleccione empresa --</option>
+                        {activeEmpresas.map(emp => (
+                          <option key={emp.id} value={emp.id}>{emp.nombre}</option>
                         ))}
-                      </div>
-                      {activeDevices.length === 0 && <p style={{ color: '#999', fontSize: '0.85rem' }}>No hay dispositivos activos.</p>}
-                      {form.dispositivo_ids.length > 0 && (
-                        <p style={{ margin: '10px 0 0', fontSize: '0.82rem', color: '#2e7d32', fontWeight: 500 }}>
-                          {form.dispositivo_ids.length} dispositivo(s) seleccionado(s)
+                      </select>
+                    </div>
+                    <div>
+                      <label style={labelStyle}>No. Empleado *</label>
+                      <input
+                        style={inputStyle}
+                        value={form.numero_empleado}
+                        onChange={e => { setNumeroManual(true); handleChange('numero_empleado', e.target.value); }}
+                        required
+                        disabled={!!editingId}
+                        placeholder={form.empresa_id ? 'Auto-asignado' : 'Seleccione empresa primero'}
+                      />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Departamento *</label>
+                      <select style={inputStyle}
+                        value={form.departamento_id ?? ''}
+                        onChange={e => handleChange('departamento_id', e.target.value ? Number(e.target.value) : undefined)}
+                        required>
+                        <option value="">-- Seleccione departamento --</option>
+                        {deptosForEmpresa(form.empresa_id).map(d => (
+                          <option key={d.id} value={d.id}>{d.nombre}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Puesto *</label>
+                      <select style={inputStyle}
+                        value={form.puesto_id ?? ''}
+                        onChange={e => handleChange('puesto_id', e.target.value ? Number(e.target.value) : undefined)}
+                        required>
+                        <option value="">-- Seleccione puesto --</option>
+                        {puestos.map(p => (
+                          <option key={p.id} value={p.id}>{p.nombre}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Horario de trabajo</label>
+                      <select
+                        style={inputStyle}
+                        value={form.horario_id ?? ''}
+                        onChange={e => handleChange('horario_id', e.target.value ? Number(e.target.value) : undefined)}
+                      >
+                        <option value="">-- Sin horario asignado --</option>
+                        {horarios.map(h => (
+                          <option key={h.id} value={h.id}>{h.nombre} ({h.hora_entrada} - {h.hora_salida})</option>
+                        ))}
+                      </select>
+                      <span style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '4px', display: 'block' }}>
+                        Se usa para detectar retardos y faltas automáticamente
+                      </span>
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Fecha de ingreso *</label>
+                      <input type="date" style={inputStyle} value={form.fecha_ingreso} onChange={e => handleChange('fecha_ingreso', e.target.value)} required />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>CURP</label>
+                      <input style={inputStyle} value={form.curp} onChange={e => handleChange('curp', e.target.value.toUpperCase())} maxLength={18} placeholder="18 caracteres" />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>RFC</label>
+                      <input style={inputStyle} value={form.rfc} onChange={e => handleChange('rfc', e.target.value.toUpperCase())} maxLength={13} placeholder="13 caracteres" />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>NSS (IMSS)</label>
+                      <input style={inputStyle} value={form.nss} onChange={e => handleChange('nss', e.target.value)} maxLength={11} placeholder="11 digitos" />
+                    </div>
+                  </div>
+                  <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '16px', marginBottom: '16px' }}>
+                    <p style={{ margin: '0 0 12px', fontWeight: 600, fontSize: '0.88rem', color: '#374151' }}>Acceso al sistema</p>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px', maxWidth: '520px' }}>
+                      <div>
+                        <label style={labelStyle}>Usuario</label>
+                        <div style={{ position: 'relative' }}>
+                          <input
+                            style={{ ...inputStyle, paddingRight: '28px', borderColor: usernameStatus === 'taken' ? '#dc3545' : usernameStatus === 'available' ? '#28a745' : undefined }}
+                            value={form.username || ''}
+                            onChange={e => {
+                              setUsernameManual(true);
+                              handleChange('username', e.target.value.toLowerCase().replace(/[^a-z0-9]/g, ''));
+                            }}
+                            placeholder="Auto-generado"
+                            autoComplete="off"
+                          />
+                          {usernameStatus === 'checking' && (
+                            <span style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', fontSize: '0.75rem', color: '#6b7280' }}>...</span>
+                          )}
+                          {usernameStatus === 'available' && (
+                            <span style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', color: '#28a745', fontWeight: 700 }}>✓</span>
+                          )}
+                          {usernameStatus === 'taken' && (
+                            <span style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', color: '#dc3545', fontWeight: 700 }}>✗</span>
+                          )}
+                        </div>
+                        {usernameStatus === 'taken' && (
+                          <p style={{ margin: '4px 0 0', fontSize: '0.78rem', color: '#dc3545' }}>Usuario ya en uso</p>
+                        )}
+                        <p style={{ margin: '4px 0 0', fontSize: '0.75rem', color: '#6b7280' }}>
+                          1a letra del nombre + apellido paterno
                         </p>
+                      </div>
+                      <div>
+                        <label style={labelStyle}>
+                          {editingId ? 'Nueva contraseña' : 'Contraseña inicial'}
+                        </label>
+                        <input
+                          type="password"
+                          style={inputStyle}
+                          value={form.password || ''}
+                          onChange={e => handleChange('password', e.target.value)}
+                          placeholder={editingId ? 'Dejar vacio para no cambiar' : 'Por defecto: primeros 8 del RFC'}
+                          autoComplete="new-password"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  {!editingId && (
+                    <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '16px' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', marginBottom: '10px' }}>
+                        <input type="checkbox" checked={form.registrar_en_checador}
+                          onChange={e => handleChange('registrar_en_checador', e.target.checked)}
+                          style={{ width: '18px', height: '18px' }} />
+                        <span style={{ fontSize: '0.9rem', fontWeight: 500 }}>Dar de alta en checadores biometricos al crear</span>
+                      </label>
+                      {form.registrar_en_checador && (
+                        <div>
+                          <p style={{ margin: '0 0 10px', fontSize: '0.85rem', color: '#555' }}>Selecciona los dispositivos:</p>
+                          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                            {activeDevices.map(d => (
+                              <label key={d.id} style={{
+                                ...checkboxDeviceStyle,
+                                backgroundColor: form.dispositivo_ids.includes(d.id) ? '#e8f5e9' : 'white',
+                                borderColor: form.dispositivo_ids.includes(d.id) ? '#4caf50' : '#d1d5db',
+                              }}>
+                                <input type="checkbox" checked={form.dispositivo_ids.includes(d.id)}
+                                  onChange={() => toggleDeviceInForm(d.id)}
+                                  style={{ width: '16px', height: '16px' }} />
+                                <div>
+                                  <div style={{ fontWeight: 500, fontSize: '0.9rem' }}>{d.nombre}</div>
+                                  {d.ubicacion && <div style={{ fontSize: '0.78rem', color: '#666' }}>{d.ubicacion}</div>}
+                                </div>
+                              </label>
+                            ))}
+                          </div>
+                          {activeDevices.length === 0 && <p style={{ color: '#999', fontSize: '0.85rem' }}>No hay dispositivos activos.</p>}
+                          {form.dispositivo_ids.length > 0 && (
+                            <p style={{ margin: '10px 0 0', fontSize: '0.82rem', color: '#2e7d32', fontWeight: 500 }}>
+                              {form.dispositivo_ids.length} dispositivo(s) seleccionado(s)
+                            </p>
+                          )}
+                        </div>
                       )}
                     </div>
                   )}
-                </fieldset>
+                </div>
               )}
 
-              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', paddingTop: '12px', borderTop: '1px solid #e5e7eb' }}>
                 <button type="button" onClick={() => setShowFormModal(false)} style={btnSecondary}>Cancelar</button>
                 <button type="submit" style={saving ? { ...btnSuccess, opacity: 0.6, cursor: 'not-allowed' } : btnSuccess} disabled={saving}>
                   {saving ? 'Guardando...' : editingId ? 'Guardar Cambios' : 'Crear Empleado'}
@@ -850,6 +1040,9 @@ export const PersonalPage = () => {
               ['Email', emp.email],
               ['Telefono', emp.telefono],
               ['Direccion', emp.direccion],
+              ['Colonia', emp.colonia],
+              ['CP', emp.cp],
+              ['Ciudad', emp.ciudad],
               ['Contacto emergencia', emp.contacto_emergencia],
               ['Tel. emergencia', emp.telefono_emergencia],
             ],
@@ -859,7 +1052,7 @@ export const PersonalPage = () => {
             rows: [
               ['Empresa', emp.empresa?.nombre || getEmpresaNombre(emp.empresa_id)],
               ['Departamento', emp.departamento?.nombre || getDeptoNombre(emp.departamento_id)],
-              ['Puesto', emp.puesto],
+              ['Puesto', emp.puesto?.nombre],
               ['Estado', emp.estado],
               ['Fecha de Ingreso', emp.fecha_ingreso ? new Date(emp.fecha_ingreso).toLocaleDateString('es-MX') : undefined],
               ['Fecha de Baja', emp.fecha_baja ? new Date(emp.fecha_baja).toLocaleDateString('es-MX') : undefined],
@@ -899,7 +1092,7 @@ export const PersonalPage = () => {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
                 <div>
                   <h2 style={{ margin: '0 0 4px 0' }}>{nombreCompleto(emp)}</h2>
-                  <p style={{ margin: 0, color: '#666', fontSize: '0.9rem' }}>No. {emp.numero_empleado} &middot; {emp.departamento || 'Sin departamento'} &middot; {emp.puesto || 'Sin puesto'}</p>
+                  <p style={{ margin: 0, color: '#666', fontSize: '0.9rem' }}>No. {emp.numero_empleado} &middot; {emp.departamento?.nombre || 'Sin departamento'} &middot; {emp.puesto?.nombre || 'Sin puesto'}</p>
                 </div>
                 <button onClick={() => setShowDetalle(false)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#999', lineHeight: 1 }}>&times;</button>
               </div>
@@ -908,7 +1101,7 @@ export const PersonalPage = () => {
                 {estadoBadge(emp.estado)}
                 <button onClick={() => { setShowDetalle(false); startEdit(emp); }} style={{ ...btnPrimary, padding: '6px 16px', fontSize: '0.85rem' }}>Editar</button>
                 <button onClick={() => { setShowDetalle(false); openChecadorModal(emp); }} style={{ ...btnPrimary, padding: '6px 16px', fontSize: '0.85rem', backgroundColor: '#6f42c1' }}>Enviar a Checadores</button>
-                <button onClick={() => { setShowDetalle(false); openHuellaModal(emp); }} style={{ ...btnPrimary, padding: '6px 16px', fontSize: '0.85rem', backgroundColor: '#20c997' }}>Huella</button>
+                <button onClick={() => { setShowDetalle(false); openHuellaModal(emp); }} style={{ ...btnPrimary, padding: '6px 16px', fontSize: '0.85rem', backgroundColor: '#20c997' }}>Gestion Huella</button>
                 {emp.estado !== 'baja' && (
                   <button onClick={() => handleBaja(emp)} style={{ ...btnDanger, padding: '6px 16px', fontSize: '0.85rem' }}>Dar de Baja</button>
                 )}
@@ -922,6 +1115,8 @@ export const PersonalPage = () => {
                   if (empChecadas.length === 0) loadChecadas(emp.id);
                 }}>Asistencias</button>
               </div>
+              {/* Banner horario activo */}
+              {detalleTab === 'info' && <HorarioEmpleadoPanel empleadoId={emp.id} horarios={horarios} />}
 
               {detalleTab === 'info' && (
                 <>
@@ -1053,22 +1248,40 @@ export const PersonalPage = () => {
           fontSize: '0.9rem', color: active ? '#20c997' : '#888',
         });
         return (
-          <div style={modalOverlay} onClick={() => setShowHuellaModal(false)}>
+          <div style={modalOverlay} onClick={cerrarHuellaModal}>
             <div style={{ ...modalSmall, maxWidth: '550px' }} onClick={e => e.stopPropagation()}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                 <h3 style={{ margin: 0 }}>Gestion de Huella</h3>
-                <button onClick={() => setShowHuellaModal(false)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#999', lineHeight: 1 }}>&times;</button>
+                <button onClick={cerrarHuellaModal} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#999', lineHeight: 1 }}>&times;</button>
               </div>
               <p style={{ color: '#666', margin: '0 0 16px', fontSize: '0.9rem' }}>
                 {nombreCompleto(huellaTarget)} ({huellaTarget.numero_empleado})
               </p>
 
               {/* Estado de huella */}
-              <div style={{ padding: '10px 14px', borderRadius: '8px', marginBottom: '16px', backgroundColor: tieneHuella ? '#d4edda' : '#fff3cd' }}>
-                <span style={{ fontWeight: 500, fontSize: '0.9rem', color: tieneHuella ? '#155724' : '#856404' }}>
-                  {tieneHuella ? 'Huella registrada en el sistema' : 'Sin huella registrada'}
-                </span>
-              </div>
+              {tieneHuella ? (
+                <div style={{ padding: '12px 14px', borderRadius: '8px', marginBottom: '16px', backgroundColor: '#d4edda', border: '1px solid #c3e6cb' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: huellaTemplates.length > 0 ? '8px' : 0 }}>
+                    <span style={{ color: '#155724', fontWeight: 700, fontSize: '1rem' }}>&#10003;</span>
+                    <span style={{ fontWeight: 600, fontSize: '0.9rem', color: '#155724' }}>
+                      {huellaTemplates.length} huella{huellaTemplates.length !== 1 ? 's' : ''} registrada{huellaTemplates.length !== 1 ? 's' : ''} en el sistema
+                    </span>
+                  </div>
+                  {huellaTemplates.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                      {huellaTemplates.map(t => (
+                        <span key={t.id} style={{ padding: '3px 10px', borderRadius: '20px', backgroundColor: '#b8dfc8', color: '#155724', fontSize: '0.78rem', fontWeight: 500 }}>
+                          Dedo {t.finger_index + 1}{t.source_device_nombre ? ` · ${t.source_device_nombre}` : ''}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div style={{ padding: '10px 14px', borderRadius: '8px', marginBottom: '16px', backgroundColor: '#fff3cd', border: '1px solid #ffeeba' }}>
+                  <span style={{ fontWeight: 500, fontSize: '0.9rem', color: '#856404' }}>Sin huella registrada en el sistema</span>
+                </div>
+              )}
 
               {/* Sub-tabs */}
               <div style={{ display: 'flex', borderBottom: '2px solid #e5e7eb', marginBottom: '16px' }}>
@@ -1079,35 +1292,55 @@ export const PersonalPage = () => {
               {/* TAB: REGISTRAR */}
               {huellaTab === 'registrar' && (
                 <div>
-                  <p style={{ margin: '0 0 12px', fontSize: '0.85rem', color: '#555' }}>
-                    Selecciona el dispositivo donde el empleado registrara su huella. Debe estar presente fisicamente frente al checador.
-                  </p>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
-                    {activeDevices.map(d => (
-                      <label key={d.id} style={{
-                        ...checkboxDeviceStyle,
-                        backgroundColor: enrollDevice === d.id ? '#e0f2f1' : 'white',
-                        borderColor: enrollDevice === d.id ? '#20c997' : '#d1d5db',
-                      }}>
-                        <input type="radio" name="enrollDevice" checked={enrollDevice === d.id}
-                          onChange={() => setEnrollDevice(d.id)}
-                          style={{ width: '16px', height: '16px' }} />
-                        <div>
-                          <div style={{ fontWeight: 500 }}>{d.nombre}</div>
-                          {d.ubicacion && <div style={{ fontSize: '0.78rem', color: '#666' }}>{d.ubicacion}</div>}
-                        </div>
-                      </label>
-                    ))}
-                    {activeDevices.length === 0 && <p style={{ color: '#999', fontSize: '0.85rem' }}>No hay dispositivos activos.</p>}
-                  </div>
-                  <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-                    <button onClick={() => setShowHuellaModal(false)} style={btnSecondary}>Cancelar</button>
-                    <button onClick={iniciarEnrollHuella}
-                      style={enrollingHuella || !enrollDevice ? { ...btnPrimary, backgroundColor: '#20c997', opacity: 0.6, cursor: 'not-allowed' } : { ...btnPrimary, backgroundColor: '#20c997' }}
-                      disabled={enrollingHuella || !enrollDevice}>
-                      {enrollingHuella ? 'Iniciando...' : 'Iniciar Registro de Huella'}
-                    </button>
-                  </div>
+                  {/* Confirmacion: solicitud enviada al agente */}
+                  {enrollStatus === 'completed' && (
+                    <div style={{ padding: '16px', backgroundColor: '#d4edda', borderRadius: '8px', marginBottom: '16px', display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+                      <span style={{ fontSize: '1.4rem', color: '#155724', lineHeight: 1 }}>&#10003;</span>
+                      <div>
+                        <p style={{ fontWeight: 700, fontSize: '0.95rem', color: '#155724', margin: '0 0 4px' }}>
+                          Solicitud de registro enviada
+                        </p>
+                        <p style={{ color: '#155724', fontSize: '0.85rem', margin: 0 }}>
+                          El agente procesara el registro de huella en el siguiente ciclo. Pide al empleado que coloque el dedo en el checador cuando el dispositivo lo solicite.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Formulario de seleccion de dispositivo */}
+                  {enrollStatus === 'idle' && (
+                    <>
+                      <p style={{ margin: '0 0 12px', fontSize: '0.85rem', color: '#555' }}>
+                        Selecciona el dispositivo donde el empleado registrara su huella. Debe estar presente fisicamente frente al checador.
+                      </p>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
+                        {activeDevices.map(d => (
+                          <label key={d.id} style={{
+                            ...checkboxDeviceStyle,
+                            backgroundColor: enrollDevice === d.id ? '#e0f2f1' : 'white',
+                            borderColor: enrollDevice === d.id ? '#20c997' : '#d1d5db',
+                          }}>
+                            <input type="radio" name="enrollDevice" checked={enrollDevice === d.id}
+                              onChange={() => setEnrollDevice(d.id)}
+                              style={{ width: '16px', height: '16px' }} />
+                            <div>
+                              <div style={{ fontWeight: 500 }}>{d.nombre}</div>
+                              {d.ubicacion && <div style={{ fontSize: '0.78rem', color: '#666' }}>{d.ubicacion}</div>}
+                            </div>
+                          </label>
+                        ))}
+                        {activeDevices.length === 0 && <p style={{ color: '#999', fontSize: '0.85rem' }}>No hay dispositivos activos.</p>}
+                      </div>
+                      <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                        <button onClick={cerrarHuellaModal} style={btnSecondary}>Cancelar</button>
+                        <button onClick={iniciarEnrollHuella}
+                          style={enrollingHuella || !enrollDevice ? { ...btnPrimary, backgroundColor: '#20c997', opacity: 0.6, cursor: 'not-allowed' } : { ...btnPrimary, backgroundColor: '#20c997' }}
+                          disabled={enrollingHuella || !enrollDevice}>
+                          {enrollingHuella ? 'Iniciando...' : 'Iniciar Registro de Huella'}
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
 
@@ -1148,7 +1381,7 @@ export const PersonalPage = () => {
                     </>
                   )}
                   <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-                    <button onClick={() => setShowHuellaModal(false)} style={btnSecondary}>Cancelar</button>
+                    <button onClick={cerrarHuellaModal} style={btnSecondary}>Cancelar</button>
                     {tieneHuella && (
                       <button onClick={replicarHuella} style={{ ...btnPrimary, backgroundColor: '#20c997' }} disabled={replicarDevices.length === 0}>
                         Replicar a {replicarDevices.length} dispositivo(s)
@@ -1161,48 +1394,6 @@ export const PersonalPage = () => {
           </div>
         );
       })()}
-
-      {/* ========== MODAL: CREAR/EDITAR EMPRESA ========== */}
-      {showEmpresaModal && (
-        <div style={modalOverlay} onClick={() => setShowEmpresaModal(false)}>
-          <div style={modalSmall} onClick={e => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h3 style={{ margin: 0 }}>{editingEmpresaId ? 'Editar Empresa' : 'Nueva Empresa'}</h3>
-              <button onClick={() => setShowEmpresaModal(false)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#999', lineHeight: 1 }}>&times;</button>
-            </div>
-            <form onSubmit={handleEmpresaSubmit}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '20px' }}>
-                <div>
-                  <label style={labelStyle}>Nombre de la empresa *</label>
-                  <input style={inputStyle} value={empresaForm.nombre}
-                    onChange={e => setEmpresaForm(p => ({ ...p, nombre: e.target.value }))} required />
-                </div>
-                <div>
-                  <label style={labelStyle}>RFC</label>
-                  <input style={inputStyle} value={empresaForm.rfc}
-                    onChange={e => setEmpresaForm(p => ({ ...p, rfc: e.target.value.toUpperCase() }))} maxLength={13} placeholder="13 caracteres" />
-                </div>
-                <div>
-                  <label style={labelStyle}>Direccion</label>
-                  <input style={inputStyle} value={empresaForm.direccion}
-                    onChange={e => setEmpresaForm(p => ({ ...p, direccion: e.target.value }))} />
-                </div>
-                <div>
-                  <label style={labelStyle}>Telefono</label>
-                  <input style={inputStyle} value={empresaForm.telefono}
-                    onChange={e => setEmpresaForm(p => ({ ...p, telefono: e.target.value }))} />
-                </div>
-              </div>
-              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
-                <button type="button" onClick={() => setShowEmpresaModal(false)} style={btnSecondary}>Cancelar</button>
-                <button type="submit" style={saving ? { ...btnSuccess, opacity: 0.6, cursor: 'not-allowed' } : btnSuccess} disabled={saving}>
-                  {saving ? 'Guardando...' : editingEmpresaId ? 'Guardar Cambios' : 'Crear Empresa'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
       {/* ========== MODAL: CREAR/EDITAR DEPARTAMENTO ========== */}
       {showDeptoModal && (

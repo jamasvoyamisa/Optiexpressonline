@@ -4,6 +4,7 @@ from typing import List, Optional
 import logging
 from app.core.database import get_db
 from app.core.config import settings
+from app.core.security import get_current_user
 from . import schemas, service, models
 
 logger = logging.getLogger(__name__)
@@ -117,6 +118,17 @@ def delete_departamento(depto_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Departamento no encontrado")
 
 
+# ========== RUTAS DE PUESTOS ==========
+
+@router.get("/puestos", response_model=List[schemas.PuestoResponse])
+def get_puestos(
+    activo: Optional[bool] = True,
+    db: Session = Depends(get_db)
+):
+    """Lista de puestos en orden jerárquico (para flujos y formularios)."""
+    return service.PersonalService.get_puestos(db, activo=activo)
+
+
 # ========== RUTAS DE ROLES ==========
 
 @router.post("/roles", response_model=schemas.RolResponse, status_code=status.HTTP_201_CREATED)
@@ -180,17 +192,72 @@ def delete_rol(rol_id: int, db: Session = Depends(get_db)):
 
 # ========== RUTAS DE EMPLEADOS ==========
 
+@router.get("/empleados/next-numero")
+def next_numero_empleado(empresa_id: int, db: Session = Depends(get_db)):
+    """Devuelve el siguiente número de empleado disponible para una empresa."""
+    numeros = [
+        int(e.numero_empleado)
+        for e in db.query(models.Empleado.numero_empleado)
+        .filter(models.Empleado.empresa_id == empresa_id)
+        .all()
+        if e.numero_empleado and e.numero_empleado.isdigit()
+    ]
+    siguiente = 1
+    numeros_set = set(numeros)
+    while siguiente in numeros_set:
+        siguiente += 1
+    return {"numero_empleado": str(siguiente).zfill(3)}
+
+
+@router.get("/empleados/check-username")
+def check_username(username: str, exclude_id: int = None, db: Session = Depends(get_db)):
+    """Verificar si un username está disponible. Devuelve {available, suggested}."""
+    available = service.PersonalService.check_username_available(db, username, exclude_id)
+    return {"available": available, "username": username}
+
+
+@router.get("/empleados/suggest-username")
+def suggest_username(nombre: str, apellido_paterno: str, exclude_id: int = None, db: Session = Depends(get_db)):
+    """Generar un username único a partir de nombre y apellido paterno."""
+    username = service.PersonalService.suggest_username(db, nombre, apellido_paterno, exclude_id)
+    return {"username": username}
+
+
 @router.post("/empleados", response_model=schemas.EmpleadoResponse, status_code=status.HTTP_201_CREATED)
 def create_empleado(empleado: schemas.EmpleadoCreate, db: Session = Depends(get_db)):
-    """Crear nuevo empleado"""
-    # Verificar si ya existe un empleado con ese número
-    existing = service.PersonalService.get_empleado_by_numero(db, empleado.numero_empleado)
+    """Crear nuevo empleado y usuario del sistema. Datos personales y laborales son obligatorios."""
+    # Validar datos personales obligatorios
+    if not (empleado.numero_empleado and empleado.numero_empleado.strip()):
+        raise HTTPException(status_code=400, detail="Número de empleado es obligatorio")
+    if not (empleado.nombre and empleado.nombre.strip()):
+        raise HTTPException(status_code=400, detail="Nombre es obligatorio")
+    if not (empleado.apellido_paterno and str(empleado.apellido_paterno or "").strip()):
+        raise HTTPException(status_code=400, detail="Apellido paterno es obligatorio")
+    if not (empleado.apellido_materno and str(empleado.apellido_materno or "").strip()):
+        raise HTTPException(status_code=400, detail="Apellido materno es obligatorio")
+    if not empleado.fecha_nacimiento:
+        raise HTTPException(status_code=400, detail="Fecha de nacimiento es obligatoria")
+    # Validar datos laborales obligatorios
+    if not empleado.empresa_id:
+        raise HTTPException(status_code=400, detail="Empresa es obligatoria")
+    if not empleado.departamento_id:
+        raise HTTPException(status_code=400, detail="Departamento es obligatorio")
+    if not empleado.puesto_id:
+        raise HTTPException(status_code=400, detail="Puesto es obligatorio")
+    if not empleado.fecha_ingreso:
+        raise HTTPException(status_code=400, detail="Fecha de ingreso es obligatoria")
+
+    # Verificar si ya existe un empleado con ese número en la misma empresa
+    existing = db.query(models.Empleado).filter(
+        models.Empleado.numero_empleado == empleado.numero_empleado,
+        models.Empleado.empresa_id == empleado.empresa_id
+    ).first()
     if existing:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Ya existe un empleado con ese número de empleado"
+            detail="Ya existe un empleado con ese número en esta empresa"
         )
-    
+
     # Verificar si el rol existe (si se proporciona)
     if empleado.rol_id:
         rol = service.PersonalService.get_rol(db, empleado.rol_id)
@@ -213,16 +280,20 @@ def create_empleado(empleado: schemas.EmpleadoCreate, db: Session = Depends(get_
 
     if empleado.registrar_en_checador and empleado.dispositivo_ids:
         try:
-            from app.modules.asistencia.service import AsistenciaService
-            from app.modules.asistencia.schemas import EnqueueUserRequest
+            from app.modules.asistencia import models as asist_models
             nombre_completo = f"{empleado.nombre} {empleado.apellido_paterno or ''} {empleado.apellido_materno or ''}".strip()
-            enqueue_data = EnqueueUserRequest(
-                numero_empleado=empleado.numero_empleado,
-                nombre=nombre_completo,
-            )
             for did in empleado.dispositivo_ids:
                 try:
-                    AsistenciaService.enqueue_user(db, int(did), enqueue_data)
+                    # Crear la cola directamente usando el pin_checador del empleado recién creado
+                    pendiente = asist_models.UsuarioPendienteDispositivo(
+                        dispositivo_id=int(did),
+                        numero_empleado=db_empleado.numero_empleado,
+                        pin_checador=db_empleado.pin_checador,
+                        nombre=nombre_completo,
+                        enviado=False,
+                    )
+                    db.add(pendiente)
+                    db.commit()
                 except Exception as e:
                     logger.warning(f"Fallo enqueue en dispositivo {did}: {e}")
         except Exception as e:
@@ -238,6 +309,7 @@ def get_empleados(
     estado: Optional[str] = None,
     rol_id: Optional[int] = None,
     jefe_id: Optional[int] = None,
+    departamento_id: Optional[int] = None,
     search: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
@@ -249,8 +321,25 @@ def get_empleados(
         estado=estado,
         rol_id=rol_id,
         jefe_id=jefe_id,
+        departamento_id=departamento_id,
         search=search
     )
+
+
+@router.get("/me", response_model=schemas.EmpleadoResponse)
+def get_me(
+    current: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Datos del empleado actual (portal del empleado). Requiere autenticación."""
+    empleado_id = int(current["user_id"])
+    db_empleado = service.PersonalService.get_empleado(db, empleado_id)
+    if not db_empleado:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Empleado no encontrado"
+        )
+    return db_empleado
 
 
 @router.get("/empleados/{empleado_id}", response_model=schemas.EmpleadoResponse)

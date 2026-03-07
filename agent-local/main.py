@@ -120,11 +120,13 @@ class DeviceHandler:
             logger.info(f"[{self.name}] Enviando {len(pending)} usuario(s) al dispositivo...")
             sent_ids = []
             for u in pending:
-                ok = self.zkteco.set_user(user_id=str(u["numero_empleado"]), name=u.get("nombre", ""))
+                # Usar pin_checador si existe (único en dispositivo); si no, numero_empleado
+                uid = u.get("pin_checador") or u.get("numero_empleado")
+                ok = self.zkteco.set_user(user_id=str(uid), name=u.get("nombre", ""))
                 if ok:
                     sent_ids.append(u["id"])
                 else:
-                    logger.warning(f"[{self.name}] set_user fallo: {u.get('numero_empleado')}")
+                    logger.warning(f"[{self.name}] set_user fallo: {uid}")
             if sent_ids:
                 self.cloud.mark_users_sent(sent_ids)
                 logger.info(f"[{self.name}] {len(sent_ids)} usuarios enviados OK")
@@ -139,19 +141,20 @@ class DeviceHandler:
             pe = pending[0]
             enroll_id = pe["id"]
             numero = str(pe["numero_empleado"]).strip()
-            logger.info(f"[{self.name}] ENROLL: id={enroll_id}, empleado={numero}")
+            uid = str(pe.get("pin_checador") or numero).strip()
+            logger.info(f"[{self.name}] ENROLL: id={enroll_id}, empleado={numero}, uid_dispositivo={uid}")
 
             device_users = self.zkteco.get_users()
-            if not any(str(u.get("user_id", "")) == numero for u in device_users):
-                logger.info(f"[{self.name}] Usuario {numero} no existe en dispositivo, creando...")
-                if not self.zkteco.set_user(user_id=numero, name=pe.get("nombre", numero)):
-                    logger.error(f"[{self.name}] No se pudo crear usuario {numero}, marcando enroll como fallido")
+            if not any(str(u.get("user_id", "")) == uid for u in device_users):
+                logger.info(f"[{self.name}] Usuario {uid} no existe en dispositivo, creando...")
+                if not self.zkteco.set_user(user_id=uid, name=pe.get("nombre", uid)):
+                    logger.error(f"[{self.name}] No se pudo crear usuario {uid}, marcando enroll como fallido")
                     self.cloud.mark_enroll_done(enroll_id, success=False)
                     return
 
-            logger.info(f"[{self.name}] Iniciando registro de huella para {numero}. Esperando dedo en dispositivo...")
+            logger.info(f"[{self.name}] Iniciando registro de huella para {uid}. Esperando dedo en dispositivo...")
             try:
-                ok = self.zkteco.enroll_user(user_id=numero)
+                ok = self.zkteco.enroll_user(user_id=uid)
             except Exception as enroll_err:
                 logger.error(f"[{self.name}] Excepcion en enroll_user: {enroll_err}")
                 self.cloud.mark_enroll_done(enroll_id, success=False)
@@ -160,11 +163,11 @@ class DeviceHandler:
             self.cloud.mark_enroll_done(enroll_id, success=ok)
 
             if ok:
-                logger.info(f"[{self.name}] Huella registrada para {numero}")
-                for tpl in self.zkteco.get_user_templates(user_id=numero):
+                logger.info(f"[{self.name}] Huella registrada para {uid} (empleado {numero})")
+                for tpl in self.zkteco.get_user_templates(user_id=uid):
                     self.cloud.upload_template(numero, tpl["finger_index"], tpl["template_data"])
             else:
-                logger.warning(f"[{self.name}] Enroll fallo para {numero} (timeout o el empleado no coloco el dedo)")
+                logger.warning(f"[{self.name}] Enroll fallo para {uid} (timeout o el empleado no coloco el dedo)")
         except Exception as e:
             logger.error(f"[{self.name}] Error sync_pending_enroll: {e}")
             try:
@@ -219,14 +222,34 @@ class DeviceHandler:
             pending = self.cloud.get_pending_templates()
             if not pending:
                 return
+            # Agrupar por numero_empleado para crear usuario una vez y marcar replicate al final
+            from collections import defaultdict
+            by_numero = defaultdict(list)
             for tpl in pending:
-                numero = tpl["numero_empleado"]
-                finger = tpl["finger_index"]
-                ok = self.zkteco.upload_template(numero, finger, tpl["template_data"])
-                if ok:
-                    logger.info(f"[{self.name}] Huella replicada: {numero} dedo={finger}")
-                else:
-                    logger.warning(f"[{self.name}] Fallo replicar huella: {numero}")
+                by_numero[(tpl.get("numero_empleado") or "").strip()].append(tpl)
+            for numero, templates in by_numero.items():
+                if not numero:
+                    continue
+                user_id = (templates[0].get("user_id") or templates[0].get("numero_empleado") or numero)
+                nombre = (templates[0].get("nombre") or user_id)[:24]
+                create_user_first = templates[0].get("create_user_first", False)
+                pending_replicate = templates[0].get("pending_replicate", False)
+                if create_user_first:
+                    if not self.zkteco.set_user(user_id=str(user_id), name=nombre):
+                        logger.warning(f"[{self.name}] No se pudo crear usuario {user_id} antes de replicar huella")
+                        continue
+                    logger.info(f"[{self.name}] Usuario creado para replicar: {user_id}")
+                for tpl in templates:
+                    uid = tpl.get("user_id") or tpl.get("numero_empleado")
+                    finger = tpl["finger_index"]
+                    ok = self.zkteco.upload_template(str(uid), finger, tpl["template_data"])
+                    if ok:
+                        logger.info(f"[{self.name}] Huella replicada: {uid} dedo={finger}")
+                    else:
+                        logger.warning(f"[{self.name}] Fallo replicar huella: {uid}")
+                if pending_replicate:
+                    self.cloud.mark_replicate_done(numero)
+                    logger.info(f"[{self.name}] Replicacion marcada como hecha: {numero}")
         except Exception as e:
             logger.error(f"[{self.name}] Error sync_pending_templates: {e}")
 

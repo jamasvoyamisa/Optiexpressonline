@@ -43,7 +43,7 @@ def _process_getrequest(db: Session, serial: str, test: bool = False, client_ip:
     ).order_by(models.UsuarioPendienteDispositivo.created_at).all()
     lines = []
     for p in pendientes:
-        pin = str(p.numero_empleado).strip()
+        pin = str(p.pin_checador).strip() if p.pin_checador else str(p.numero_empleado).strip()
         name = (p.nombre or "").strip() or pin
         userinfo = "\t".join([
             f"PIN={pin}", f"Name={name}", "Pri=0", "Passwd=", "Card=", "Grp=1",
@@ -142,6 +142,8 @@ async def iclock_cdata(
     if not raw_data:
         return "OK"
 
+    logger.info(f"ADMS cdata recibido: SN={serial} table={table} len={len(raw_data)} lineas={raw_data.count(chr(10)) + 1}")
+
     if table == "ATTLOG":
         _process_attlog(db, raw_data, dispositivo)
     elif table == "OPERLOG":
@@ -166,18 +168,24 @@ def _process_attlog(db: Session, raw_data: str, dispositivo: models.Dispositivo)
             continue
         try:
             user_id = str(parts[0]).strip()
-            timestamp_str = parts[1].strip()
-            timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+            timestamp_str = parts[1].strip()[:19]
+            try:
+                timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                timestamp = datetime.strptime(timestamp_str, "%d-%m-%Y %H:%M:%S")
         except (ValueError, IndexError) as e:
-            logger.warning(f"Error parseando ATTLOG: {line} - {e}")
+            logger.warning(f"Error parseando ATTLOG: {line!r} - {e}")
             continue
 
         empleado = db.query(personal_models.Empleado).filter(
-            personal_models.Empleado.numero_empleado == user_id
+            personal_models.Empleado.pin_checador == user_id
         ).first()
-
         if not empleado:
-            logger.info(f"ADMS checada ignorada: empleado {user_id} no registrado en el sistema.")
+            empleado = db.query(personal_models.Empleado).filter(
+                personal_models.Empleado.numero_empleado == user_id
+            ).first()
+        if not empleado:
+            logger.info(f"ADMS checada ignorada: PIN {user_id} no registrado en el sistema.")
             continue
 
         existente = db.query(models.Asistencia).filter(

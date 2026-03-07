@@ -2,9 +2,12 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 
+const ADMIN_USER = 'admin';
+const ADMIN_PASSWORD = 'Admin123!';
+
 export const Login = () => {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
+  const [username, setUsername] = useState(ADMIN_USER);
+  const [password, setPassword] = useState(ADMIN_PASSWORD);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
@@ -18,7 +21,7 @@ export const Login = () => {
     try {
       const success = await login(username, password);
       if (success) {
-        navigate('/');
+        navigate('/mis-asistencias');
       } else {
         setError('Credenciales incorrectas');
       }
@@ -114,10 +117,6 @@ export const Login = () => {
             {loading ? 'Iniciando sesión...' : 'Iniciar Sesión'}
           </button>
         </form>
-        <div style={{ marginTop: '1rem', fontSize: '0.875rem', color: '#666', textAlign: 'center' }}>
-          <p>Usuario de prueba: admin@test.com</p>
-          <p>Contraseña: admin123</p>
-        </div>
       </div>
     </div>
   );

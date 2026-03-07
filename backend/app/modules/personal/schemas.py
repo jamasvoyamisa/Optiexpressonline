@@ -28,6 +28,8 @@ class EmpresaUpdate(BaseModel):
 class EmpresaResponse(EmpresaBase):
     id: int
     activo: bool
+    rango_inicio: Optional[int] = None
+    rango_fin: Optional[int] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -93,6 +95,19 @@ class DepartamentoResponse(DepartamentoBase):
         from_attributes = True
 
 
+# ---- Schemas para Puesto ----
+
+class PuestoResponse(BaseModel):
+    id: int
+    nombre: str
+    orden: int
+    activo: bool
+    created_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
 # ---- Schemas para Empleado ----
 
 class EmpleadoBase(BaseModel):
@@ -102,13 +117,17 @@ class EmpleadoBase(BaseModel):
     apellido_materno: Optional[str] = None
     email: Optional[EmailStr] = None
     telefono: Optional[str] = None
+    username: Optional[str] = None
     empresa_id: Optional[int] = None
     departamento_id: Optional[int] = None
-    puesto: Optional[str] = None
+    puesto_id: Optional[int] = None
     curp: Optional[str] = None
     rfc: Optional[str] = None
     nss: Optional[str] = None
     direccion: Optional[str] = None
+    colonia: Optional[str] = None
+    cp: Optional[str] = None
+    ciudad: Optional[str] = None
     fecha_nacimiento: Optional[datetime] = None
     contacto_emergencia: Optional[str] = None
     telefono_emergencia: Optional[str] = None
@@ -121,6 +140,8 @@ class EmpleadoCreate(EmpleadoBase):
     estado: EstadoEmpleado = EstadoEmpleado.ACTIVO
     registrar_en_checador: Optional[bool] = False
     dispositivo_ids: Optional[list] = None
+    password: Optional[str] = None  # Contraseña inicial para acceso al sistema; si no se envía, se usa el número de empleado
+    horario_id: Optional[int] = None  # Horario a asignar al crear el empleado
 
 
 class EmpleadoUpdate(BaseModel):
@@ -129,13 +150,17 @@ class EmpleadoUpdate(BaseModel):
     apellido_materno: Optional[str] = None
     email: Optional[EmailStr] = None
     telefono: Optional[str] = None
+    username: Optional[str] = None
     empresa_id: Optional[int] = None
     departamento_id: Optional[int] = None
-    puesto: Optional[str] = None
+    puesto_id: Optional[int] = None
     curp: Optional[str] = None
     rfc: Optional[str] = None
     nss: Optional[str] = None
     direccion: Optional[str] = None
+    colonia: Optional[str] = None
+    cp: Optional[str] = None
+    ciudad: Optional[str] = None
     fecha_nacimiento: Optional[datetime] = None
     contacto_emergencia: Optional[str] = None
     telefono_emergencia: Optional[str] = None
@@ -144,11 +169,13 @@ class EmpleadoUpdate(BaseModel):
     estado: Optional[EstadoEmpleado] = None
     fecha_ingreso: Optional[datetime] = None
     fecha_baja: Optional[datetime] = None
+    password: Optional[str] = None  # Nueva contraseña para acceso al sistema (opcional)
 
 
 class EmpleadoResponse(EmpleadoBase):
     id: int
     estado: EstadoEmpleado
+    pin_checador: Optional[str] = None
     fecha_baja: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
@@ -156,6 +183,7 @@ class EmpleadoResponse(EmpleadoBase):
     jefe: Optional['EmpleadoResponse'] = None
     empresa: Optional[EmpresaResponse] = None
     departamento: Optional[DepartamentoResponse] = None
+    puesto: Optional[PuestoResponse] = None
 
     class Config:
         from_attributes = True

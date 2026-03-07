@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Enum, Text, LargeBinary, UniqueConstraint
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Enum, Text, LargeBinary, UniqueConstraint, Date
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import enum
@@ -51,6 +51,7 @@ class UsuarioPendienteDispositivo(Base):
     id = Column(Integer, primary_key=True, index=True)
     dispositivo_id = Column(Integer, ForeignKey("dispositivos.id"), nullable=False)
     numero_empleado = Column(String(50), nullable=False)
+    pin_checador = Column(String(20), nullable=True)
     nombre = Column(String(255), nullable=False)
     enviado = Column(Boolean, default=False)
     enviado_at = Column(DateTime(timezone=True), nullable=True)
@@ -67,6 +68,8 @@ class PendingEnroll(Base):
     id = Column(Integer, primary_key=True, index=True)
     dispositivo_id = Column(Integer, ForeignKey("dispositivos.id"), nullable=False)
     numero_empleado = Column(String(50), nullable=False)
+    pin_checador = Column(String(20), nullable=True)
+    nombre = Column(String(120), nullable=True)
     status = Column(String(20), default="pending")  # pending, completed, failed
     completed_at = Column(DateTime(timezone=True), nullable=True)
 
@@ -85,6 +88,21 @@ class PendingDelete(Base):
     procesado = Column(Boolean, default=False)
     procesado_at = Column(DateTime(timezone=True), nullable=True)
 
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    dispositivo = relationship("Dispositivo")
+
+
+class PendingReplicate(Base):
+    """Cola explícita: replicar huellas de este empleado a este dispositivo. El agente obtiene templates del backend y los sube."""
+    __tablename__ = "pending_replicate"
+    __table_args__ = (UniqueConstraint("dispositivo_id", "numero_empleado", name="uq_pending_replicate_device_num"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    dispositivo_id = Column(Integer, ForeignKey("dispositivos.id"), nullable=False)
+    numero_empleado = Column(String(50), nullable=False)
+    procesado = Column(Boolean, default=False)
+    procesado_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     dispositivo = relationship("Dispositivo")
@@ -182,9 +200,23 @@ class Asistencia(Base):
     incidencias = relationship("Incidencia", back_populates="asistencia", cascade="all, delete-orphan")
 
 
+class DiaFestivo(Base):
+    """Días de asueto/festivos. Los días marcados como activos no generan incidencias."""
+    __tablename__ = "dias_festivos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    fecha = Column(Date, nullable=False, unique=True, index=True)
+    nombre = Column(String(150), nullable=False)
+    tipo = Column(String(20), nullable=False, default="LFT")  # LFT | adicional
+    activo = Column(Boolean, default=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
 class Incidencia(Base):
     __tablename__ = "incidencias"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     empleado_id = Column(Integer, ForeignKey("empleados.id"), nullable=False)
     asistencia_id = Column(Integer, ForeignKey("asistencias.id"), nullable=True)
@@ -193,6 +225,7 @@ class Incidencia(Base):
     descripcion = Column(Text)
     justificada = Column(Boolean, default=False)
     comentarios = Column(Text)
+    origen = Column(String(20), nullable=True, default="manual")  # "automatico" | "manual"
     
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())

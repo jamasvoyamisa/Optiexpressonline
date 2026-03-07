@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, date
 from .models import TipoChecada, TipoIncidencia
 
 
@@ -40,6 +40,7 @@ class UsuarioPendienteResponse(BaseModel):
     id: int
     dispositivo_id: int
     numero_empleado: str
+    pin_checador: Optional[str] = None
     nombre: str
     enviado: bool
     enviado_at: Optional[datetime] = None
@@ -53,6 +54,8 @@ class PendingEnrollResponse(BaseModel):
     id: int
     dispositivo_id: int
     numero_empleado: str
+    pin_checador: Optional[str] = None
+    nombre: Optional[str] = None
     status: str
     completed_at: Optional[datetime] = None
     created_at: datetime
@@ -84,11 +87,16 @@ class FingerprintTemplateResponse(BaseModel):
     numero_empleado: str
     finger_index: int
     source_device_id: Optional[int] = None
+    source_device_nombre: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
+
+
+class MarkReplicateDoneRequest(BaseModel):
+    numero_empleado: str
 
 
 class ReplicateRequest(BaseModel):
@@ -99,10 +107,8 @@ class ReplicateRequest(BaseModel):
 class DispositivoResponse(DispositivoBase):
     id: int
     api_key: str
-    serial_number: Optional[str] = None
     activo: bool
-    ultima_llamada_getrequest: Optional[datetime] = None
-    ultima_ip_conexion: Optional[str] = None
+    ultima_sync_agente: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -154,9 +160,27 @@ class HorarioResponse(HorarioBase):
     activo: bool
     created_at: datetime
     updated_at: Optional[datetime] = None
-    
+
     class Config:
         from_attributes = True
+
+
+class EmpleadoHorarioResponse(BaseModel):
+    id: int
+    empleado_id: int
+    horario_id: int
+    fecha_inicio: Optional[datetime] = None
+    fecha_fin: Optional[datetime] = None
+    activo: bool
+    created_at: datetime
+    horario: Optional[HorarioResponse] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AsignarHorarioRequest(BaseModel):
+    horario_id: int
 
 
 # Schemas para Asistencia (Checada)
@@ -217,8 +241,36 @@ class IncidenciaResponse(IncidenciaBase):
     id: int
     empleado_id: int
     asistencia_id: Optional[int] = None
+    empleado_nombre: Optional[str] = None
+    origen: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
-    
+
+    class Config:
+        from_attributes = True
+
+
+# Schemas para DiaFestivo
+class DiaFestivoCreate(BaseModel):
+    fecha: date
+    nombre: str
+    tipo: str = "LFT"
+    activo: bool = True
+
+
+class DiaFestivoUpdate(BaseModel):
+    nombre: Optional[str] = None
+    tipo: Optional[str] = None
+    activo: Optional[bool] = None
+
+
+class DiaFestivoResponse(BaseModel):
+    id: int
+    fecha: date
+    nombre: str
+    tipo: str
+    activo: bool
+    created_at: datetime
+
     class Config:
         from_attributes = True

@@ -217,3 +217,16 @@ class CloudSync:
         except requests.exceptions.RequestException as e:
             logger.error(f"Error al obtener pending templates: {e}")
             return []
+
+    def mark_replicate_done(self, numero_empleado: str) -> bool:
+        """Marca como procesada la replicación de huella de este empleado (cola PendingReplicate)"""
+        try:
+            url = f"{self.base_url}/agent/pending-replicate/mark-done"
+            response = requests.post(url, json={"numero_empleado": numero_empleado}, headers=self.headers, timeout=10)
+            if response.status_code in (200, 201):
+                return True
+            logger.warning(f"mark_replicate_done: HTTP {response.status_code} - {response.text[:200]}")
+            return False
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error al marcar replicate done: {e}")
+            return False

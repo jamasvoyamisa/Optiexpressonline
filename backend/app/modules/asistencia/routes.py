@@ -1,9 +1,12 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, Request
 from sqlalchemy.orm import Session
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from app.core.database import get_db
 from app.core.config import settings
+from app.core.security import get_current_user
+from app.core.deps import get_current_empleado_with_rol
+from app.modules.personal import models as personal_models
 from . import schemas, service, models
 from .biometric.sync_service import SyncService
 
@@ -176,44 +179,64 @@ def enqueue_user_multi(
 
 @router.get("/fingerprint-templates/{numero_empleado}", response_model=List[schemas.FingerprintTemplateResponse])
 def get_templates_for_employee(numero_empleado: str, db: Session = Depends(get_db)):
-    """Ver si un empleado tiene templates de huella almacenados"""
-    return db.query(models.FingerprintTemplate).filter(
+    """Ver si un empleado tiene templates de huella almacenados, con nombre del dispositivo origen"""
+    templates = db.query(models.FingerprintTemplate).filter(
         models.FingerprintTemplate.numero_empleado == numero_empleado.strip()
     ).all()
+    # Cargar nombres de dispositivos
+    device_ids = {t.source_device_id for t in templates if t.source_device_id}
+    dispositivos = {d.id: d.nombre for d in db.query(models.Dispositivo).filter(
+        models.Dispositivo.id.in_(device_ids)
+    ).all()} if device_ids else {}
+    result = []
+    for t in templates:
+        item = schemas.FingerprintTemplateResponse.model_validate(t)
+        item.source_device_nombre = dispositivos.get(t.source_device_id)
+        result.append(item)
+    return result
 
 
 @router.post("/replicate-fingerprint")
 def replicate_fingerprint(data: schemas.ReplicateRequest, db: Session = Depends(get_db)):
     """Replica huella de un empleado a dispositivos seleccionados.
-    Agrega al usuario en la cola de cada dispositivo y el agente se encarga
-    de subir el template cuando detecte que hay uno disponible."""
+    Las huellas ya están en el backend (subidas desde el dispositivo origen).
+    Se agrega a la cola PendingReplicate por dispositivo; el agente del dispositivo
+    destino obtiene los templates del backend y los sube (creando al usuario si no existe)."""
     templates = db.query(models.FingerprintTemplate).filter(
         models.FingerprintTemplate.numero_empleado == data.numero_empleado.strip()
     ).all()
     if not templates:
         raise HTTPException(status_code=400, detail="No hay huella registrada para este empleado. Primero registre la huella en un dispositivo.")
 
+    from app.modules.personal import models as pm
+    numero = data.numero_empleado.strip()
     results = []
     for did in data.dispositivo_ids:
         try:
-            enqueue_data = schemas.EnqueueUserRequest(
-                numero_empleado=data.numero_empleado.strip(),
-                nombre=data.numero_empleado.strip(),
-            )
-            from app.modules.personal import models as pm
-            emp = db.query(pm.Empleado).filter(pm.Empleado.numero_empleado == data.numero_empleado.strip()).first()
+            # Cola explícita de replicación: el agente del dispositivo obtendrá los templates del backend
+            existing = db.query(models.PendingReplicate).filter(
+                models.PendingReplicate.dispositivo_id == did,
+                models.PendingReplicate.numero_empleado == numero,
+                models.PendingReplicate.procesado == False,
+            ).first()
+            if not existing:
+                pr = models.PendingReplicate(dispositivo_id=did, numero_empleado=numero)
+                db.add(pr)
+            # También encolar usuario por si el agente lo usa para set_user antes de templates
+            enqueue_data = schemas.EnqueueUserRequest(numero_empleado=numero, nombre=numero)
+            emp = db.query(pm.Empleado).filter(pm.Empleado.numero_empleado == numero).first()
             if emp:
                 enqueue_data.nombre = f"{emp.nombre} {emp.apellido_paterno or ''}".strip()
-
             existing_pending = db.query(models.UsuarioPendienteDispositivo).filter(
                 models.UsuarioPendienteDispositivo.dispositivo_id == did,
-                models.UsuarioPendienteDispositivo.numero_empleado == data.numero_empleado.strip(),
+                models.UsuarioPendienteDispositivo.numero_empleado == numero,
             ).first()
             if not existing_pending:
                 service.AsistenciaService.enqueue_user(db, did, enqueue_data)
-
+            db.commit()
             results.append({"dispositivo_id": did, "ok": True})
         except Exception as e:
+            db.rollback()
             results.append({"dispositivo_id": did, "ok": False, "error": str(e)})
 
     return {"results": results, "templates_count": len(templates)}
@@ -232,7 +255,7 @@ def preview_getrequest(device_id: int, base_url: Optional[str] = Query(None), db
     pendientes = service.AsistenciaService.get_pending_users(db, device_id, include_sent=False)
     lines = []
     for p in pendientes:
-        pin = str(p.numero_empleado).strip()
+        pin = str(p.pin_checador).strip() if p.pin_checador else str(p.numero_empleado).strip()
         name = (p.nombre or "").strip() or pin
         userinfo = "\t".join([
             f"PIN={pin}", f"Name={name}", "Pri=0", "Passwd=", "Card=", "Grp=1",
@@ -290,6 +313,22 @@ def start_enroll(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+@router.get("/devices/{device_id}/enroll-status/{enroll_id}", response_model=schemas.PendingEnrollResponse)
+def get_enroll_status(
+    device_id: int,
+    enroll_id: int,
+    db: Session = Depends(get_db)
+):
+    """Consultar el estado de un enroll pendiente (para polling desde el frontend)."""
+    pe = db.query(models.PendingEnroll).filter(
+        models.PendingEnroll.id == enroll_id,
+        models.PendingEnroll.dispositivo_id == device_id,
+    ).first()
+    if not pe:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Enroll no encontrado")
+    return pe
+
+
 # ========== ENDPOINTS PARA AGENTE (X-API-Key) ==========
 
 def _get_device_from_api_key(x_api_key: str = Header(..., alias="X-API-Key"), db: Session = Depends(get_db)):
@@ -297,7 +336,7 @@ def _get_device_from_api_key(x_api_key: str = Header(..., alias="X-API-Key"), db
     dispositivo = verify_api_key(db, x_api_key)
     if not dispositivo:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="API Key inválida o dispositivo inactivo")
-    dispositivo.ultima_sync_agente = datetime.utcnow()
+    dispositivo.ultima_sync_agente = datetime.now(timezone.utc)
     db.commit()
     return dispositivo
 
@@ -392,13 +431,50 @@ def agent_get_pending_templates(
     db: Session = Depends(get_db)
 ):
     """Obtiene templates pendientes de replicar a ESTE dispositivo.
-    Busca usuarios enviados a este dispositivo que tengan template pero que el template
-    venga de otro dispositivo (no de este)."""
+    Prioridad 1: cola PendingReplicate (replicar huella desde backend). Incluye create_user_first
+    para que el agente cree al usuario en el dispositivo si no existe y luego suba la huella.
+    Prioridad 2: usuarios ya enviados a este dispositivo con template de otro dispositivo."""
+    from app.modules.personal import models as pm
+    result = []
+
+    # 1) Cola explícita de replicación: templates del backend para este dispositivo
+    pending_rep = db.query(models.PendingReplicate).filter(
+        models.PendingReplicate.dispositivo_id == dispositivo.id,
+        models.PendingReplicate.procesado == False,
+    ).all()
+    numeros_replicate = [(pr.numero_empleado or "").strip() for pr in pending_rep]
+    if numeros_replicate:
+        templates_replicate = db.query(models.FingerprintTemplate).filter(
+            models.FingerprintTemplate.numero_empleado.in_(numeros_replicate),
+        ).all()
+        for t in templates_replicate:
+            numero = (t.numero_empleado or "").strip()
+            emp = db.query(pm.Empleado).filter(pm.Empleado.numero_empleado == numero).first()
+            user_id = (emp.pin_checador or emp.numero_empleado or numero).strip() if emp else numero
+            nombre = (f"{emp.nombre} {emp.apellido_paterno or ''}".strip() if emp else numero)[:24]
+            result.append({
+                "numero_empleado": numero,
+                "user_id": user_id,
+                "finger_index": t.finger_index,
+                "template_data": t.template_data,
+                "create_user_first": True,
+                "nombre": nombre,
+                "pending_replicate": True,
+            })
+
+    if result:
+        return result
+
+    # 2) Fallback: usuarios ya enviados a este dispositivo con template de otro dispositivo
     sent_users = db.query(models.UsuarioPendienteDispositivo).filter(
         models.UsuarioPendienteDispositivo.dispositivo_id == dispositivo.id,
         models.UsuarioPendienteDispositivo.enviado == True,
     ).all()
-    numeros = [u.numero_empleado for u in sent_users]
+    numero_to_user_id = {
+        (u.numero_empleado or "").strip(): (u.pin_checador or u.numero_empleado or "").strip()
+        for u in sent_users
+    }
+    numeros = list(numero_to_user_id.keys())
     if not numeros:
         return []
     templates = db.query(models.FingerprintTemplate).filter(
@@ -408,11 +484,37 @@ def agent_get_pending_templates(
     return [
         {
             "numero_empleado": t.numero_empleado,
+            "user_id": numero_to_user_id.get((t.numero_empleado or "").strip()) or t.numero_empleado,
             "finger_index": t.finger_index,
             "template_data": t.template_data,
+            "create_user_first": False,
+            "pending_replicate": False,
         }
         for t in templates
     ]
+
+
+@router.post("/agent/pending-replicate/mark-done")
+def agent_mark_replicate_done(
+    data: schemas.MarkReplicateDoneRequest,
+    dispositivo: models.Dispositivo = Depends(_get_device_from_api_key),
+    db: Session = Depends(get_db)
+):
+    """Marca como procesada la replicación de huella de este empleado a este dispositivo (llamado por el agente tras subir los templates)."""
+    numero = (data.numero_empleado or "").strip()
+    if not numero:
+        raise HTTPException(status_code=400, detail="numero_empleado requerido")
+    pr = db.query(models.PendingReplicate).filter(
+        models.PendingReplicate.dispositivo_id == dispositivo.id,
+        models.PendingReplicate.numero_empleado == numero,
+        models.PendingReplicate.procesado == False,
+    ).first()
+    if not pr:
+        return {"ok": True, "message": "Ya estaba marcado o no existía"}
+    pr.procesado = True
+    pr.procesado_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/agent/pending-deletes")
@@ -483,6 +585,45 @@ def get_checadas(
         limit=limit,
         empleado_id=empleado_id,
         dispositivo_id=dispositivo_id,
+        fecha_inicio=fecha_inicio_dt,
+        fecha_fin=fecha_fin_dt
+    )
+
+
+@router.get("/mis-checadas", response_model=List[schemas.AsistenciaResponse])
+def get_mis_checadas(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=500),
+    fecha_inicio: Optional[str] = None,
+    fecha_fin: Optional[str] = None,
+    current: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Checadas del empleado actual (portal del empleado). Requiere autenticación."""
+    fecha_inicio_dt = None
+    fecha_fin_dt = None
+    if fecha_inicio:
+        try:
+            d = datetime.fromisoformat(fecha_inicio.replace("Z", "+00:00"))
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=timezone.utc)
+            fecha_inicio_dt = d
+        except Exception:
+            pass
+    if fecha_fin:
+        try:
+            d = datetime.fromisoformat(fecha_fin.replace("Z", "+00:00"))
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=timezone.utc)
+            fecha_fin_dt = d
+        except Exception:
+            pass
+    empleado_id = int(current["user_id"])
+    return service.AsistenciaService.get_asistencias(
+        db,
+        skip=skip,
+        limit=limit,
+        empleado_id=empleado_id,
         fecha_inicio=fecha_inicio_dt,
         fecha_fin=fecha_fin_dt
     )
@@ -571,3 +712,348 @@ def get_incidencias(
         fecha_inicio=fecha_inicio_dt,
         fecha_fin=fecha_fin_dt
     )
+
+
+@router.get("/checadas/mi-area", response_model=List[schemas.AsistenciaResponse])
+def get_checadas_mi_area(
+    fecha_inicio: Optional[str] = None,
+    fecha_fin: Optional[str] = None,
+    limit: int = Query(2000, ge=1, le=5000),
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db)
+):
+    """Checadas del personal del área del gerente/supervisor autenticado. Requiere autenticación."""
+    empleado_id = current_extra["user_id"]
+    is_superuser = current_extra.get("is_superuser") is True
+
+    if is_superuser:
+        empleado_ids = None
+    else:
+        from app.modules.personal import service as personal_service
+        depto_ids = personal_service.PersonalService.get_departamento_ids_que_administro(db, empleado_id)
+        if not depto_ids:
+            return []
+        empleados = db.query(personal_models.Empleado).filter(
+            personal_models.Empleado.departamento_id.in_(depto_ids)
+        ).all()
+        empleado_ids = [e.id for e in empleados]
+        if not empleado_ids:
+            return []
+
+    fecha_inicio_dt = None
+    fecha_fin_dt = None
+    if fecha_inicio:
+        try:
+            fecha_inicio_dt = datetime.fromisoformat(fecha_inicio)
+        except Exception:
+            pass
+    if fecha_fin:
+        try:
+            fecha_fin_dt = datetime.fromisoformat(fecha_fin)
+        except Exception:
+            pass
+
+    if empleado_ids is None:
+        return service.AsistenciaService.get_asistencias(
+            db, skip=0, limit=limit,
+            fecha_inicio=fecha_inicio_dt, fecha_fin=fecha_fin_dt
+        )
+
+    # Por cada empleado del área pedir hasta 500 checadas (suficiente para una quincena);
+    # luego unir, ordenar y devolver hasta `limit` para no truncar solo a un subconjunto de empleados
+    limit_por_empleado = 500
+    resultados = []
+    for eid in empleado_ids:
+        resultados += service.AsistenciaService.get_asistencias(
+            db, skip=0, limit=limit_por_empleado,
+            empleado_id=eid,
+            fecha_inicio=fecha_inicio_dt, fecha_fin=fecha_fin_dt
+        )
+    resultados.sort(key=lambda a: a.timestamp, reverse=True)
+    return resultados[:limit]
+
+
+@router.get("/incidencias/mi-area", response_model=List[schemas.IncidenciaResponse])
+def get_incidencias_mi_area(
+    tipo: Optional[str] = None,
+    fecha_inicio: Optional[str] = None,
+    fecha_fin: Optional[str] = None,
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db)
+):
+    """
+    Lista incidencias: si es jefe de área, las de su equipo; si es superuser, todas.
+    Requiere autenticación.
+    """
+    empleado_id = current_extra["user_id"]
+    is_superuser = current_extra.get("is_superuser") is True
+    is_jefe = current_extra.get("is_jefe") is True
+
+    if is_superuser:
+        empleado_ids = None
+    else:
+        # Área que administro: departamentos donde soy jefe (gerente) o donde soy supervisor
+        from app.modules.personal import service as personal_service
+        depto_ids = personal_service.PersonalService.get_departamento_ids_que_administro(db, empleado_id)
+        if not depto_ids:
+            return []
+        empleados = db.query(personal_models.Empleado).filter(
+            personal_models.Empleado.departamento_id.in_(depto_ids)
+        ).all()
+        empleado_ids = [e.id for e in empleados]
+        if not empleado_ids:
+            return []
+
+    fecha_inicio_dt = None
+    fecha_fin_dt = None
+    if fecha_inicio:
+        try:
+            fecha_inicio_dt = datetime.fromisoformat(fecha_inicio)
+        except Exception:
+            pass
+    if fecha_fin:
+        try:
+            fecha_fin_dt = datetime.fromisoformat(fecha_fin)
+        except Exception:
+            pass
+    incidencias = service.AsistenciaService.get_incidencias(
+        db,
+        empleado_ids=empleado_ids,
+        tipo=tipo,
+        fecha_inicio=fecha_inicio_dt,
+        fecha_fin=fecha_fin_dt
+    )
+    all_emp_ids = list({inc.empleado_id for inc in incidencias})
+    empleados_map = {
+        e.id: f"{e.nombre} {e.apellido_paterno or ''} {e.apellido_materno or ''}".strip()
+        for e in db.query(personal_models.Empleado).filter(
+            personal_models.Empleado.id.in_(all_emp_ids)
+        ).all()
+    }
+    for inc in incidencias:
+        inc.empleado_nombre = empleados_map.get(inc.empleado_id) or ""
+    return incidencias
+
+
+@router.patch("/incidencias/{incidencia_id}", response_model=schemas.IncidenciaResponse)
+def update_incidencia(
+    incidencia_id: int,
+    body: schemas.IncidenciaUpdate,
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db)
+):
+    """
+    Actualizar incidencia (justificada, comentarios). Pueden justificar: gerente del área (jefe del departamento),
+    supervisor en ese departamento, o superuser.
+    """
+    inc = service.AsistenciaService.get_incidencia(db, incidencia_id)
+    if not inc:
+        raise HTTPException(status_code=404, detail="Incidencia no encontrada")
+    current_id = current_extra["user_id"]
+    if not current_extra.get("is_superuser"):
+        empleado = db.query(personal_models.Empleado).filter(personal_models.Empleado.id == inc.empleado_id).first()
+        from app.modules.personal import service as personal_service
+        aprobadores = personal_service.PersonalService.get_ids_aprobadores_area(db, empleado.departamento_id if empleado else None)
+        if current_id not in aprobadores:
+            raise HTTPException(
+                status_code=403,
+                detail="Solo el gerente o supervisor del área del empleado puede justificar esta incidencia"
+            )
+    updated = service.AsistenciaService.update_incidencia(db, incidencia_id, body)
+    return updated
+
+
+# ========== HORARIOS ==========
+
+@router.get("/horarios", response_model=List[schemas.HorarioResponse])
+def get_horarios(
+    activo: Optional[bool] = None,
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db)
+):
+    """Lista todos los horarios. Acceso: RH y superadmin."""
+    return service.AsistenciaService.get_horarios(db, activo=activo)
+
+
+@router.post("/horarios", response_model=schemas.HorarioResponse, status_code=status.HTTP_201_CREATED)
+def create_horario(
+    horario: schemas.HorarioCreate,
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db)
+):
+    """Crear horario. Solo RH y superadmin."""
+    if not current_extra.get("is_superuser") and not current_extra.get("is_rh"):
+        raise HTTPException(status_code=403, detail="Solo RH o superadmin pueden gestionar horarios")
+    return service.AsistenciaService.create_horario(db, horario)
+
+
+@router.put("/horarios/{horario_id}", response_model=schemas.HorarioResponse)
+def update_horario(
+    horario_id: int,
+    horario: schemas.HorarioUpdate,
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db)
+):
+    """Actualizar horario. Solo RH y superadmin."""
+    if not current_extra.get("is_superuser") and not current_extra.get("is_rh"):
+        raise HTTPException(status_code=403, detail="Solo RH o superadmin pueden gestionar horarios")
+    h = service.AsistenciaService.update_horario(db, horario_id, horario)
+    if not h:
+        raise HTTPException(status_code=404, detail="Horario no encontrado")
+    return h
+
+
+@router.delete("/horarios/{horario_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_horario(
+    horario_id: int,
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db)
+):
+    """Desactivar horario. Solo RH y superadmin."""
+    if not current_extra.get("is_superuser") and not current_extra.get("is_rh"):
+        raise HTTPException(status_code=403, detail="Solo RH o superadmin pueden gestionar horarios")
+    if not service.AsistenciaService.delete_horario(db, horario_id):
+        raise HTTPException(status_code=404, detail="Horario no encontrado")
+
+
+# ========== ASIGNACIÓN DE HORARIO A EMPLEADO ==========
+
+@router.get("/empleados/{empleado_id}/horario", response_model=schemas.EmpleadoHorarioResponse)
+def get_horario_empleado(
+    empleado_id: int,
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db)
+):
+    """Obtiene el horario activo del empleado."""
+    eh = service.AsistenciaService.get_horario_activo_empleado(db, empleado_id)
+    if not eh:
+        raise HTTPException(status_code=404, detail="El empleado no tiene horario asignado")
+    return eh
+
+
+@router.post("/empleados/{empleado_id}/horario", response_model=schemas.EmpleadoHorarioResponse, status_code=status.HTTP_201_CREATED)
+def assign_horario_empleado(
+    empleado_id: int,
+    body: schemas.AsignarHorarioRequest,
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db)
+):
+    """Asigna un horario al empleado. Solo RH y superadmin."""
+    if not current_extra.get("is_superuser") and not current_extra.get("is_rh"):
+        raise HTTPException(status_code=403, detail="Solo RH o superadmin pueden asignar horarios")
+    horario = service.AsistenciaService.get_horario(db, body.horario_id)
+    if not horario:
+        raise HTTPException(status_code=404, detail="Horario no encontrado")
+    empleado = db.query(personal_models.Empleado).filter(personal_models.Empleado.id == empleado_id).first()
+    if not empleado:
+        raise HTTPException(status_code=404, detail="Empleado no encontrado")
+    return service.AsistenciaService.assign_horario_empleado(db, empleado_id, body.horario_id)
+
+
+@router.delete("/empleados/{empleado_id}/horario", status_code=status.HTTP_204_NO_CONTENT)
+def remove_horario_empleado(
+    empleado_id: int,
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db)
+):
+    """Quita el horario activo del empleado. Solo RH y superadmin."""
+    if not current_extra.get("is_superuser") and not current_extra.get("is_rh"):
+        raise HTTPException(status_code=403, detail="Solo RH o superadmin pueden gestionar horarios")
+    if not service.AsistenciaService.remove_horario_empleado(db, empleado_id):
+        raise HTTPException(status_code=404, detail="El empleado no tiene horario asignado")
+
+
+# ========== PROCESO DIARIO ==========
+
+@router.post("/horarios/procesar-dia")
+def procesar_dia(
+    fecha: Optional[str] = Query(None, description="Fecha YYYY-MM-DD (default: ayer)"),
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db)
+):
+    """
+    Detecta faltas y checadas incompletas para todos los empleados con horario asignado.
+    Si no se indica fecha, procesa el día de ayer.
+    Solo RH y superadmin.
+    """
+    if not current_extra.get("is_superuser") and not current_extra.get("is_rh"):
+        raise HTTPException(status_code=403, detail="Solo RH o superadmin pueden ejecutar este proceso")
+    try:
+        resultado = service.AsistenciaService.procesar_dia(db, fecha)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return resultado
+
+
+# ========== DÍAS FESTIVOS ==========
+
+@router.get("/festivos", response_model=list[schemas.DiaFestivoResponse])
+def get_dias_festivos(
+    año: Optional[int] = Query(None, description="Filtrar por año"),
+    solo_activos: bool = Query(True),
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db)
+):
+    """Lista días festivos. Con ?solo_activos=false devuelve todos."""
+    return service.AsistenciaService.get_dias_festivos(db, año=año, solo_activos=solo_activos)
+
+
+@router.post("/festivos", response_model=schemas.DiaFestivoResponse, status_code=status.HTTP_201_CREATED)
+def create_dia_festivo(
+    data: schemas.DiaFestivoCreate,
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db)
+):
+    """Crear día festivo manualmente. Solo superadmin y RH."""
+    if not current_extra.get("is_superuser") and not current_extra.get("is_rh"):
+        raise HTTPException(status_code=403, detail="Solo RH o superadmin")
+    try:
+        return service.AsistenciaService.create_dia_festivo(db, data)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.patch("/festivos/{festivo_id}", response_model=schemas.DiaFestivoResponse)
+def update_dia_festivo(
+    festivo_id: int,
+    data: schemas.DiaFestivoUpdate,
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db)
+):
+    """Actualizar nombre, tipo o activo de un día festivo. Solo superadmin y RH."""
+    if not current_extra.get("is_superuser") and not current_extra.get("is_rh"):
+        raise HTTPException(status_code=403, detail="Solo RH o superadmin")
+    festivo = service.AsistenciaService.update_dia_festivo(db, festivo_id, data)
+    if not festivo:
+        raise HTTPException(status_code=404, detail="Festivo no encontrado")
+    return festivo
+
+
+@router.delete("/festivos/{festivo_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_dia_festivo(
+    festivo_id: int,
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db)
+):
+    """Eliminar día festivo. Solo superadmin y RH."""
+    if not current_extra.get("is_superuser") and not current_extra.get("is_rh"):
+        raise HTTPException(status_code=403, detail="Solo RH o superadmin")
+    if not service.AsistenciaService.delete_dia_festivo(db, festivo_id):
+        raise HTTPException(status_code=404, detail="Festivo no encontrado")
+
+
+@router.post("/festivos/generar/{año}", status_code=status.HTTP_200_OK)
+def generar_festivos_año(
+    año: int,
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db)
+):
+    """
+    Auto-genera los días festivos LFT para el año indicado (Art. 74 + Semana Santa).
+    Omite los que ya existen. Solo superadmin y RH.
+    """
+    if not current_extra.get("is_superuser") and not current_extra.get("is_rh"):
+        raise HTTPException(status_code=403, detail="Solo RH o superadmin")
+    if año < 2020 or año > 2099:
+        raise HTTPException(status_code=400, detail="Año inválido (2020-2099)")
+    return service.AsistenciaService.generar_festivos_año(db, año)

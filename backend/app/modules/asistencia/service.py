@@ -1,10 +1,77 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
 from typing import List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
+import calendar
 from . import models, schemas
 from .biometric.sync_service import SyncService
 from app.modules.personal import models as personal_models
+
+
+# ──────────────────────────────────────────────
+# UTILIDADES: DÍAS FESTIVOS LFT MÉXICO
+# ──────────────────────────────────────────────
+
+def _primer_lunes(year: int, month: int) -> date:
+    """Devuelve el primer lunes del mes/año dado."""
+    d = date(year, month, 1)
+    # weekday(): 0=lun … 6=dom
+    offset = (7 - d.weekday()) % 7  # días hasta el próximo lunes (0 si ya es lunes)
+    return d + timedelta(days=offset)
+
+
+def _tercer_lunes(year: int, month: int) -> date:
+    """Devuelve el tercer lunes del mes/año dado."""
+    primero = _primer_lunes(year, month)
+    return primero + timedelta(weeks=2)
+
+
+def _semana_santa(year: int):
+    """Calcula Jueves y Viernes Santos mediante el algoritmo de Gauss para Pascua."""
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = ((h + l - 7 * m + 114) % 31) + 1
+    domingo_pascua = date(year, month, day)
+    jueves = domingo_pascua - timedelta(days=3)
+    viernes = domingo_pascua - timedelta(days=2)
+    return jueves, viernes
+
+
+def generar_festivos_lft(year: int) -> list[dict]:
+    """
+    Genera los días festivos oficiales según LFT Art. 74 para el año dado.
+    Incluye Jueves y Viernes Santos (ampliamente adoptados en México).
+    """
+    festivos = []
+
+    # ── Fechas fijas ──
+    festivos.append({"fecha": date(year, 1, 1),  "nombre": "Año Nuevo",                 "tipo": "LFT"})
+    festivos.append({"fecha": date(year, 5, 1),  "nombre": "Día del Trabajo",            "tipo": "LFT"})
+    festivos.append({"fecha": date(year, 9, 16), "nombre": "Independencia de México",    "tipo": "LFT"})
+    festivos.append({"fecha": date(year, 12, 25),"nombre": "Navidad",                    "tipo": "LFT"})
+
+    # ── Fechas flotantes (movidas al lunes más cercano, LFT Art. 74) ──
+    festivos.append({"fecha": _primer_lunes(year, 2),  "nombre": "Aniversario de la Constitución (1er lunes de febrero)", "tipo": "LFT"})
+    festivos.append({"fecha": _tercer_lunes(year, 3),  "nombre": "Natalicio de Benito Juárez (3er lunes de marzo)",       "tipo": "LFT"})
+    festivos.append({"fecha": _tercer_lunes(year, 11), "nombre": "Revolución Mexicana (3er lunes de noviembre)",          "tipo": "LFT"})
+
+    # ── Semana Santa (Jueves y Viernes Santos) ──
+    jueves, viernes = _semana_santa(year)
+    festivos.append({"fecha": jueves,  "nombre": "Jueves Santo", "tipo": "adicional"})
+    festivos.append({"fecha": viernes, "nombre": "Viernes Santo", "tipo": "adicional"})
+
+    return festivos
 
 
 class AsistenciaService:
@@ -164,9 +231,14 @@ class AsistenciaService:
         numero = data.numero_empleado.strip()
         nombre_completo = data.nombre.strip()
 
+        # Buscar primero por pin_checador (único global), luego por numero_empleado como fallback
         empleado = db.query(personal_models.Empleado).filter(
-            personal_models.Empleado.numero_empleado == numero
+            personal_models.Empleado.pin_checador == numero
         ).first()
+        if not empleado:
+            empleado = db.query(personal_models.Empleado).filter(
+                personal_models.Empleado.numero_empleado == numero
+            ).first()
 
         if not empleado:
             partes = nombre_completo.split(" ", 2)
@@ -193,6 +265,7 @@ class AsistenciaService:
         pendiente = models.UsuarioPendienteDispositivo(
             dispositivo_id=device_id,
             numero_empleado=numero,
+            pin_checador=empleado.pin_checador if empleado else None,
             nombre=nombre_completo,
             enviado=False
         )
@@ -236,25 +309,31 @@ class AsistenciaService:
 
         numero = numero_empleado.strip()
         from app.modules.personal import models as pm
-        empleado = db.query(pm.Empleado).filter(pm.Empleado.numero_empleado == numero).first()
+        # Buscar por pin_checador primero (único global), luego por numero_empleado
+        empleado = db.query(pm.Empleado).filter(pm.Empleado.pin_checador == numero).first()
+        if not empleado:
+            empleado = db.query(pm.Empleado).filter(pm.Empleado.numero_empleado == numero).first()
         if not empleado:
             raise ValueError(f"Empleado {numero} no encontrado en el sistema")
 
+        pin = empleado.pin_checador or numero
+
         enviado = db.query(models.UsuarioPendienteDispositivo).filter(
             models.UsuarioPendienteDispositivo.dispositivo_id == device_id,
-            models.UsuarioPendienteDispositivo.numero_empleado == numero,
+            models.UsuarioPendienteDispositivo.numero_empleado == empleado.numero_empleado,
             models.UsuarioPendienteDispositivo.enviado == True
         ).first()
         if not enviado:
             existe_en_cola = db.query(models.UsuarioPendienteDispositivo).filter(
                 models.UsuarioPendienteDispositivo.dispositivo_id == device_id,
-                models.UsuarioPendienteDispositivo.numero_empleado == numero,
+                models.UsuarioPendienteDispositivo.numero_empleado == empleado.numero_empleado,
             ).first()
             if not existe_en_cola:
                 nombre = f"{empleado.nombre} {empleado.apellido_paterno or ''}".strip()
                 nuevo = models.UsuarioPendienteDispositivo(
                     dispositivo_id=device_id,
-                    numero_empleado=numero,
+                    numero_empleado=empleado.numero_empleado,
+                    pin_checador=pin,
                     nombre=nombre,
                 )
                 db.add(nuevo)
@@ -262,19 +341,23 @@ class AsistenciaService:
 
         existente = db.query(models.PendingEnroll).filter(
             models.PendingEnroll.dispositivo_id == device_id,
-            models.PendingEnroll.numero_empleado == numero,
+            models.PendingEnroll.numero_empleado == empleado.numero_empleado,
             models.PendingEnroll.status == "pending"
         ).first()
         if existente:
             return existente
 
+        nombre_completo = f"{empleado.nombre} {empleado.apellido_paterno or ''}".strip()
+
         fallido = db.query(models.PendingEnroll).filter(
             models.PendingEnroll.dispositivo_id == device_id,
-            models.PendingEnroll.numero_empleado == numero,
+            models.PendingEnroll.numero_empleado == empleado.numero_empleado,
             models.PendingEnroll.status == "failed"
         ).first()
         if fallido:
             fallido.status = "pending"
+            fallido.pin_checador = pin
+            fallido.nombre = nombre_completo
             fallido.completed_at = None
             db.commit()
             db.refresh(fallido)
@@ -282,7 +365,9 @@ class AsistenciaService:
 
         pe = models.PendingEnroll(
             dispositivo_id=device_id,
-            numero_empleado=numero,
+            numero_empleado=empleado.numero_empleado,
+            pin_checador=pin,
+            nombre=nombre_completo,
             status="pending"
         )
         db.add(pe)
@@ -362,23 +447,266 @@ class AsistenciaService:
         return result
     
     # ========== HORARIOS ==========
-    
+
     @staticmethod
     def create_horario(db: Session, horario: schemas.HorarioCreate) -> models.Horario:
-        """Crear nuevo horario"""
         db_horario = models.Horario(**horario.dict())
         db.add(db_horario)
         db.commit()
         db.refresh(db_horario)
         return db_horario
-    
+
     @staticmethod
     def get_horarios(db: Session, activo: Optional[bool] = None) -> List[models.Horario]:
-        """Listar horarios"""
         query = db.query(models.Horario)
         if activo is not None:
             query = query.filter(models.Horario.activo == activo)
-        return query.all()
+        return query.order_by(models.Horario.nombre).all()
+
+    @staticmethod
+    def get_horario(db: Session, horario_id: int) -> Optional[models.Horario]:
+        return db.query(models.Horario).filter(models.Horario.id == horario_id).first()
+
+    @staticmethod
+    def update_horario(db: Session, horario_id: int, data: schemas.HorarioUpdate) -> Optional[models.Horario]:
+        h = db.query(models.Horario).filter(models.Horario.id == horario_id).first()
+        if not h:
+            return None
+        for k, v in data.dict(exclude_unset=True).items():
+            setattr(h, k, v)
+        db.commit()
+        db.refresh(h)
+        return h
+
+    @staticmethod
+    def delete_horario(db: Session, horario_id: int) -> bool:
+        h = db.query(models.Horario).filter(models.Horario.id == horario_id).first()
+        if not h:
+            return False
+        h.activo = False
+        db.commit()
+        return True
+
+    # ========== ASIGNACIÓN DE HORARIO A EMPLEADO ==========
+
+    @staticmethod
+    def assign_horario_empleado(
+        db: Session, empleado_id: int, horario_id: int
+    ) -> models.EmpleadoHorario:
+        """Asigna un horario al empleado desactivando el anterior si existe."""
+        from datetime import datetime
+        # Desactivar asignaciones previas
+        db.query(models.EmpleadoHorario).filter(
+            models.EmpleadoHorario.empleado_id == empleado_id,
+            models.EmpleadoHorario.activo == True,
+        ).update(
+            {models.EmpleadoHorario.activo: False, models.EmpleadoHorario.fecha_fin: datetime.utcnow()},
+            synchronize_session=False,
+        )
+        eh = models.EmpleadoHorario(
+            empleado_id=empleado_id,
+            horario_id=horario_id,
+            fecha_inicio=datetime.utcnow(),
+            activo=True,
+        )
+        db.add(eh)
+        db.commit()
+        db.refresh(eh)
+        return eh
+
+    @staticmethod
+    def get_horario_activo_empleado(db: Session, empleado_id: int) -> Optional[models.EmpleadoHorario]:
+        """Devuelve la asignación de horario activa para el empleado."""
+        from sqlalchemy.orm import joinedload
+        return (
+            db.query(models.EmpleadoHorario)
+            .options(joinedload(models.EmpleadoHorario.horario))
+            .filter(
+                models.EmpleadoHorario.empleado_id == empleado_id,
+                models.EmpleadoHorario.activo == True,
+            )
+            .first()
+        )
+
+    @staticmethod
+    def remove_horario_empleado(db: Session, empleado_id: int) -> bool:
+        """Quita el horario activo del empleado."""
+        from datetime import datetime
+        updated = db.query(models.EmpleadoHorario).filter(
+            models.EmpleadoHorario.empleado_id == empleado_id,
+            models.EmpleadoHorario.activo == True,
+        ).update(
+            {models.EmpleadoHorario.activo: False, models.EmpleadoHorario.fecha_fin: datetime.utcnow()},
+            synchronize_session=False,
+        )
+        db.commit()
+        return updated > 0
+
+    # ========== DÍAS FESTIVOS ==========
+
+    @staticmethod
+    def get_dias_festivos(db: Session, año: Optional[int] = None, solo_activos: bool = True) -> list:
+        query = db.query(models.DiaFestivo)
+        if solo_activos:
+            query = query.filter(models.DiaFestivo.activo == True)
+        if año:
+            query = query.filter(
+                models.DiaFestivo.fecha >= date(año, 1, 1),
+                models.DiaFestivo.fecha <= date(año, 12, 31),
+            )
+        return query.order_by(models.DiaFestivo.fecha).all()
+
+    @staticmethod
+    def create_dia_festivo(db: Session, data: schemas.DiaFestivoCreate) -> models.DiaFestivo:
+        existente = db.query(models.DiaFestivo).filter(models.DiaFestivo.fecha == data.fecha).first()
+        if existente:
+            raise ValueError(f"Ya existe un día festivo para la fecha {data.fecha}")
+        festivo = models.DiaFestivo(**data.dict())
+        db.add(festivo)
+        db.commit()
+        db.refresh(festivo)
+        return festivo
+
+    @staticmethod
+    def update_dia_festivo(db: Session, festivo_id: int, data: schemas.DiaFestivoUpdate) -> Optional[models.DiaFestivo]:
+        festivo = db.query(models.DiaFestivo).filter(models.DiaFestivo.id == festivo_id).first()
+        if not festivo:
+            return None
+        for k, v in data.dict(exclude_unset=True).items():
+            setattr(festivo, k, v)
+        db.commit()
+        db.refresh(festivo)
+        return festivo
+
+    @staticmethod
+    def delete_dia_festivo(db: Session, festivo_id: int) -> bool:
+        festivo = db.query(models.DiaFestivo).filter(models.DiaFestivo.id == festivo_id).first()
+        if not festivo:
+            return False
+        db.delete(festivo)
+        db.commit()
+        return True
+
+    @staticmethod
+    def generar_festivos_año(db: Session, año: int) -> dict:
+        """Inserta los festivos LFT para el año indicado, omitiendo los que ya existen."""
+        festivos = generar_festivos_lft(año)
+        creados = 0
+        omitidos = 0
+        for f in festivos:
+            existente = db.query(models.DiaFestivo).filter(models.DiaFestivo.fecha == f["fecha"]).first()
+            if existente:
+                omitidos += 1
+                continue
+            db.add(models.DiaFestivo(fecha=f["fecha"], nombre=f["nombre"], tipo=f["tipo"], activo=True))
+            creados += 1
+        db.commit()
+        return {"año": año, "creados": creados, "omitidos": omitidos}
+
+    @staticmethod
+    def es_dia_festivo(db: Session, fecha: date) -> bool:
+        """Devuelve True si la fecha es un día festivo activo."""
+        return db.query(models.DiaFestivo).filter(
+            models.DiaFestivo.fecha == fecha,
+            models.DiaFestivo.activo == True,
+        ).first() is not None
+
+    # ========== PROCESO DIARIO: FALTAS E INCOMPLETAS ==========
+
+    @staticmethod
+    def procesar_dia(db: Session, fecha_str: Optional[str] = None) -> dict:
+        """
+        Detecta faltas y checadas incompletas para todos los empleados con horario asignado ese día.
+        Si fecha_str es None, usa la fecha de ayer (para procesar el día ya cerrado).
+        """
+        from datetime import datetime, timedelta, date as date_type
+
+        if fecha_str:
+            try:
+                fecha = datetime.strptime(fecha_str, "%Y-%m-%d").date()
+            except ValueError:
+                raise ValueError("Formato de fecha inválido. Use YYYY-MM-DD.")
+        else:
+            fecha = (datetime.utcnow() - timedelta(days=1)).date()
+
+        dia_inicio = datetime(fecha.year, fecha.month, fecha.day, 0, 0, 0)
+        dia_fin = dia_inicio + timedelta(days=1)
+
+        dia_semana = fecha.weekday()  # 0=lunes … 6=domingo
+
+        # Si el día es festivo activo, no generar incidencias
+        if AsistenciaService.es_dia_festivo(db, fecha):
+            return {"fecha": str(fecha), "incidencias_creadas": 0, "omitidas_duplicadas": 0, "motivo": "día festivo"}
+
+        # Obtener todos los EmpleadoHorario activos
+        asignaciones = db.query(models.EmpleadoHorario).filter(
+            models.EmpleadoHorario.activo == True,
+        ).all()
+
+        creadas = 0
+        omitidas = 0
+
+        for asig in asignaciones:
+            horario = asig.horario
+            if not horario or not horario.activo:
+                continue
+
+            # Verificar si el horario aplica ese día
+            if horario.dias_semana:
+                dias_permitidos = [int(d.strip()) for d in horario.dias_semana.split(",") if d.strip().isdigit()]
+                # dias_semana usa 1=lunes…7=domingo (convención frontend); convertimos weekday (0=lun)
+                dia_num = dia_semana + 1  # 1-7
+                if dia_num not in dias_permitidos:
+                    continue
+
+            # Contar checadas del empleado ese día
+            checadas = db.query(models.Asistencia).filter(
+                models.Asistencia.empleado_id == asig.empleado_id,
+                models.Asistencia.timestamp >= dia_inicio,
+                models.Asistencia.timestamp < dia_fin,
+            ).count()
+
+            if checadas >= 4:
+                continue
+
+            # Determinar descripción según checadas faltantes
+            if checadas == 0:
+                descripcion = "No se presentó (sin checadas)"
+            elif checadas == 1:
+                descripcion = "Solo registró entrada. Faltan: salida a comer, regreso de comer y salida"
+            elif checadas == 2:
+                descripcion = "Faltan: regreso de comer y salida"
+            else:  # 3
+                descripcion = "Falta checada de salida"
+
+            tipo = models.TipoIncidencia.FALTA
+
+            # Evitar duplicados
+            existente = db.query(models.Incidencia).filter(
+                models.Incidencia.empleado_id == asig.empleado_id,
+                models.Incidencia.fecha >= dia_inicio,
+                models.Incidencia.fecha < dia_fin,
+                models.Incidencia.tipo == tipo,
+                models.Incidencia.origen == "automatico",
+            ).first()
+
+            if existente:
+                omitidas += 1
+                continue
+
+            inc = models.Incidencia(
+                empleado_id=asig.empleado_id,
+                tipo=tipo,
+                fecha=dia_inicio,
+                descripcion=descripcion,
+                justificada=False,
+                origen="automatico",
+            )
+            db.add(inc)
+            creadas += 1
+
+        db.commit()
+        return {"fecha": str(fecha), "incidencias_creadas": creadas, "omitidas_duplicadas": omitidas}
     
     # ========== INCIDENCIAS ==========
     
@@ -395,15 +723,18 @@ class AsistenciaService:
     def get_incidencias(
         db: Session,
         empleado_id: Optional[int] = None,
+        empleado_ids: Optional[List[int]] = None,
         tipo: Optional[str] = None,
         fecha_inicio: Optional[datetime] = None,
         fecha_fin: Optional[datetime] = None
     ) -> List[models.Incidencia]:
-        """Listar incidencias con filtros"""
+        """Listar incidencias con filtros. empleado_ids permite filtrar por varios (ej. mi área)."""
         query = db.query(models.Incidencia)
         
         if empleado_id:
             query = query.filter(models.Incidencia.empleado_id == empleado_id)
+        if empleado_ids:
+            query = query.filter(models.Incidencia.empleado_id.in_(empleado_ids))
         if tipo:
             query = query.filter(models.Incidencia.tipo == tipo)
         if fecha_inicio:
@@ -412,3 +743,25 @@ class AsistenciaService:
             query = query.filter(models.Incidencia.fecha <= fecha_fin)
         
         return query.order_by(models.Incidencia.fecha.desc()).all()
+
+    @staticmethod
+    def update_incidencia(
+        db: Session,
+        incidencia_id: int,
+        data: "schemas.IncidenciaUpdate"
+    ) -> Optional[models.Incidencia]:
+        """Actualizar incidencia (ej. justificada, comentarios)."""
+        inc = db.query(models.Incidencia).filter(models.Incidencia.id == incidencia_id).first()
+        if not inc:
+            return None
+        update_data = data.dict(exclude_unset=True)
+        for k, v in update_data.items():
+            setattr(inc, k, v)
+        db.commit()
+        db.refresh(inc)
+        return inc
+
+    @staticmethod
+    def get_incidencia(db: Session, incidencia_id: int) -> Optional[models.Incidencia]:
+        """Obtener una incidencia por ID."""
+        return db.query(models.Incidencia).filter(models.Incidencia.id == incidencia_id).first()
