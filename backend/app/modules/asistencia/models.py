@@ -149,9 +149,11 @@ class Horario(Base):
     id = Column(Integer, primary_key=True, index=True)
     nombre = Column(String(100), nullable=False)
     hora_entrada = Column(String(10), nullable=False)  # Formato HH:MM
-    hora_salida = Column(String(10), nullable=False)  # Formato HH:MM
+    hora_salida = Column(String(10), nullable=False)   # Formato HH:MM (lunes–viernes)
+    # Sábado: si es NULL el empleado NO trabaja sábados y no se generan incidencias ese día
+    hora_salida_sabado = Column(String(10), nullable=True)
     dias_semana = Column(String(50))  # Ej: "1,2,3,4,5" para lunes a viernes
-    tolerancia_minutos = Column(Integer, default=15)  # Minutos de tolerancia para retardo
+    tolerancia_minutos = Column(Integer, default=15)  # Minutos de tolerancia para retardo y salida anticipada
     activo = Column(Boolean, default=True)
     
     # Timestamps
@@ -171,7 +173,10 @@ class EmpleadoHorario(Base):
     fecha_inicio = Column(DateTime(timezone=True))
     fecha_fin = Column(DateTime(timezone=True), nullable=True)
     activo = Column(Boolean, default=True)
-    
+    # Override por empleado: si es NULL usa el valor del horario base
+    # Si es "" (string vacío) significa que explícitamente NO trabaja sábados
+    hora_salida_sabado = Column(String(10), nullable=True)
+
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     

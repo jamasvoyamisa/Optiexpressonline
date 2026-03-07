@@ -228,7 +228,7 @@ class PersonalService:
     @staticmethod
     def create_empleado(db: Session, empleado: schemas.EmpleadoCreate) -> models.Empleado:
         """Crear nuevo empleado y usuario del sistema (acceso con número de empleado/username y contraseña)."""
-        data = empleado.dict(exclude={"registrar_en_checador", "dispositivo_ids", "password", "horario_id"})
+        data = empleado.dict(exclude={"registrar_en_checador", "dispositivo_ids", "password", "horario_id", "horario_sabado_id"})
         # Resolver username único
         if not data.get("username") or not str(data["username"]).strip():
             data["username"] = _generate_unique_username(
@@ -264,7 +264,7 @@ class PersonalService:
             db_empleado.pin_checador = str(db_empleado.id)
             db.commit()
             db.refresh(db_empleado)
-        # Asignar horario si se proporcionó
+        # Asignar horario L-V si se proporcionó
         if empleado.horario_id:
             try:
                 from app.modules.asistencia import models as asist_models
@@ -278,7 +278,11 @@ class PersonalService:
                 db.add(eh)
                 db.commit()
             except Exception:
-                pass  # No interrumpir la creación del empleado si falla la asignación de horario
+                pass
+        # Guardar horario sabatino (puede ser None = no labora sábados)
+        if empleado.horario_sabado_id is not None:
+            db_empleado.horario_sabado_id = empleado.horario_sabado_id
+            db.commit()
         return db_empleado
     
     @staticmethod

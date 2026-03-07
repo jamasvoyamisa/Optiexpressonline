@@ -138,6 +138,7 @@ class HorarioBase(BaseModel):
     nombre: str
     hora_entrada: str
     hora_salida: str
+    hora_salida_sabado: Optional[str] = None  # None = no trabaja sábados
     dias_semana: Optional[str] = None
     tolerancia_minutos: int = 15
 
@@ -150,6 +151,7 @@ class HorarioUpdate(BaseModel):
     nombre: Optional[str] = None
     hora_entrada: Optional[str] = None
     hora_salida: Optional[str] = None
+    hora_salida_sabado: Optional[str] = None
     dias_semana: Optional[str] = None
     tolerancia_minutos: Optional[int] = None
     activo: Optional[bool] = None
@@ -172,6 +174,7 @@ class EmpleadoHorarioResponse(BaseModel):
     fecha_inicio: Optional[datetime] = None
     fecha_fin: Optional[datetime] = None
     activo: bool
+    hora_salida_sabado: Optional[str] = None
     created_at: datetime
     horario: Optional[HorarioResponse] = None
 

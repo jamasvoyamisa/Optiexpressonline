@@ -104,6 +104,8 @@ class Empleado(Base):
 
     rol_id = Column(Integer, ForeignKey("roles.id"))
     jefe_id = Column(Integer, ForeignKey("empleados.id"), nullable=True)
+    # Horario sabatino: si es NULL el empleado no labora los sábados
+    horario_sabado_id = Column(Integer, ForeignKey("horarios.id"), nullable=True)
 
     estado = Column(Enum(EstadoEmpleado), default=EstadoEmpleado.ACTIVO)
     fecha_ingreso = Column(DateTime(timezone=True))
@@ -117,6 +119,7 @@ class Empleado(Base):
     puesto_rel = relationship("Puesto", back_populates="empleados")
     rol = relationship("Rol", back_populates="empleados")
     jefe = relationship("Empleado", remote_side=[id], foreign_keys=[jefe_id], backref="subordinados")
+    horario_sabado = relationship("Horario", foreign_keys=[horario_sabado_id])
 
     @property
     def departamento(self):

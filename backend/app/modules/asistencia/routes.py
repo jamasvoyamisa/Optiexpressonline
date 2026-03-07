@@ -918,13 +918,23 @@ def delete_horario(
 
 # ========== ASIGNACIÓN DE HORARIO A EMPLEADO ==========
 
+@router.get("/empleados/{empleado_id}/horarios", response_model=list[schemas.EmpleadoHorarioResponse])
+def get_horarios_empleado(
+    empleado_id: int,
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db)
+):
+    """Lista todos los horarios activos del empleado (puede haber varios para días distintos)."""
+    return service.AsistenciaService.get_horarios_activos_empleado(db, empleado_id)
+
+
 @router.get("/empleados/{empleado_id}/horario", response_model=schemas.EmpleadoHorarioResponse)
 def get_horario_empleado(
     empleado_id: int,
     current_extra: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db)
 ):
-    """Obtiene el horario activo del empleado."""
+    """Obtiene el primer horario activo del empleado (compatibilidad)."""
     eh = service.AsistenciaService.get_horario_activo_empleado(db, empleado_id)
     if not eh:
         raise HTTPException(status_code=404, detail="El empleado no tiene horario asignado")
@@ -938,7 +948,11 @@ def assign_horario_empleado(
     current_extra: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db)
 ):
-    """Asigna un horario al empleado. Solo RH y superadmin."""
+    """
+    Asigna un horario al empleado. Solo RH y superadmin.
+    Si el nuevo horario comparte días con uno existente, reemplaza ese bloque de días.
+    Horarios con días distintos coexisten (ej: L-V + Sábado).
+    """
     if not current_extra.get("is_superuser") and not current_extra.get("is_rh"):
         raise HTTPException(status_code=403, detail="Solo RH o superadmin pueden asignar horarios")
     horario = service.AsistenciaService.get_horario(db, body.horario_id)
@@ -947,16 +961,33 @@ def assign_horario_empleado(
     empleado = db.query(personal_models.Empleado).filter(personal_models.Empleado.id == empleado_id).first()
     if not empleado:
         raise HTTPException(status_code=404, detail="Empleado no encontrado")
-    return service.AsistenciaService.assign_horario_empleado(db, empleado_id, body.horario_id)
+    try:
+        return service.AsistenciaService.assign_horario_empleado(db, empleado_id, body.horario_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/empleados/{empleado_id}/horario/{asignacion_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_horario_asignacion(
+    empleado_id: int,
+    asignacion_id: int,
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db)
+):
+    """Quita una asignación de horario específica del empleado. Solo RH y superadmin."""
+    if not current_extra.get("is_superuser") and not current_extra.get("is_rh"):
+        raise HTTPException(status_code=403, detail="Solo RH o superadmin pueden gestionar horarios")
+    if not service.AsistenciaService.remove_horario_empleado(db, empleado_id, asignacion_id):
+        raise HTTPException(status_code=404, detail="Asignación no encontrada")
 
 
 @router.delete("/empleados/{empleado_id}/horario", status_code=status.HTTP_204_NO_CONTENT)
-def remove_horario_empleado(
+def remove_todos_horarios_empleado(
     empleado_id: int,
     current_extra: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db)
 ):
-    """Quita el horario activo del empleado. Solo RH y superadmin."""
+    """Quita TODOS los horarios activos del empleado. Solo RH y superadmin."""
     if not current_extra.get("is_superuser") and not current_extra.get("is_rh"):
         raise HTTPException(status_code=403, detail="Solo RH o superadmin pueden gestionar horarios")
     if not service.AsistenciaService.remove_horario_empleado(db, empleado_id):

@@ -8,6 +8,7 @@ interface FormData extends Omit<EmpleadoCreate, 'registrar_en_checador' | 'dispo
   password?: string;
   username?: string;
   horario_id?: number;
+  horario_sabado_id?: number | null;
 }
 
 interface HorarioSimple {
@@ -22,7 +23,7 @@ const emptyForm: FormData = {
   numero_empleado: '', nombre: '', apellido_paterno: '', apellido_materno: '',
   email: '', telefono: '', username: '', empresa_id: undefined, departamento_id: undefined, puesto_id: undefined, curp: '', rfc: '', nss: '',
   direccion: '', colonia: '', cp: '', ciudad: '', fecha_nacimiento: '', contacto_emergencia: '', telefono_emergencia: '',
-  fecha_ingreso: '', registrar_en_checador: false, dispositivo_ids: [], password: '', horario_id: undefined,
+  fecha_ingreso: '', registrar_en_checador: false, dispositivo_ids: [], password: '', horario_id: undefined, horario_sabado_id: null,
 };
 
 const normalizeStr = (s: string) =>
@@ -87,12 +88,10 @@ const modalLarge: React.CSSProperties = {
 
 // ---- Componente panel horario en perfil de empleado ----
 const HorarioEmpleadoPanel = ({ empleadoId, horarios }: { empleadoId: number; horarios: HorarioSimple[] }) => {
-  const [asignacion, setAsignacion] = useState<{ id: number; horario: HorarioSimple; activo: boolean } | null | 'loading'>('loading');
+  const [asignacion, setAsignacion] = useState<{ id: number; horario: HorarioSimple & { hora_salida_sabado?: string | null }; activo: boolean } | null | 'loading'>('loading');
   const [editMode, setEditMode] = useState(false);
   const [selectedHorarioId, setSelectedHorarioId] = useState<number | ''>('');
   const [saving, setSaving] = useState(false);
-
-  const DIAS_LABEL = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 
   useEffect(() => {
     api.get(`/asistencia/empleados/${empleadoId}/horario`)
@@ -140,6 +139,11 @@ const HorarioEmpleadoPanel = ({ empleadoId, horarios }: { empleadoId: number; ho
           {asignacion ? (
             <span style={{ fontSize: '0.88rem', color: '#1e1b4b' }}>
               {asignacion.horario.nombre} — {asignacion.horario.hora_entrada} a {asignacion.horario.hora_salida}
+              {asignacion.horario.hora_salida_sabado && (
+                <span style={{ marginLeft: '8px', fontSize: '0.8rem', color: '#d97706', fontWeight: 500 }}>
+                  · Sáb hasta {asignacion.horario.hora_salida_sabado}
+                </span>
+              )}
               {asignacion.horario.activo === false && <span style={{ marginLeft: '6px', color: '#dc2626', fontSize: '0.78rem' }}>(inactivo)</span>}
             </span>
           ) : (
@@ -172,16 +176,13 @@ const HorarioEmpleadoPanel = ({ empleadoId, horarios }: { empleadoId: number; ho
             onChange={e => setSelectedHorarioId(e.target.value ? Number(e.target.value) : '')}
           >
             <option value="">-- Seleccione horario --</option>
-            {horarios.map(h => (
-              <option key={h.id} value={h.id}>{h.nombre} ({h.hora_entrada} - {h.hora_salida})</option>
-            ))}
+            {horarios.map(h => {
+              const sabLabel = (h as HorarioSimple & { hora_salida_sabado?: string | null }).hora_salida_sabado
+                ? ` · Sáb hasta ${(h as HorarioSimple & { hora_salida_sabado?: string | null }).hora_salida_sabado}`
+                : ' · Sin sábado';
+              return <option key={h.id} value={h.id}>{h.nombre} ({h.hora_entrada}–{h.hora_salida}{sabLabel})</option>;
+            })}
           </select>
-          {selectedHorarioId && (() => {
-            const h = horarios.find(x => x.id === Number(selectedHorarioId));
-            if (!h || !h.activo) return null;
-            const dias = DIAS_LABEL.join(', ');
-            return <span style={{ fontSize: '0.78rem', color: '#555' }}>{dias}</span>;
-          })()}
           <button
             onClick={handleAsignar}
             disabled={!selectedHorarioId || saving}
@@ -887,7 +888,7 @@ export const PersonalPage = () => {
                       </select>
                     </div>
                     <div>
-                      <label style={labelStyle}>Horario de trabajo</label>
+                      <label style={labelStyle}>Horario de trabajo (Lun–Vie)</label>
                       <select
                         style={inputStyle}
                         value={form.horario_id ?? ''}
@@ -895,12 +896,43 @@ export const PersonalPage = () => {
                       >
                         <option value="">-- Sin horario asignado --</option>
                         {horarios.map(h => (
-                          <option key={h.id} value={h.id}>{h.nombre} ({h.hora_entrada} - {h.hora_salida})</option>
+                          <option key={h.id} value={h.id}>{h.nombre} ({h.hora_entrada} – {h.hora_salida})</option>
                         ))}
                       </select>
                       <span style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '4px', display: 'block' }}>
                         Se usa para detectar retardos y faltas automáticamente
                       </span>
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Horario sábado</label>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                        <input
+                          type="checkbox"
+                          id="chk-trabaja-sabado"
+                          checked={form.horario_sabado_id !== null && form.horario_sabado_id !== undefined}
+                          onChange={e => handleChange('horario_sabado_id', e.target.checked ? (horarios[0]?.id ?? null) : null)}
+                          style={{ width: '15px', height: '15px', cursor: 'pointer' }}
+                        />
+                        <label htmlFor="chk-trabaja-sabado" style={{ fontSize: '0.85rem', color: '#374151', cursor: 'pointer', margin: 0 }}>
+                          ¿Trabaja los sábados?
+                        </label>
+                      </div>
+                      {(form.horario_sabado_id !== null && form.horario_sabado_id !== undefined) ? (
+                        <select
+                          style={{ ...inputStyle, borderColor: '#d97706' }}
+                          value={form.horario_sabado_id ?? ''}
+                          onChange={e => handleChange('horario_sabado_id', e.target.value ? Number(e.target.value) : null)}
+                        >
+                          <option value="">-- Selecciona horario sábado --</option>
+                          {horarios.map(h => (
+                            <option key={h.id} value={h.id}>{h.nombre} ({h.hora_entrada} – {h.hora_salida})</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <span style={{ fontSize: '0.78rem', color: '#6b7280' }}>
+                          No se generarán incidencias los sábados
+                        </span>
+                      )}
                     </div>
                     <div>
                       <label style={labelStyle}>Fecha de ingreso *</label>

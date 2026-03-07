@@ -44,6 +44,7 @@ interface Horario {
   nombre: string;
   hora_entrada: string;
   hora_salida: string;
+  hora_salida_sabado: string | null;
   dias_semana: string | null;
   tolerancia_minutos: number;
   activo: boolean;
@@ -97,9 +98,10 @@ export const ConfiguracionPage = () => {
   const [showHorarioModal, setShowHorarioModal] = useState(false);
   const [editingHorarioId, setEditingHorarioId] = useState<number | null>(null);
   const DIAS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
-  const emptyHorario = { nombre: '', hora_entrada: '08:00', hora_salida: '17:00', tolerancia_minutos: 15, dias_semana: '1,2,3,4,5' };
+  const emptyHorario = { nombre: '', hora_entrada: '08:00', hora_salida: '17:00', hora_salida_sabado: '', tolerancia_minutos: 15, dias_semana: '1,2,3,4,5' };
   const [horarioForm, setHorarioForm] = useState(emptyHorario);
   const [diasSeleccionados, setDiasSeleccionados] = useState<number[]>([1, 2, 3, 4, 5]);
+  const [trabajaSabado, setTrabajaSabado] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -184,17 +186,21 @@ export const ConfiguracionPage = () => {
   const openNewHorario = () => {
     setHorarioForm(emptyHorario);
     setDiasSeleccionados([1, 2, 3, 4, 5]);
+    setTrabajaSabado(false);
     setEditingHorarioId(null);
     setShowHorarioModal(true);
   };
 
   const startEditHorario = (h: Horario) => {
-    const dias = h.dias_semana ? h.dias_semana.split(',').map(Number).filter(Boolean) : [];
+    const tieneSabado = !!h.hora_salida_sabado;
+    setTrabajaSabado(tieneSabado);
+    const dias = h.dias_semana ? h.dias_semana.split(',').map(Number).filter(d => d !== 6).filter(Boolean) : [];
     setDiasSeleccionados(dias);
     setHorarioForm({
       nombre: h.nombre,
       hora_entrada: h.hora_entrada,
       hora_salida: h.hora_salida,
+      hora_salida_sabado: h.hora_salida_sabado || '',
       tolerancia_minutos: h.tolerancia_minutos,
       dias_semana: h.dias_semana || '',
     });
@@ -205,9 +211,15 @@ export const ConfiguracionPage = () => {
   const handleHorarioSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!horarioForm.nombre.trim()) { alert('El nombre del horario es obligatorio'); return; }
+    if (trabajaSabado && !horarioForm.hora_salida_sabado) { alert('Indica la hora de salida del sábado'); return; }
     setSaving(true);
     try {
-      const payload = { ...horarioForm, dias_semana: diasSeleccionados.sort().join(',') };
+      const diasBase = diasSeleccionados.filter(d => d !== 6).sort();
+      const payload = {
+        ...horarioForm,
+        hora_salida_sabado: trabajaSabado ? horarioForm.hora_salida_sabado : null,
+        dias_semana: diasBase.join(','),
+      };
       if (editingHorarioId) {
         await api.put(`/asistencia/horarios/${editingHorarioId}`, payload);
       } else {
@@ -590,20 +602,23 @@ export const ConfiguracionPage = () => {
               <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '10px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
                 <thead>
                   <tr style={{ backgroundColor: '#f8f9fa' }}>
-                    {['Nombre', 'Entrada', 'Salida', 'Tolerancia', 'Días laborables', 'Estado', 'Acciones'].map(h => (
+                    {['Nombre', 'Entrada', 'Salida L-V', 'Salida Sáb', 'Tolerancia', 'Días (L-V)', 'Estado', 'Acciones'].map(h => (
                       <th key={h} style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {horarios.map(h => {
-                    const dias = h.dias_semana ? h.dias_semana.split(',').map(Number) : [];
-                    const diasLabel = dias.map(d => DIAS[d - 1] || '').filter(Boolean).join(', ') || 'Todos';
+                    const dias = h.dias_semana ? h.dias_semana.split(',').map(Number).filter(d => d !== 6) : [];
+                    const diasLabel = dias.map(d => DIAS[d - 1] || '').filter(Boolean).join(', ') || 'L-V';
                     return (
                       <tr key={h.id} style={{ borderBottom: '1px solid #eee' }}>
                         <td style={{ padding: '11px 14px', fontWeight: 500 }}>{h.nombre}</td>
                         <td style={{ padding: '11px 14px', fontFamily: 'monospace', fontWeight: 600, color: '#059669' }}>{h.hora_entrada}</td>
                         <td style={{ padding: '11px 14px', fontFamily: 'monospace', fontWeight: 600, color: '#dc2626' }}>{h.hora_salida}</td>
+                        <td style={{ padding: '11px 14px', fontFamily: 'monospace', fontWeight: 600, color: h.hora_salida_sabado ? '#d97706' : '#9ca3af' }}>
+                          {h.hora_salida_sabado || '—'}
+                        </td>
                         <td style={{ padding: '11px 14px', color: '#555' }}>{h.tolerancia_minutos} min</td>
                         <td style={{ padding: '11px 14px', color: '#555', fontSize: '0.85rem' }}>{diasLabel}</td>
                         <td style={{ padding: '11px 14px' }}>
@@ -649,19 +664,19 @@ export const ConfiguracionPage = () => {
                     <input type="time" style={inputStyle} value={horarioForm.hora_entrada} onChange={e => setHorarioForm(p => ({ ...p, hora_entrada: e.target.value }))} required />
                   </div>
                   <div>
-                    <label style={labelStyle}>Hora de salida *</label>
+                    <label style={labelStyle}>Hora de salida (Lun–Vie) *</label>
                     <input type="time" style={inputStyle} value={horarioForm.hora_salida} onChange={e => setHorarioForm(p => ({ ...p, hora_salida: e.target.value }))} required />
                   </div>
                 </div>
                 <div>
                   <label style={labelStyle}>Tolerancia (minutos)</label>
                   <input type="number" min={0} max={60} style={inputStyle} value={horarioForm.tolerancia_minutos} onChange={e => setHorarioForm(p => ({ ...p, tolerancia_minutos: parseInt(e.target.value) || 0 }))} />
-                  <span style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '4px', display: 'block' }}>Minutos de gracia antes de marcar retardo</span>
+                  <span style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '4px', display: 'block' }}>Aplica a retardo y salida anticipada (mismo valor para todos los días)</span>
                 </div>
                 <div>
-                  <label style={labelStyle}>Días laborables</label>
+                  <label style={labelStyle}>Días laborables (Lun–Vie)</label>
                   <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '4px' }}>
-                    {DIAS.map((d, i) => {
+                    {DIAS.slice(0, 5).map((d, i) => {
                       const num = i + 1;
                       const active = diasSeleccionados.includes(num);
                       return (
@@ -671,6 +686,37 @@ export const ConfiguracionPage = () => {
                       );
                     })}
                   </div>
+                </div>
+
+                {/* ── Sección sábado ── */}
+                <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '12px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', color: '#374151' }}>
+                    <input
+                      type="checkbox"
+                      checked={trabajaSabado}
+                      onChange={e => { setTrabajaSabado(e.target.checked); if (!e.target.checked) setHorarioForm(p => ({ ...p, hora_salida_sabado: '' })); }}
+                      style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                    />
+                    ¿Trabaja los sábados?
+                  </label>
+                  {trabajaSabado && (
+                    <div style={{ marginTop: '10px', display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                      <div>
+                        <label style={labelStyle}>Hora de entrada sábado</label>
+                        <span style={{ fontSize: '0.78rem', color: '#6b7280', display: 'block', marginBottom: '4px' }}>Usa la misma hora de entrada general</span>
+                        <input type="time" style={{ ...inputStyle, backgroundColor: '#f3f4f6', color: '#9ca3af' }} value={horarioForm.hora_entrada} disabled />
+                      </div>
+                      <div>
+                        <label style={labelStyle}>Hora de salida sábado *</label>
+                        <input type="time" style={{ ...inputStyle, borderColor: '#d97706' }} value={horarioForm.hora_salida_sabado || ''} onChange={e => setHorarioForm(p => ({ ...p, hora_salida_sabado: e.target.value }))} required={trabajaSabado} />
+                      </div>
+                    </div>
+                  )}
+                  {!trabajaSabado && (
+                    <p style={{ fontSize: '0.78rem', color: '#6b7280', margin: '6px 0 0 24px' }}>
+                      El sábado NO es laborable — no se generarán incidencias ese día.
+                    </p>
+                  )}
                 </div>
               </div>
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>

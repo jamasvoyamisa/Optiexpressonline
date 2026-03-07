@@ -140,8 +140,9 @@ class EmpleadoCreate(EmpleadoBase):
     estado: EstadoEmpleado = EstadoEmpleado.ACTIVO
     registrar_en_checador: Optional[bool] = False
     dispositivo_ids: Optional[list] = None
-    password: Optional[str] = None  # Contraseña inicial para acceso al sistema; si no se envía, se usa el número de empleado
-    horario_id: Optional[int] = None  # Horario a asignar al crear el empleado
+    password: Optional[str] = None
+    horario_id: Optional[int] = None        # Horario L-V a asignar al crear el empleado
+    horario_sabado_id: Optional[int] = None  # Horario sábado (None = no labora sábados)
 
 
 class EmpleadoUpdate(BaseModel):
@@ -166,10 +167,11 @@ class EmpleadoUpdate(BaseModel):
     telefono_emergencia: Optional[str] = None
     rol_id: Optional[int] = None
     jefe_id: Optional[int] = None
+    horario_sabado_id: Optional[int] = None  # None = no labora sábados; enviar explícitamente para cambiar
     estado: Optional[EstadoEmpleado] = None
     fecha_ingreso: Optional[datetime] = None
     fecha_baja: Optional[datetime] = None
-    password: Optional[str] = None  # Nueva contraseña para acceso al sistema (opcional)
+    password: Optional[str] = None
 
 
 class EmpleadoResponse(EmpleadoBase):

@@ -490,19 +490,45 @@ class AsistenciaService:
     # ========== ASIGNACIÓN DE HORARIO A EMPLEADO ==========
 
     @staticmethod
+    def _dias_set(dias_semana: Optional[str]) -> set:
+        """Convierte el string '1,2,3,4,5' en un set {1,2,3,4,5}. Sin string = todos los días."""
+        if not dias_semana:
+            return {1, 2, 3, 4, 5, 6, 7}
+        return {int(d.strip()) for d in dias_semana.split(",") if d.strip().isdigit()}
+
+    @staticmethod
     def assign_horario_empleado(
         db: Session, empleado_id: int, horario_id: int
     ) -> models.EmpleadoHorario:
-        """Asigna un horario al empleado desactivando el anterior si existe."""
+        """
+        Asigna un horario al empleado.
+        Si el nuevo horario comparte días con uno existente, desactiva el existente primero.
+        Horarios con días distintos coexisten (ej: L-V + Sábado).
+        """
         from datetime import datetime
-        # Desactivar asignaciones previas
-        db.query(models.EmpleadoHorario).filter(
-            models.EmpleadoHorario.empleado_id == empleado_id,
-            models.EmpleadoHorario.activo == True,
-        ).update(
-            {models.EmpleadoHorario.activo: False, models.EmpleadoHorario.fecha_fin: datetime.utcnow()},
-            synchronize_session=False,
+        from sqlalchemy.orm import joinedload
+
+        nuevo_horario = db.query(models.Horario).filter(models.Horario.id == horario_id).first()
+        if not nuevo_horario:
+            raise ValueError("Horario no encontrado")
+
+        nuevos_dias = AsistenciaService._dias_set(nuevo_horario.dias_semana)
+
+        # Desactivar solo asignaciones activas que compartan días con el nuevo horario
+        activas = (
+            db.query(models.EmpleadoHorario)
+            .options(joinedload(models.EmpleadoHorario.horario))
+            .filter(
+                models.EmpleadoHorario.empleado_id == empleado_id,
+                models.EmpleadoHorario.activo == True,
+            )
+            .all()
         )
+        for asig in activas:
+            if asig.horario and (AsistenciaService._dias_set(asig.horario.dias_semana) & nuevos_dias):
+                asig.activo = False
+                asig.fecha_fin = datetime.utcnow()
+
         eh = models.EmpleadoHorario(
             empleado_id=empleado_id,
             horario_id=horario_id,
@@ -515,8 +541,22 @@ class AsistenciaService:
         return eh
 
     @staticmethod
+    def get_horarios_activos_empleado(db: Session, empleado_id: int) -> list:
+        """Devuelve TODAS las asignaciones de horario activas del empleado (puede haber varias para días distintos)."""
+        from sqlalchemy.orm import joinedload
+        return (
+            db.query(models.EmpleadoHorario)
+            .options(joinedload(models.EmpleadoHorario.horario))
+            .filter(
+                models.EmpleadoHorario.empleado_id == empleado_id,
+                models.EmpleadoHorario.activo == True,
+            )
+            .all()
+        )
+
+    @staticmethod
     def get_horario_activo_empleado(db: Session, empleado_id: int) -> Optional[models.EmpleadoHorario]:
-        """Devuelve la asignación de horario activa para el empleado."""
+        """Devuelve la primera asignación activa (compatibilidad con código existente)."""
         from sqlalchemy.orm import joinedload
         return (
             db.query(models.EmpleadoHorario)
@@ -529,13 +569,20 @@ class AsistenciaService:
         )
 
     @staticmethod
-    def remove_horario_empleado(db: Session, empleado_id: int) -> bool:
-        """Quita el horario activo del empleado."""
+    def remove_horario_empleado(db: Session, empleado_id: int, asignacion_id: Optional[int] = None) -> bool:
+        """
+        Quita horario(s) activo(s) del empleado.
+        Si se pasa asignacion_id, quita solo esa asignación específica.
+        Si no, quita todas las asignaciones activas.
+        """
         from datetime import datetime
-        updated = db.query(models.EmpleadoHorario).filter(
+        query = db.query(models.EmpleadoHorario).filter(
             models.EmpleadoHorario.empleado_id == empleado_id,
             models.EmpleadoHorario.activo == True,
-        ).update(
+        )
+        if asignacion_id:
+            query = query.filter(models.EmpleadoHorario.id == asignacion_id)
+        updated = query.update(
             {models.EmpleadoHorario.activo: False, models.EmpleadoHorario.fecha_fin: datetime.utcnow()},
             synchronize_session=False,
         )
@@ -646,18 +693,49 @@ class AsistenciaService:
         creadas = 0
         omitidas = 0
 
+        # Pre-cargar los empleados para acceder a horario_sabado_id
+        empleado_ids = {asig.empleado_id for asig in asignaciones}
+        from app.modules.personal import models as personal_models
+        empleados_map = {
+            e.id: e for e in db.query(personal_models.Empleado).filter(
+                personal_models.Empleado.id.in_(empleado_ids)
+            ).all()
+        } if empleado_ids else {}
+
         for asig in asignaciones:
             horario = asig.horario
             if not horario or not horario.activo:
                 continue
 
-            # Verificar si el horario aplica ese día
-            if horario.dias_semana:
-                dias_permitidos = [int(d.strip()) for d in horario.dias_semana.split(",") if d.strip().isdigit()]
-                # dias_semana usa 1=lunes…7=domingo (convención frontend); convertimos weekday (0=lun)
-                dia_num = dia_semana + 1  # 1-7
-                if dia_num not in dias_permitidos:
+            # dias_semana usa 1=lunes…7=domingo; weekday() devuelve 0=lun…6=dom
+            dia_num = dia_semana + 1  # 1–7
+
+            # ── Sábado (dia_num == 6): lógica especial ──
+            if dia_num == 6:
+                empleado = empleados_map.get(asig.empleado_id)
+                # Si el empleado no tiene horario sabatino asignado → no labora → sin incidencia
+                if not empleado or not empleado.horario_sabado_id:
                     continue
+                # Cargar el horario sabatino
+                horario_sab = db.query(models.Horario).filter(
+                    models.Horario.id == empleado.horario_sabado_id,
+                    models.Horario.activo == True,
+                ).first()
+                if not horario_sab:
+                    continue
+                hora_salida_efectiva = horario_sab.hora_salida
+                tolerancia_efectiva = horario_sab.tolerancia_minutos or 0
+            else:
+                # Verificar si el día está incluido en dias_semana
+                if horario.dias_semana:
+                    dias_permitidos = [int(d.strip()) for d in horario.dias_semana.split(",") if d.strip().isdigit()]
+                    if dia_num not in dias_permitidos:
+                        continue
+                hora_salida_efectiva = horario.hora_salida
+                tolerancia_efectiva = horario.tolerancia_minutos or 0
+
+            # Sábado: solo 2 checadas requeridas (entrada + salida, sin comida)
+            checadas_requeridas = 2 if dia_num == 6 else 4
 
             # Contar checadas del empleado ese día
             checadas = db.query(models.Asistencia).filter(
@@ -666,18 +744,67 @@ class AsistenciaService:
                 models.Asistencia.timestamp < dia_fin,
             ).count()
 
-            if checadas >= 4:
+            if checadas >= checadas_requeridas:
+                # ── Verificar salida anticipada ──
+                salida_real = db.query(models.Asistencia).filter(
+                    models.Asistencia.empleado_id == asig.empleado_id,
+                    models.Asistencia.timestamp >= dia_inicio,
+                    models.Asistencia.timestamp < dia_fin,
+                    models.Asistencia.tipo == models.TipoChecada.SALIDA,
+                ).order_by(models.Asistencia.timestamp.desc()).first()
+
+                if salida_real:
+                    partes = hora_salida_efectiva.split(":")
+                    hora_sal_prog = datetime(
+                        fecha.year, fecha.month, fecha.day,
+                        int(partes[0]), int(partes[1]), 0
+                    )
+                    tolerancia_sa = timedelta(minutes=tolerancia_efectiva)
+                    ts_salida = salida_real.timestamp.replace(tzinfo=None)
+
+                    if ts_salida < hora_sal_prog - tolerancia_sa:
+                        minutos_antes = int((hora_sal_prog - ts_salida).total_seconds() / 60)
+
+                        existe_sa = db.query(models.Incidencia).filter(
+                            models.Incidencia.empleado_id == asig.empleado_id,
+                            models.Incidencia.fecha >= dia_inicio,
+                            models.Incidencia.fecha < dia_fin,
+                            models.Incidencia.tipo == models.TipoIncidencia.SALIDA_ANTICIPADA,
+                            models.Incidencia.origen == "automatico",
+                        ).first()
+
+                        if not existe_sa:
+                            db.add(models.Incidencia(
+                                empleado_id=asig.empleado_id,
+                                tipo=models.TipoIncidencia.SALIDA_ANTICIPADA,
+                                fecha=dia_inicio,
+                                descripcion=(
+                                    f"Salida anticipada: registró salida a las "
+                                    f"{ts_salida.strftime('%H:%M')} "
+                                    f"({minutos_antes} min antes de las {hora_salida_efectiva})"
+                                ),
+                                justificada=False,
+                                origen="automatico",
+                            ))
+                            creadas += 1
                 continue
 
             # Determinar descripción según checadas faltantes
-            if checadas == 0:
-                descripcion = "No se presentó (sin checadas)"
-            elif checadas == 1:
-                descripcion = "Solo registró entrada. Faltan: salida a comer, regreso de comer y salida"
-            elif checadas == 2:
-                descripcion = "Faltan: regreso de comer y salida"
-            else:  # 3
-                descripcion = "Falta checada de salida"
+            if dia_num == 6:
+                # Sábado: solo entrada y salida
+                if checadas == 0:
+                    descripcion = "No se presentó (sin checadas)"
+                else:  # 1
+                    descripcion = "Solo registró entrada. Falta checada de salida"
+            else:
+                if checadas == 0:
+                    descripcion = "No se presentó (sin checadas)"
+                elif checadas == 1:
+                    descripcion = "Solo registró entrada. Faltan: salida a comer, regreso de comer y salida"
+                elif checadas == 2:
+                    descripcion = "Faltan: regreso de comer y salida"
+                else:  # 3
+                    descripcion = "Falta checada de salida"
 
             tipo = models.TipoIncidencia.FALTA
 
