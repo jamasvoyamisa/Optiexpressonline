@@ -58,23 +58,24 @@ def festivos_lft(year):
 
 
 def upgrade():
-    op.create_table(
-        'dias_festivos',
-        sa.Column('id',         sa.Integer(), nullable=False),
-        sa.Column('fecha',      sa.Date(),    nullable=False),
-        sa.Column('nombre',     sa.String(150), nullable=False),
-        sa.Column('tipo',       sa.String(20),  nullable=False, server_default='LFT'),
-        sa.Column('activo',     sa.Boolean(),   nullable=False, server_default=sa.true()),
-        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
-        sa.Column('updated_at', sa.DateTime(timezone=True), onupdate=sa.func.now()),
-        sa.PrimaryKeyConstraint('id'),
-        sa.UniqueConstraint('fecha', name='uq_dias_festivos_fecha'),
-    )
-    op.create_index('ix_dias_festivos_fecha', 'dias_festivos', ['fecha'])
-    op.create_index('ix_dias_festivos_id',    'dias_festivos', ['id'])
+    conn = op.get_bind()
+    if not conn.execute(sa.text("SHOW TABLES LIKE 'dias_festivos'")).fetchone():
+        op.create_table(
+            'dias_festivos',
+            sa.Column('id',         sa.Integer(), nullable=False),
+            sa.Column('fecha',      sa.Date(),    nullable=False),
+            sa.Column('nombre',     sa.String(150), nullable=False),
+            sa.Column('tipo',       sa.String(20),  nullable=False, server_default='LFT'),
+            sa.Column('activo',     sa.Boolean(),   nullable=False, server_default=sa.true()),
+            sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now()),
+            sa.Column('updated_at', sa.DateTime(timezone=True), onupdate=sa.func.now()),
+            sa.PrimaryKeyConstraint('id'),
+            sa.UniqueConstraint('fecha', name='uq_dias_festivos_fecha'),
+        )
+        op.create_index('ix_dias_festivos_fecha', 'dias_festivos', ['fecha'])
+        op.create_index('ix_dias_festivos_id',    'dias_festivos', ['id'])
 
     # Insertar festivos para 2025 y 2026
-    conn = op.get_bind()
     seen = set()
     for year in (2025, 2026):
         for fecha, nombre, tipo in festivos_lft(year):

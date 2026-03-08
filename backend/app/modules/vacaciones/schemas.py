@@ -40,6 +40,7 @@ class SolicitudVacacionesResponse(SolicitudVacacionesBase):
     estado: EstadoSolicitud
     jefe_aprobador_id: Optional[int] = None
     jefe_aprobador_nombre: Optional[str] = None  # Quien autorizó (llenado en ruta)
+    aprobador_es_jefe_directo: Optional[bool] = None  # True=jefe directo, False=admin/otro
     fecha_aprobacion: Optional[datetime] = None
     comentarios_aprobacion: Optional[str] = None
     created_at: datetime

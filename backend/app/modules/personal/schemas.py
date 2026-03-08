@@ -174,6 +174,21 @@ class EmpleadoUpdate(BaseModel):
     password: Optional[str] = None
 
 
+class EmpleadoJefeResponse(BaseModel):
+    """Schema plano para el jefe directo, sin anidar otro jefe (evita recursión infinita)."""
+    id: int
+    numero_empleado: str
+    nombre: str
+    apellido_paterno: Optional[str] = None
+    apellido_materno: Optional[str] = None
+    email: Optional[str] = None
+    puesto_id: Optional[int] = None
+    puesto: Optional[PuestoResponse] = None
+
+    class Config:
+        from_attributes = True
+
+
 class EmpleadoResponse(EmpleadoBase):
     id: int
     estado: EstadoEmpleado
@@ -182,13 +197,10 @@ class EmpleadoResponse(EmpleadoBase):
     created_at: datetime
     updated_at: Optional[datetime] = None
     rol: Optional[RolResponse] = None
-    jefe: Optional['EmpleadoResponse'] = None
+    jefe: Optional[EmpleadoJefeResponse] = None
     empresa: Optional[EmpresaResponse] = None
     departamento: Optional[DepartamentoResponse] = None
     puesto: Optional[PuestoResponse] = None
 
     class Config:
         from_attributes = True
-
-
-EmpleadoResponse.model_rebuild()

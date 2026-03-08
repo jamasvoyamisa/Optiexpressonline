@@ -7,6 +7,7 @@ from app.core.database import Base
 
 class EstadoSolicitud(str, enum.Enum):
     PENDIENTE = "pendiente"
+    APROBADA_JEFE = "aprobada_jefe"   # Aprobada por jefe directo, pendiente confirmación RH
     APROBADA = "aprobada"
     RECHAZADA = "rechazada"
     CANCELADA = "cancelada"

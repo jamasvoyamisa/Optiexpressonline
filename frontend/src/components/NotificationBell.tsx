@@ -1,0 +1,360 @@
+import { useState, useEffect, useRef, useCallback } from 'react';
+import api from '../services/api';
+import type { Dispositivo } from '../types';
+
+interface Notificacion {
+  id: number;
+  titulo: string;
+  mensaje?: string | null;
+  tipo: string;
+  referencia_id?: number | null;
+  leida: boolean;
+  created_at: string;
+}
+
+interface Props {
+  dispositivos?: Dispositivo[];
+}
+
+const TIPO_ICON: Record<string, string> = {
+  nueva_solicitud: '📋',
+  solicitud_aprobada_jefe: '✅',
+  solicitud_aprobada: '🎉',
+  solicitud_rechazada: '❌',
+  solicitud_pendiente_rh: '⏳',
+};
+
+const TIPO_COLOR: Record<string, string> = {
+  nueva_solicitud: '#3b82f6',
+  solicitud_aprobada_jefe: '#f59e0b',
+  solicitud_aprobada: '#10b981',
+  solicitud_rechazada: '#ef4444',
+  solicitud_pendiente_rh: '#8b5cf6',
+};
+
+const MS_1_DIA = 24 * 60 * 60 * 1000;
+
+function timeAgo(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr.endsWith('Z') || dateStr.includes('+') ? dateStr : dateStr + 'Z').getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'ahora';
+  if (mins < 60) return `hace ${mins} min`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `hace ${hrs} h`;
+  const days = Math.floor(hrs / 24);
+  return `hace ${days} día${days > 1 ? 's' : ''}`;
+}
+
+export const NotificationBell = ({ dispositivos = [] }: Props) => {
+  const inactivos = dispositivos.filter(d => !d.activo);
+  const sinConexion = dispositivos.filter(d => {
+    const u = d.ultima_sync_agente;
+    if (!u) return true;
+    const diff = Date.now() - new Date(u.endsWith('Z') || u.includes('+') ? u : u + 'Z').getTime();
+    return diff > MS_1_DIA;
+  });
+  const totalAlertas = new Set([...inactivos.map(d => d.id), ...sinConexion.map(d => d.id)]).size;
+  const [open, setOpen] = useState(false);
+  const [notificaciones, setNotificaciones] = useState<Notificacion[]>([]);
+  const [noLeidas, setNoLeidas] = useState(0);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const cargar = useCallback(async () => {
+    try {
+      const res = await api.get<{ total_no_leidas: number; notificaciones: Notificacion[] }>(
+        '/notificaciones/mis-notificaciones?limit=30',
+      );
+      setNotificaciones(res.data.notificaciones);
+      setNoLeidas(res.data.total_no_leidas);
+    } catch {
+      // silencioso
+    }
+  }, []);
+
+  useEffect(() => {
+    cargar();
+    intervalRef.current = setInterval(cargar, 30000);
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, [cargar]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handleClick = (e: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, [open]);
+
+  const marcarLeida = async (id: number) => {
+    try {
+      await api.put(`/notificaciones/${id}/leer`);
+      setNotificaciones(prev => prev.map(n => n.id === id ? { ...n, leida: true } : n));
+      setNoLeidas(prev => Math.max(0, prev - 1));
+    } catch { /* silencioso */ }
+  };
+
+  const marcarTodasLeidas = async () => {
+    try {
+      await api.put('/notificaciones/marcar-todas-leidas');
+      setNotificaciones(prev => prev.map(n => ({ ...n, leida: true })));
+      setNoLeidas(0);
+    } catch { /* silencioso */ }
+  };
+
+  return (
+    <div style={{ position: 'relative' }} ref={panelRef}>
+      {/* Botón campana */}
+      <button
+        type="button"
+        onClick={() => { setOpen(v => !v); if (!open) cargar(); }}
+        title="Notificaciones"
+        style={{
+          background: 'rgba(255,255,255,0.1)',
+          border: 'none',
+          borderRadius: '8px',
+          cursor: 'pointer',
+          padding: '6px 8px',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          position: 'relative',
+          transition: 'background 0.15s',
+        }}
+        onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.2)')}
+        onMouseLeave={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.1)')}
+      >
+        <span style={{ fontSize: '1.25rem', lineHeight: 1 }}>🔔</span>
+        {(noLeidas + totalAlertas) > 0 && (
+          <span style={{
+            position: 'absolute',
+            top: '2px',
+            right: '2px',
+            minWidth: '16px',
+            height: '16px',
+            padding: '0 4px',
+            borderRadius: '8px',
+            backgroundColor: '#ef4444',
+            color: 'white',
+            fontSize: '0.65rem',
+            fontWeight: 700,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            lineHeight: 1,
+          }}>
+            {(noLeidas + totalAlertas) > 99 ? '99+' : (noLeidas + totalAlertas)}
+          </span>
+        )}
+      </button>
+
+      {/* Panel desplegable */}
+      {open && (
+        <div style={{
+          position: 'absolute',
+          top: 'calc(100% + 8px)',
+          right: 0,
+          width: '340px',
+          maxHeight: '480px',
+          overflowY: 'auto',
+          backgroundColor: 'white',
+          borderRadius: '10px',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
+          zIndex: 1000,
+          border: '1px solid #e5e7eb',
+        }}>
+          {/* Encabezado */}
+          <div style={{
+            padding: '12px 14px',
+            borderBottom: '1px solid #e5e7eb',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            position: 'sticky',
+            top: 0,
+            backgroundColor: 'white',
+            zIndex: 1,
+          }}>
+            <span style={{ fontWeight: 700, fontSize: '0.9rem', color: '#1f2937' }}>
+              Notificaciones{(noLeidas + totalAlertas) > 0 && <span style={{ color: '#ef4444' }}> ({noLeidas + totalAlertas})</span>}
+            </span>
+            {noLeidas > 0 && (
+              <button
+                type="button"
+                onClick={marcarTodasLeidas}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: '0.75rem',
+                  color: '#6366f1',
+                  fontWeight: 600,
+                  padding: '2px 6px',
+                }}
+              >
+                Marcar todas leídas
+              </button>
+            )}
+          </div>
+
+          {/* ── Alertas de dispositivos (solo admin) ── */}
+          {totalAlertas > 0 && (
+            <div style={{ borderBottom: '1px solid #e5e7eb' }}>
+              <div style={{
+                padding: '8px 14px 4px',
+                fontSize: '0.7rem',
+                fontWeight: 700,
+                textTransform: 'uppercase',
+                letterSpacing: '0.06em',
+                color: '#b45309',
+                backgroundColor: '#fffbeb',
+              }}>
+                ⚠️ Alertas de dispositivos
+              </div>
+              {inactivos.map(d => (
+                <div key={`inactivo-${d.id}`} style={{
+                  padding: '8px 14px',
+                  borderBottom: '1px solid #f3f4f6',
+                  backgroundColor: '#fef2f2',
+                  display: 'flex',
+                  gap: '10px',
+                  alignItems: 'center',
+                }}>
+                  <div style={{
+                    width: '34px', height: '34px', borderRadius: '50%',
+                    backgroundColor: '#fee2e2', display: 'flex', alignItems: 'center',
+                    justifyContent: 'center', flexShrink: 0, fontSize: '1rem',
+                  }}>🔴</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '0.82rem', fontWeight: 600, color: '#991b1b' }}>
+                      Dispositivo inactivo
+                    </div>
+                    <div style={{ fontSize: '0.77rem', color: '#b91c1c' }}>
+                      {d.nombre}{d.ubicacion ? ` · ${d.ubicacion}` : ''}
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {sinConexion.filter(d => d.activo).map(d => (
+                <div key={`sync-${d.id}`} style={{
+                  padding: '8px 14px',
+                  borderBottom: '1px solid #f3f4f6',
+                  backgroundColor: '#fffbeb',
+                  display: 'flex',
+                  gap: '10px',
+                  alignItems: 'center',
+                }}>
+                  <div style={{
+                    width: '34px', height: '34px', borderRadius: '50%',
+                    backgroundColor: '#fef3c7', display: 'flex', alignItems: 'center',
+                    justifyContent: 'center', flexShrink: 0, fontSize: '1rem',
+                  }}>🟡</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: '0.82rem', fontWeight: 600, color: '#92400e' }}>
+                      Sin conexión +1 día
+                    </div>
+                    <div style={{ fontSize: '0.77rem', color: '#b45309' }}>
+                      {d.nombre}{d.ubicacion ? ` · ${d.ubicacion}` : ''}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* ── Notificaciones del sistema ── */}
+          {notificaciones.length > 0 && (
+            <div style={{
+              padding: '8px 14px 4px',
+              fontSize: '0.7rem',
+              fontWeight: 700,
+              textTransform: 'uppercase',
+              letterSpacing: '0.06em',
+              color: '#6b7280',
+              backgroundColor: '#f9fafb',
+            }}>
+              Actividad reciente
+            </div>
+          )}
+          {notificaciones.length === 0 && totalAlertas === 0 ? (
+            <div style={{ padding: '24px 16px', textAlign: 'center', color: '#9ca3af', fontSize: '0.85rem' }}>
+              No hay notificaciones
+            </div>
+          ) : notificaciones.length === 0 ? null : (
+            <div>
+              {notificaciones.map(n => (
+                <div
+                  key={n.id}
+                  onClick={() => { if (!n.leida) marcarLeida(n.id); }}
+                  style={{
+                    padding: '10px 14px',
+                    borderBottom: '1px solid #f3f4f6',
+                    cursor: n.leida ? 'default' : 'pointer',
+                    backgroundColor: n.leida ? 'white' : '#f0f4ff',
+                    transition: 'background 0.1s',
+                    display: 'flex',
+                    gap: '10px',
+                    alignItems: 'flex-start',
+                  }}
+                  onMouseEnter={e => { if (!n.leida) (e.currentTarget as HTMLDivElement).style.backgroundColor = '#e8eeff'; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = n.leida ? 'white' : '#f0f4ff'; }}
+                >
+                  {/* Ícono de tipo */}
+                  <div style={{
+                    width: '34px',
+                    height: '34px',
+                    borderRadius: '50%',
+                    backgroundColor: `${TIPO_COLOR[n.tipo] ?? '#6b7280'}18`,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                    fontSize: '1rem',
+                  }}>
+                    {TIPO_ICON[n.tipo] ?? '🔔'}
+                  </div>
+
+                  {/* Contenido */}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{
+                      fontSize: '0.82rem',
+                      fontWeight: n.leida ? 500 : 700,
+                      color: '#1f2937',
+                      marginBottom: '2px',
+                      lineHeight: 1.3,
+                    }}>
+                      {n.titulo}
+                    </div>
+                    {n.mensaje && (
+                      <div style={{ fontSize: '0.77rem', color: '#6b7280', lineHeight: 1.4, marginBottom: '3px' }}>
+                        {n.mensaje}
+                      </div>
+                    )}
+                    <div style={{ fontSize: '0.7rem', color: '#9ca3af' }}>
+                      {timeAgo(n.created_at)}
+                    </div>
+                  </div>
+
+                  {/* Indicador no leída */}
+                  {!n.leida && (
+                    <div style={{
+                      width: '8px',
+                      height: '8px',
+                      borderRadius: '50%',
+                      backgroundColor: '#6366f1',
+                      flexShrink: 0,
+                      marginTop: '5px',
+                    }} />
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};

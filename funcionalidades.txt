@@ -1,0 +1,168 @@
+================================================================================
+  OPTIEXPRESS ONLINE — REGLAS DE CREACIÓN DE USUARIO DEL SISTEMA
+================================================================================
+
+--------------------------------------------------------------------------------
+1. CAMPOS OBLIGATORIOS
+--------------------------------------------------------------------------------
+Los siguientes campos son requeridos y no pueden estar vacíos ni ser solo espacios.
+Si alguno falta, el sistema responde con error 400:
+
+  • numero_empleado   — Identificador del empleado dentro de la empresa
+  • nombre            — Nombre(s) del empleado
+  • apellido_paterno  — Apellido paterno
+  • apellido_materno  — Apellido materno
+  • fecha_nacimiento  — Fecha de nacimiento
+  • empresa_id        — ID de la empresa a la que pertenece
+  • departamento_id   — ID del departamento
+  • puesto_id         — ID del puesto
+  • fecha_ingreso     — Fecha de alta en la empresa
+
+--------------------------------------------------------------------------------
+2. CAMPOS OPCIONALES
+--------------------------------------------------------------------------------
+  • email                 (debe ser formato válido si se envía: usuario@dominio.com)
+  • telefono
+  • username              (si no se envía, se genera automáticamente)
+  • password              (si no se envía, se asigna contraseña por defecto)
+  • curp                  (máx. 18 caracteres)
+  • rfc                   (máx. 13 caracteres)
+  • nss                   (máx. 11 caracteres)
+  • direccion / colonia / cp / ciudad
+  • contacto_emergencia / telefono_emergencia
+  • rol_id                (debe existir en el catálogo de roles)
+  • jefe_id               (debe existir como empleado en el sistema)
+  • horario_id            (horario de lunes a viernes)
+  • horario_sabado_id     (horario de sábado; NULL = no labora sábados)
+  • registrar_en_checador (true/false, default: false)
+  • dispositivo_ids       (lista de IDs de dispositivos checadores)
+  • estado                (activo | inactivo | baja; default: activo)
+
+--------------------------------------------------------------------------------
+3. REGLAS DE UNICIDAD
+--------------------------------------------------------------------------------
+Los siguientes campos deben ser únicos o se rechazará la creación:
+
+  • numero_empleado  → Único POR EMPRESA (puede repetirse en empresas distintas)
+  • email            → Único global en todo el sistema
+  • username         → Único global en todo el sistema
+  • pin_checador     → Único global (asignado automáticamente)
+
+--------------------------------------------------------------------------------
+4. LONGITUDES MÁXIMAS DE CAMPOS
+--------------------------------------------------------------------------------
+  Campo                  Longitud máxima
+  ─────────────────────────────────────
+  numero_empleado        50 caracteres
+  nombre                 100 caracteres
+  apellido_paterno       100 caracteres
+  apellido_materno       100 caracteres
+  email                  255 caracteres
+  telefono               20 caracteres
+  username               100 caracteres
+  curp                   18 caracteres
+  rfc                    13 caracteres
+  nss                    11 caracteres
+  direccion              500 caracteres
+  colonia                200 caracteres
+  cp                     10 caracteres
+  ciudad                 200 caracteres
+  contacto_emergencia    200 caracteres
+  telefono_emergencia    20 caracteres
+  pin_checador           20 caracteres
+
+--------------------------------------------------------------------------------
+5. REGLAS DEL USERNAME
+--------------------------------------------------------------------------------
+  • Si NO se envía username, se genera automáticamente con la fórmula:
+      [primera letra del nombre] + [apellido paterno completo]
+      Ejemplo: nombre="Juan", apellido="García" → username="jgarcia"
+
+  • El texto se normaliza: sin acentos, todo minúsculas, solo [a-z0-9]
+
+  • Si el username generado ya existe, se agrega sufijo numérico:
+      jgarcia → jgarcia2 → jgarcia3 → ...
+
+  • Si se envía un username ya ocupado, el sistema lo ignora y genera
+    uno automático.
+
+--------------------------------------------------------------------------------
+6. REGLAS DE CONTRASEÑA
+--------------------------------------------------------------------------------
+  El sistema asigna contraseña inicial con el siguiente orden de prioridad:
+
+    1. Si se envía `password` (no vacío)  → se usa ese valor
+    2. Si tiene RFC                        → se usan los primeros 8 caracteres del RFC
+    3. Si no hay RFC                       → se usa el número de empleado
+
+  • Algoritmo de hash: SHA-256
+  • NO hay longitud mínima ni reglas de complejidad actualmente
+  • El empleado puede cambiarla después desde su perfil
+
+--------------------------------------------------------------------------------
+7. REGLAS DEL NÚMERO DE EMPLEADO
+--------------------------------------------------------------------------------
+  • Acepta cualquier texto (no es obligatorio que sea numérico)
+  • Único dentro de la misma empresa
+  • El sistema ofrece el siguiente número disponible automáticamente:
+      - Busca huecos en los números enteros existentes
+      - Devuelve con formato de 3 dígitos con ceros: 001, 002, 015, etc.
+      - Solo considera números_empleado que sean dígitos puros
+
+--------------------------------------------------------------------------------
+8. PIN CHECADOR (asignado automáticamente)
+--------------------------------------------------------------------------------
+  • El sistema asigna el PIN automáticamente; el cliente nunca lo envía
+  • Cada empresa tiene un bloque de 1000 PINs:
+      Empresa 1: PINs 1–1000
+      Empresa 2: PINs 1001–2000
+      Empresa 3: PINs 2001–3000
+      ... y así sucesivamente
+  • Si el pool de la empresa se agota → error en la creación
+  • Si la empresa no tiene rango configurado → se usa el ID del empleado como fallback
+
+--------------------------------------------------------------------------------
+9. VALIDACIONES DE INTEGRIDAD REFERENCIAL
+--------------------------------------------------------------------------------
+  • rol_id    → Si se envía, el rol debe existir. Error: "El rol especificado no existe"
+  • jefe_id   → Si se envía, el empleado debe existir. Error: "El jefe especificado no existe"
+
+--------------------------------------------------------------------------------
+10. ESTADOS DEL EMPLEADO
+--------------------------------------------------------------------------------
+  Valores válidos para el campo `estado`:
+
+    activo   → Empleado activo (valor por defecto al crear)
+    inactivo → Deshabilitado temporalmente (sin acceso al sistema)
+    baja     → Dado de baja definitivamente
+
+--------------------------------------------------------------------------------
+11. REGISTRO EN DISPOSITIVOS CHECADORES
+--------------------------------------------------------------------------------
+  Si se envía `registrar_en_checador=true` junto con `dispositivo_ids`:
+  • Se encola al empleado en cada dispositivo especificado
+  • Se usa el pin_checador y nombre completo recién asignados
+  • Los errores de encolamiento NO abortan la creación del empleado
+
+--------------------------------------------------------------------------------
+12. ASIGNACIÓN DE HORARIOS AL CREAR
+--------------------------------------------------------------------------------
+  • horario_id        → Si se provee, se crea un registro de horario L–V activo
+                        con fecha_inicio = ahora (UTC)
+  • horario_sabado_id → Si se provee, se asigna horario de sábado.
+                        NULL explícito = el empleado no labora sábados
+  • Los errores de horario NO abortan la creación del empleado
+
+--------------------------------------------------------------------------------
+RESUMEN RÁPIDO
+--------------------------------------------------------------------------------
+  Obligatorios:    numero_empleado, nombre, apellido_paterno, apellido_materno,
+                   fecha_nacimiento, empresa_id, departamento_id, puesto_id,
+                   fecha_ingreso
+
+  Username:        Auto-generado ([inicial][apellido], normalizado, sin acentos)
+  Contraseña:      RFC(8) o numero_empleado si no se especifica; hash SHA-256
+  Unicidad:        numero_empleado único x empresa; email y username únicos global
+  PIN checador:    Automático, pool de 1000 por empresa
+
+================================================================================

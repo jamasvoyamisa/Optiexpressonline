@@ -1,5 +1,8 @@
-import React, { useState, useEffect, useCallback, createContext, useContext, ReactNode } from 'react';
+import React, { useState, useEffect, useCallback, useRef, createContext, useContext, ReactNode } from 'react';
 import api from '../services/api';
+
+const INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutos
+const ACTIVITY_EVENTS = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click'] as const;
 
 export interface AuthMe {
   id: number;
@@ -27,7 +30,8 @@ interface AuthState {
 }
 
 type AuthContextValue = AuthState & {
-  login: (username: string, password: string) => Promise<boolean>;
+  /** Devuelve el AuthMe del usuario si el login fue exitoso, o null si falló. */
+  login: (username: string, password: string) => Promise<AuthMe | null>;
   logout: () => void;
   refreshAuthMe: () => void;
 };
@@ -41,6 +45,40 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     authMe: null,
     loading: true,
   });
+
+  const inactivityTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isAuthenticatedRef = useRef(false);
+
+  const doLogout = useCallback(() => {
+    localStorage.removeItem('token');
+    setAuthState({ isAuthenticated: false, user: null, authMe: null, loading: false });
+  }, []);
+
+  const resetInactivityTimer = useCallback(() => {
+    if (!isAuthenticatedRef.current) return;
+    if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
+    inactivityTimer.current = setTimeout(doLogout, INACTIVITY_TIMEOUT_MS);
+  }, [doLogout]);
+
+  // Escuchar eventos de actividad del usuario cuando está autenticado
+  useEffect(() => {
+    isAuthenticatedRef.current = authState.isAuthenticated;
+    if (!authState.isAuthenticated) {
+      if (inactivityTimer.current) {
+        clearTimeout(inactivityTimer.current);
+        inactivityTimer.current = null;
+      }
+      ACTIVITY_EVENTS.forEach((ev) => window.removeEventListener(ev, resetInactivityTimer));
+      return;
+    }
+    // Iniciar temporizador y escuchar actividad
+    resetInactivityTimer();
+    ACTIVITY_EVENTS.forEach((ev) => window.addEventListener(ev, resetInactivityTimer, { passive: true }));
+    return () => {
+      if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
+      ACTIVITY_EVENTS.forEach((ev) => window.removeEventListener(ev, resetInactivityTimer));
+    };
+  }, [authState.isAuthenticated, resetInactivityTimer]);
 
   const fetchAuthMe = useCallback(() => {
     const token = localStorage.getItem('token');
@@ -74,7 +112,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => { cancelled = true; clearTimeout(timeout); };
   }, [fetchAuthMe]);
 
-  const login = useCallback(async (username: string, password: string) => {
+  const login = useCallback(async (username: string, password: string): Promise<AuthMe | null> => {
     try {
       const response = await api.post<{ access_token: string; user: any; me?: AuthMe }>('/auth/login', {
         username,
@@ -83,7 +121,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { access_token, user, me } = response.data;
       if (!access_token) {
         console.error('Login: no se recibió token');
-        return false;
+        return null;
       }
       localStorage.setItem('token', access_token);
       const authMeData = me ?? await fetchAuthMe();
@@ -93,22 +131,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         authMe: authMeData,
         loading: false,
       });
-      return true;
+      return authMeData;
     } catch (error) {
       console.error('Error al iniciar sesión:', error);
-      return false;
+      return null;
     }
   }, [fetchAuthMe]);
 
   const logout = useCallback(() => {
-    localStorage.removeItem('token');
-    setAuthState({
-      isAuthenticated: false,
-      user: null,
-      authMe: null,
-      loading: false,
-    });
-  }, []);
+    doLogout();
+  }, [doLogout]);
 
   const refreshAuthMe = useCallback(() => {
     fetchAuthMe().then((me) => {
@@ -131,7 +163,7 @@ const defaultAuth: AuthContextValue = {
   user: null,
   authMe: null,
   loading: false,
-  login: async () => false,
+  login: async () => null,
   logout: () => {},
   refreshAuthMe: () => {},
 };

@@ -8,14 +8,25 @@ from app.core.security import get_current_user
 from app.core.deps import get_current_empleado_with_rol
 from . import schemas, service
 from .models import SolicitudVacaciones
+from app.modules.notificaciones import service as noti_service
 
 def _set_jefe_aprobador_nombre(solicitud: SolicitudVacaciones) -> None:
     if solicitud.jefe_aprobador:
         solicitud.jefe_aprobador_nombre = (
             f"{solicitud.jefe_aprobador.nombre} {solicitud.jefe_aprobador.apellido_paterno or ''}"
         ).strip()
+        # Indicar si el aprobador es el jefe directo registrado del empleado
+        # (o si fue otra persona, ej. admin)
+        try:
+            jefe_directo_id = solicitud.empleado.jefe_id if solicitud.empleado else None
+            solicitud.aprobador_es_jefe_directo = (
+                jefe_directo_id is not None and solicitud.jefe_aprobador_id == jefe_directo_id
+            )
+        except Exception:
+            solicitud.aprobador_es_jefe_directo = None
     else:
         solicitud.jefe_aprobador_nombre = None
+        solicitud.aprobador_es_jefe_directo = None
 
 router = APIRouter(prefix=f"{settings.API_V1_PREFIX}/vacaciones", tags=["Vacaciones"])
 
@@ -69,7 +80,26 @@ def create_mi_solicitud(
         motivo=body.motivo
     )
     try:
-        return service.VacacionesService.create_solicitud(db, solicitud)
+        result = service.VacacionesService.create_solicitud(db, solicitud)
+        # Notificar al jefe directo que hay una nueva solicitud pendiente
+        try:
+            from app.modules.personal.models import Empleado
+            emp = db.query(Empleado).filter(Empleado.id == empleado_id).first()
+            if emp and emp.jefe_id:
+                nombre_emp = f"{emp.nombre} {emp.apellido_paterno or ''}".strip()
+                fi = body.fecha_inicio.strftime("%d/%m/%Y")
+                ff = body.fecha_fin.strftime("%d/%m/%Y")
+                noti_service.crear_notificacion(
+                    db,
+                    empleado_id=emp.jefe_id,
+                    titulo="Nueva solicitud de vacaciones",
+                    mensaje=f"{nombre_emp} solicita vacaciones del {fi} al {ff}.",
+                    tipo="nueva_solicitud",
+                    referencia_id=result.id,
+                )
+        except Exception:
+            pass
+        return result
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -113,6 +143,22 @@ def get_solicitud(solicitud_id: int, db: Session = Depends(get_db)):
     return db_solicitud
 
 
+@router.put("/mis-solicitudes/{solicitud_id}/cancelar", response_model=schemas.SolicitudVacacionesResponse)
+def cancelar_mi_solicitud(
+    solicitud_id: int,
+    current: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """El propio empleado cancela su solicitud. Solo permitido si está en estado PENDIENTE."""
+    empleado_id = int(current["user_id"])
+    try:
+        result = service.VacacionesService.cancelar_solicitud(db, solicitud_id, empleado_id)
+        _set_jefe_aprobador_nombre(result)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
 @router.put("/solicitudes/{solicitud_id}/aprobar", response_model=schemas.SolicitudVacacionesResponse)
 def aprobar_solicitud(
     solicitud_id: int,
@@ -134,6 +180,46 @@ def aprobar_solicitud(
         )
         if result:
             _set_jefe_aprobador_nombre(result)
+            # Notificar al empleado según el resultado
+            try:
+                if aprobacion.aprobar:
+                    noti_service.crear_notificacion(
+                        db,
+                        empleado_id=result.empleado_id,
+                        titulo="Solicitud aprobada por jefe",
+                        mensaje="Tu solicitud de vacaciones fue aprobada por tu jefe directo y está pendiente de confirmación por RH.",
+                        tipo="solicitud_aprobada_jefe",
+                        referencia_id=result.id,
+                    )
+                    # Notificar al personal de RH para confirmación
+                    from app.modules.personal.models import Empleado, Rol
+                    from app.core.deps import RH_ROL_NAMES
+                    rh_roles = db.query(Rol).filter(Rol.nombre.in_(RH_ROL_NAMES)).all()
+                    rh_ids = {r.id for r in rh_roles}
+                    if rh_ids:
+                        rh_empleados = db.query(Empleado).filter(Empleado.rol_id.in_(rh_ids)).all()
+                        emp = db.query(Empleado).filter(Empleado.id == result.empleado_id).first()
+                        nombre_emp = f"{emp.nombre} {emp.apellido_paterno or ''}".strip() if emp else "Un empleado"
+                        for rh_emp in rh_empleados:
+                            noti_service.crear_notificacion(
+                                db,
+                                empleado_id=rh_emp.id,
+                                titulo="Solicitud pendiente de confirmación RH",
+                                mensaje=f"La solicitud de vacaciones de {nombre_emp} fue aprobada por el jefe y requiere tu confirmación.",
+                                tipo="solicitud_pendiente_rh",
+                                referencia_id=result.id,
+                            )
+                else:
+                    noti_service.crear_notificacion(
+                        db,
+                        empleado_id=result.empleado_id,
+                        titulo="Solicitud rechazada",
+                        mensaje=f"Tu solicitud de vacaciones fue rechazada.{' Motivo: ' + aprobacion.comentarios if aprobacion.comentarios else ''}",
+                        tipo="solicitud_rechazada",
+                        referencia_id=result.id,
+                    )
+            except Exception:
+                pass
         return result
     except ValueError as e:
         raise HTTPException(
@@ -145,6 +231,91 @@ def aprobar_solicitud(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error al procesar solicitud: {str(e)}"
         )
+
+
+@router.put("/solicitudes/{solicitud_id}/confirmar-rh", response_model=schemas.SolicitudVacacionesResponse)
+def confirmar_solicitud_rh(
+    solicitud_id: int,
+    aprobacion: schemas.SolicitudVacacionesAprobar,
+    current: dict = Depends(get_current_user),
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db)
+):
+    """
+    Confirmación final de RH sobre una solicitud ya aprobada por el jefe.
+    Esta vista es solo de confirmación: nadie puede rechazar desde aquí.
+    Si se requiere rechazar, debe hacerse desde la vista del jefe (Mi Área).
+    """
+    if not aprobacion.aprobar:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Desde la confirmación de RH solo se puede aprobar. Para rechazar use la vista del jefe directo."
+        )
+    aprobador_id = int(current["user_id"])
+    try:
+        result = service.VacacionesService.confirmar_rh(
+            db,
+            solicitud_id,
+            aprobador_id,
+            aprobacion.aprobar,
+            aprobacion.comentarios,
+        )
+        if result:
+            _set_jefe_aprobador_nombre(result)
+            # Notificar al empleado que RH confirmó sus vacaciones
+            try:
+                noti_service.crear_notificacion(
+                    db,
+                    empleado_id=result.empleado_id,
+                    titulo="Vacaciones confirmadas por RH",
+                    mensaje="Tu solicitud de vacaciones fue confirmada definitivamente por Recursos Humanos.",
+                    tipo="solicitud_aprobada",
+                    referencia_id=result.id,
+                )
+            except Exception:
+                pass
+        return result
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error al confirmar solicitud: {str(e)}"
+        )
+
+
+@router.get("/solicitudes-pendientes-rh", response_model=List[schemas.SolicitudVacacionesResponse])
+def get_solicitudes_pendientes_rh(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(500, ge=1, le=1000),
+    db: Session = Depends(get_db),
+    _current: dict = Depends(get_current_user),
+):
+    """
+    Solicitudes aprobadas por el jefe/admin y pendientes de confirmación final por RH.
+    Incluye quien dio la primera aprobación y si era el jefe directo del empleado.
+    """
+    from .models import EstadoSolicitud
+    from app.modules.vacaciones import models as vac_models
+    from sqlalchemy.orm import joinedload
+    result = (
+        db.query(vac_models.SolicitudVacaciones)
+        .options(
+            joinedload(vac_models.SolicitudVacaciones.jefe_aprobador),
+            joinedload(vac_models.SolicitudVacaciones.empleado),
+        )
+        .filter(vac_models.SolicitudVacaciones.estado == EstadoSolicitud.APROBADA_JEFE)
+        .order_by(vac_models.SolicitudVacaciones.fecha_aprobacion)
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    for s in result:
+        _set_jefe_aprobador_nombre(s)
+    return result
 
 
 @router.get("/mi-balance", response_model=schemas.BalanceConPeriodosResponse)

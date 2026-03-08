@@ -1,13 +1,18 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
+import type { AuthMe } from '../hooks/useAuth';
 
-const ADMIN_USER = 'admin';
-const ADMIN_PASSWORD = 'Admin123!';
+
+const getDefaultRoute = (me: AuthMe | null): string => {
+  if (me?.is_superuser) return '/rh';
+  if (me?.puede_ver_mi_area) return '/mi-area';
+  return '/mis-asistencias';
+};
 
 export const Login = () => {
-  const [username, setUsername] = useState(ADMIN_USER);
-  const [password, setPassword] = useState(ADMIN_PASSWORD);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const { login } = useAuth();
@@ -19,9 +24,9 @@ export const Login = () => {
     setLoading(true);
 
     try {
-      const success = await login(username, password);
-      if (success) {
-        navigate('/mis-asistencias');
+      const authMe = await login(username, password);
+      if (authMe !== null) {
+        navigate(getDefaultRoute(authMe));
       } else {
         setError('Credenciales incorrectas');
       }

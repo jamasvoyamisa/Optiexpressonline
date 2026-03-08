@@ -244,7 +244,7 @@ export const PersonalPage = () => {
   const [huellaTemplates, setHuellaTemplates] = useState<{ id: number; finger_index: number; source_device_nombre: string | null; updated_at: string | null }[]>([]);
   const [enrollingHuella, setEnrollingHuella] = useState(false);
   const [enrollStatus, setEnrollStatus] = useState<'idle' | 'completed'>('idle');
-  const [enrollId, setEnrollId] = useState<number | null>(null);
+  const [, setEnrollId] = useState<number | null>(null);
 
   const loadData = useCallback(async () => {
     try {
@@ -310,7 +310,7 @@ export const PersonalPage = () => {
     return () => clearTimeout(timer);
   }, [form.username, editingId, showFormModal]);
 
-  const handleChange = (field: keyof FormData, value: string | boolean | number | number[] | undefined) => {
+  const handleChange = (field: keyof FormData, value: string | boolean | number | number[] | null | undefined) => {
     setForm(prev => ({ ...prev, [field]: value }));
   };
 

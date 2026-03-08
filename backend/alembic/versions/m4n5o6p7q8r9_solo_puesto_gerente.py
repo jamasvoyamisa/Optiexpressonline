@@ -7,6 +7,7 @@ Create Date: 2026-03-05
 
 """
 from alembic import op
+import sqlalchemy as sa
 from sqlalchemy import text
 
 revision = 'm4n5o6p7q8r9'
@@ -14,11 +15,6 @@ down_revision = 'l3m4n5o6p7q8'
 branch_labels = None
 depends_on = None
 
-# Puestos que referencian "gerente" (eliminar estos, dejar solo "Gerente")
-# Cualquier nombre que contenga 'gerente' pero no sea exactamente 'Gerente'
-# Se hace por condición SQL: LOWER(nombre) LIKE '%gerente%' AND LOWER(TRIM(nombre)) != 'gerente'
-
-# Puestos habituales a restaurar si la tabla quedó solo con Gerente (no referencian gerente)
 PUESTOS_RESTAURAR = [
     ("Operador", 10),
     ("Vendedor", 20),
@@ -32,6 +28,27 @@ PUESTOS_RESTAURAR = [
 
 def upgrade():
     conn = op.get_bind()
+
+    # Crear tabla puestos si no existe
+    r = conn.execute(text("SHOW TABLES LIKE 'puestos'")).fetchone()
+    if not r:
+        op.create_table(
+            'puestos',
+            sa.Column('id', sa.Integer(), nullable=False),
+            sa.Column('nombre', sa.String(150), nullable=False),
+            sa.Column('orden', sa.Integer(), nullable=False, server_default='0'),
+            sa.Column('activo', sa.Boolean(), server_default=sa.true(), nullable=True),
+            sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=True),
+            sa.Column('updated_at', sa.DateTime(timezone=True), nullable=True),
+            sa.PrimaryKeyConstraint('id'),
+        )
+        op.create_index(op.f('ix_puestos_id'), 'puestos', ['id'], unique=False)
+
+    # Agregar columna puesto_id a empleados si no existe
+    cols = [row[0] for row in conn.execute(text("SHOW COLUMNS FROM empleados")).fetchall()]
+    if 'puesto_id' not in cols:
+        op.add_column('empleados', sa.Column('puesto_id', sa.Integer(), nullable=True))
+        op.create_foreign_key(None, 'empleados', 'puestos', ['puesto_id'], ['id'])
     # Asegurar que existe el puesto "Gerente"
     r = conn.execute(text("SELECT id FROM puestos WHERE LOWER(TRIM(nombre)) = 'gerente' LIMIT 1")).fetchone()
     gerente_id = r[0] if r else None

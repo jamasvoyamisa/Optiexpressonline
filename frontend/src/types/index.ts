@@ -34,9 +34,12 @@ export interface SolicitudVacaciones {
   fecha_inicio: string;
   fecha_fin: string;
   dias_solicitados: number;
-  motivo?: string;
+  motivo?: string | null;
   estado: string;
-  jefe_aprobador_id?: number;
-  fecha_aprobacion?: string;
-  comentarios_aprobacion?: string;
+  jefe_aprobador_id?: number | null;
+  jefe_aprobador_nombre?: string | null;
+  aprobador_es_jefe_directo?: boolean | null;
+  fecha_aprobacion?: string | null;
+  comentarios_aprobacion?: string | null;
+  created_at?: string;
 }

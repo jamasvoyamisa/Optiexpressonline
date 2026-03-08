@@ -5,8 +5,8 @@ import { VacacionesPage } from '../vacaciones/VacacionesPage';
 type Tab = 'personal' | 'vacaciones';
 
 const tabs: { key: Tab; label: string }[] = [
-  { key: 'personal', label: 'Personal' },
-  { key: 'vacaciones', label: 'Vacaciones' },
+  { key: 'personal', label: 'Empleados' },
+  { key: 'vacaciones', label: 'Solicitudes de Vacaciones' },
 ];
 
 const tabStyle = (active: boolean): React.CSSProperties => ({

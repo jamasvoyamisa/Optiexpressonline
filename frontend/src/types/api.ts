@@ -162,5 +162,4 @@ export interface EmpleadoCreate {
   registrar_en_checador?: boolean;
   dispositivo_ids?: number[];
   password?: string;
-  username?: string;
 }

@@ -350,7 +350,8 @@ class VacacionesService:
     ) -> List[models.SolicitudVacaciones]:
         """Listar solicitudes con filtros"""
         query = db.query(models.SolicitudVacaciones).options(
-            joinedload(models.SolicitudVacaciones.jefe_aprobador)
+            joinedload(models.SolicitudVacaciones.jefe_aprobador),
+            joinedload(models.SolicitudVacaciones.empleado),
         )
         if empleado_id:
             query = query.filter(models.SolicitudVacaciones.empleado_id == empleado_id)
@@ -427,14 +428,12 @@ class VacacionesService:
         if solicitud.estado != models.EstadoSolicitud.PENDIENTE:
             raise ValueError("La solicitud ya fue procesada")
         
-        # Actualizar estado
+        # Actualizar estado — toda aprobación de primer nivel (jefe, gerente o superadmin)
+        # queda en APROBADA_JEFE para que RH dé la confirmación final.
+        # Solo el rechazo es definitivo en este paso.
         if aprobar:
-            solicitud.estado = models.EstadoSolicitud.APROBADA
-            # Descontar de periodos: primero periodo anterior (por vencer), luego actual
-            VacacionesService._descontar_dias_de_periodos(db, solicitud.empleado_id, solicitud.dias_solicitados)
-            balance = VacacionesService.get_or_create_balance(db, solicitud.empleado_id)
-            balance.dias_pendientes -= Decimal(str(solicitud.dias_solicitados))
-            balance.dias_tomados += Decimal(str(solicitud.dias_solicitados))
+            solicitud.estado = models.EstadoSolicitud.APROBADA_JEFE
+            # Los días siguen contando como pendientes hasta que RH confirme
         else:
             solicitud.estado = models.EstadoSolicitud.RECHAZADA
             balance = VacacionesService.get_or_create_balance(db, solicitud.empleado_id)
@@ -447,17 +446,89 @@ class VacacionesService:
         db.commit()
         db.refresh(solicitud)
         return solicitud
+
+    @staticmethod
+    def confirmar_rh(
+        db: Session,
+        solicitud_id: int,
+        aprobador_id: int,
+        aprobar: bool,
+        comentarios: Optional[str] = None,
+    ) -> models.SolicitudVacaciones:
+        """
+        Confirmación final de RH: solo puede aprobar (nunca rechazar).
+        Esta función asume que el validador del endpoint ya rechazó cualquier intento de rechazo.
+        """
+        solicitud = db.query(models.SolicitudVacaciones).filter(
+            models.SolicitudVacaciones.id == solicitud_id
+        ).first()
+        if not solicitud:
+            raise ValueError("Solicitud no encontrada")
+        if solicitud.estado != models.EstadoSolicitud.APROBADA_JEFE:
+            raise ValueError("La solicitud no está en estado 'aprobada por jefe' — no puede ser procesada por RH")
+
+        # Aprobación final: descontar días del balance
+        solicitud.estado = models.EstadoSolicitud.APROBADA
+        VacacionesService._descontar_dias_de_periodos(db, solicitud.empleado_id, solicitud.dias_solicitados)
+        balance = VacacionesService.get_or_create_balance(db, solicitud.empleado_id)
+        balance.dias_pendientes = max(
+            Decimal("0"),
+            (balance.dias_pendientes or Decimal("0")) - Decimal(str(solicitud.dias_solicitados))
+        )
+        balance.dias_tomados = (balance.dias_tomados or Decimal("0")) + Decimal(str(solicitud.dias_solicitados))
+
+        if comentarios:
+            prev = solicitud.comentarios_aprobacion or ""
+            solicitud.comentarios_aprobacion = (prev + f"\n[RH] {comentarios}").strip() if prev else f"[RH] {comentarios}"
+
+        db.commit()
+        db.refresh(solicitud)
+        return solicitud
     
+    @staticmethod
+    def cancelar_solicitud(
+        db: Session,
+        solicitud_id: int,
+        empleado_id: int,
+    ) -> models.SolicitudVacaciones:
+        """
+        El propio empleado cancela su solicitud.
+        Solo se permite si el estado es PENDIENTE (no ha sido aprobada aún).
+        """
+        solicitud = db.query(models.SolicitudVacaciones).filter(
+            models.SolicitudVacaciones.id == solicitud_id
+        ).first()
+        if not solicitud:
+            raise ValueError("Solicitud no encontrada")
+        if solicitud.empleado_id != empleado_id:
+            raise ValueError("No puedes cancelar una solicitud que no te pertenece")
+        if solicitud.estado != models.EstadoSolicitud.PENDIENTE:
+            raise ValueError("Solo puedes cancelar solicitudes que aún están pendientes de aprobación")
+
+        solicitud.estado = models.EstadoSolicitud.CANCELADA
+        # Devolver los días al balance pendiente
+        balance = VacacionesService.get_or_create_balance(db, empleado_id)
+        balance.dias_pendientes = max(
+            Decimal("0"),
+            (balance.dias_pendientes or Decimal("0")) - Decimal(str(solicitud.dias_solicitados))
+        )
+        db.commit()
+        db.refresh(solicitud)
+        return solicitud
+
     @staticmethod
     def _actualizar_balance_pendientes(db: Session, empleado_id: int):
         """Actualizar días pendientes en el balance"""
         balance = VacacionesService.get_or_create_balance(db, empleado_id)
         
-        # Sumar todas las solicitudes pendientes
+        # Sumar solicitudes pendientes (tanto las que esperan al jefe como las que esperan a RH)
         solicitudes_pendientes = db.query(models.SolicitudVacaciones).filter(
             and_(
                 models.SolicitudVacaciones.empleado_id == empleado_id,
-                models.SolicitudVacaciones.estado == models.EstadoSolicitud.PENDIENTE
+                models.SolicitudVacaciones.estado.in_([
+                    models.EstadoSolicitud.PENDIENTE,
+                    models.EstadoSolicitud.APROBADA_JEFE,
+                ])
             )
         ).all()
         

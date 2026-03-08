@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { AuthProvider } from './hooks/useAuth';
 import { Layout } from './components/Layout';
 import { Login } from './components/Login';
@@ -74,7 +74,7 @@ function App() {
             </Layout>
           }
         />
-        <Route path="*" element={<Navigate to="/mis-asistencias" replace />} />
+        <Route path="*" element={<HomeRedirect />} />
         </Routes>
       </Router>
     </AuthProvider>
