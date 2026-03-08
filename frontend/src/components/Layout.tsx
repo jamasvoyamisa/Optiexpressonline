@@ -60,14 +60,15 @@ export const Layout = ({ children }: LayoutProps) => {
     navigate('/login');
   };
 
-  const linkStyle = (path: string): React.CSSProperties => {
+      const linkStyle = (path: string): React.CSSProperties => {
     const active = location.pathname === path || location.pathname.startsWith(path + '/');
     return {
       color: 'white',
       textDecoration: 'none',
       padding: '8px 12px',
       borderRadius: '6px',
-      backgroundColor: active ? 'rgba(99, 102, 241, 0.3)' : 'transparent',
+      backgroundColor: active ? 'rgba(14,165,233,0.25)' : 'transparent',
+      borderLeft: active ? '3px solid #0ea5e9' : '3px solid transparent',
       fontWeight: active ? 600 : 400,
       transition: 'background-color 0.15s',
     };
@@ -75,7 +76,7 @@ export const Layout = ({ children }: LayoutProps) => {
 
   if (loading) {
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', backgroundColor: '#f3f4f6' }}>
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh', backgroundColor: '#f0f4f8' }}>
         <span style={{ color: '#6b7280', fontSize: '1rem' }}>Cargando...</span>
       </div>
     );
@@ -88,14 +89,15 @@ export const Layout = ({ children }: LayoutProps) => {
   return (
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
       <aside style={{
-        width: '250px',
+        width: '200px',
         flexShrink: 0,
-        backgroundColor: '#1f2937',
+        backgroundColor: '#1e3a5f',
         color: 'white',
         padding: '20px',
         display: 'flex',
         flexDirection: 'column',
         overflowY: 'auto',
+        boxShadow: '4px 0 12px rgba(0,0,0,0.22)',
       }}>
         <h2 style={{ marginBottom: '30px' }}>Grupo Cristal</h2>
 
@@ -126,8 +128,7 @@ export const Layout = ({ children }: LayoutProps) => {
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         {/* Header superior */}
         <header style={{
-          backgroundColor: '#1f2937',
-          borderBottom: '1px solid rgba(255,255,255,0.08)',
+          backgroundColor: '#1e3a5f',
           padding: '0 20px',
           height: '52px',
           flexShrink: 0,
@@ -135,6 +136,7 @@ export const Layout = ({ children }: LayoutProps) => {
           alignItems: 'center',
           justifyContent: 'flex-end',
           gap: '12px',
+          boxShadow: '0 4px 10px rgba(0,0,0,0.18)',
         }}>
           {/* Campana de notificaciones */}
           {isAuthenticated && <NotificationBell dispositivos={showFullAdmin ? dispositivos : []} />}
@@ -152,7 +154,7 @@ export const Layout = ({ children }: LayoutProps) => {
                 width: '34px',
                 height: '34px',
                 borderRadius: '50%',
-                backgroundColor: '#6366f1',
+                backgroundColor: '#0ea5e9',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -200,7 +202,7 @@ export const Layout = ({ children }: LayoutProps) => {
           )}
         </header>
 
-        <main style={{ flex: 1, minHeight: 0, backgroundColor: '#f3f4f6', overflow: 'auto' }}>
+        <main style={{ flex: 1, minHeight: 0, backgroundColor: '#f0f4f8', overflow: 'auto' }}>
           {children}
         </main>
       </div>

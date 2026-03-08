@@ -84,11 +84,11 @@ const tabStyle = (active: boolean): React.CSSProperties => ({
   padding: '12px 24px',
   cursor: 'pointer',
   border: 'none',
-  borderBottom: active ? '3px solid #007bff' : '3px solid transparent',
+  borderBottom: active ? '3px solid #0ea5e9' : '3px solid transparent',
   backgroundColor: 'transparent',
   fontWeight: active ? 700 : 400,
   fontSize: '1rem',
-  color: active ? '#007bff' : '#666',
+  color: active ? '#0ea5e9' : '#666',
   transition: 'color 0.15s, border-color 0.15s',
 });
 
@@ -318,7 +318,7 @@ export const MiAreaPage = () => {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
         <h1 style={{ margin: 0 }}>{authMe?.is_superuser && deptos.length === 0 ? 'Asistencia y solicitudes' : 'Mi Área'}</h1>
         {(deptos.length > 0 || authMe?.is_superuser) && (
-          <span style={{ color: '#555', fontSize: '0.9rem', backgroundColor: '#f0f4ff', padding: '4px 12px', borderRadius: '20px', border: '1px solid #c7d7fc' }}>
+          <span style={{ color: '#555', fontSize: '0.9rem', backgroundColor: '#f0f9ff', padding: '4px 12px', borderRadius: '20px', border: '1px solid #bae6fd' }}>
             {authMe?.is_superuser && deptos.length === 0 ? 'Todos los departamentos' : deptos.map(d => d.nombre).join(' · ')}
           </span>
         )}
@@ -337,7 +337,7 @@ export const MiAreaPage = () => {
           <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '12px' }}>
             <button
               onClick={loadPersonal} disabled={loadingPersonal}
-              style={{ padding: '8px 16px', backgroundColor: '#007bff', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
+              style={{ padding: '8px 16px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
             >
               {loadingPersonal ? 'Cargando...' : 'Actualizar'}
             </button>
@@ -440,7 +440,7 @@ export const MiAreaPage = () => {
               <button
                 onClick={loadChecadas}
                 disabled={loadingChecadas}
-                style={{ padding: '7px 14px', backgroundColor: '#007bff', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.9rem' }}
+                style={{ padding: '7px 14px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.9rem' }}
               >
                 {loadingChecadas ? 'Cargando...' : 'Actualizar'}
               </button>
@@ -526,7 +526,7 @@ export const MiAreaPage = () => {
               });
               dayRows.sort((a, b) => b.fechaSort.localeCompare(a.fechaSort) || a.empleadoNombre.localeCompare(b.empleadoNombre));
 
-              const incBg: Record<string, string> = { retardo: '#fef3c7', salida_anticipada: '#fee2e2', falta: '#fce7f3', horas_extra: '#dbeafe' };
+              const incBg: Record<string, string> = { retardo: '#fef3c7', salida_anticipada: '#fee2e2', falta: '#fce7f3', horas_extra: '#e0f2fe' };
 
               return (
               <div style={{ overflowX: 'auto' }}>
@@ -677,7 +677,7 @@ export const MiAreaPage = () => {
             </select>
             <button
               onClick={loadSolicitudesVacaciones} disabled={loadingVacaciones}
-              style={{ padding: '8px 16px', backgroundColor: '#007bff', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
+              style={{ padding: '8px 16px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
             >
               {loadingVacaciones ? 'Cargando...' : 'Actualizar'}
             </button>

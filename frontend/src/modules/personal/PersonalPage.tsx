@@ -58,7 +58,7 @@ const cardStyle: React.CSSProperties = {
 };
 
 const btnPrimary: React.CSSProperties = {
-  padding: '10px 24px', backgroundColor: '#007bff', color: 'white', border: 'none',
+  padding: '10px 24px', backgroundColor: '#0ea5e9', color: 'white', border: 'none',
   borderRadius: '6px', cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem',
 };
 
@@ -77,6 +77,13 @@ const modalOverlay: React.CSSProperties = {
   alignItems: 'center', justifyContent: 'center', zIndex: 1000,
 };
 
+// Overlay para sub-modales que se abren encima del modal de detalle
+const subModalOverlay: React.CSSProperties = {
+  ...modalOverlay,
+  zIndex: 1100,
+  backgroundColor: 'rgba(0,0,0,0.55)',
+};
+
 const modalSmall: React.CSSProperties = {
   backgroundColor: 'white', borderRadius: '12px', padding: '28px',
   maxWidth: '500px', width: '90%', boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
@@ -86,115 +93,6 @@ const modalLarge: React.CSSProperties = {
   ...modalSmall, maxWidth: '800px', maxHeight: '90vh', overflowY: 'auto',
 };
 
-// ---- Componente panel horario en perfil de empleado ----
-const HorarioEmpleadoPanel = ({ empleadoId, horarios }: { empleadoId: number; horarios: HorarioSimple[] }) => {
-  const [asignacion, setAsignacion] = useState<{ id: number; horario: HorarioSimple & { hora_salida_sabado?: string | null }; activo: boolean } | null | 'loading'>('loading');
-  const [editMode, setEditMode] = useState(false);
-  const [selectedHorarioId, setSelectedHorarioId] = useState<number | ''>('');
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    api.get(`/asistencia/empleados/${empleadoId}/horario`)
-      .then(r => setAsignacion(r.data))
-      .catch(() => setAsignacion(null));
-  }, [empleadoId]);
-
-  const handleAsignar = async () => {
-    if (!selectedHorarioId) return;
-    setSaving(true);
-    try {
-      const r = await api.post(`/asistencia/empleados/${empleadoId}/horario`, { horario_id: selectedHorarioId });
-      setAsignacion(r.data);
-      setEditMode(false);
-    } catch (e: unknown) {
-      const err = e as { response?: { data?: { detail?: string } } };
-      alert(err.response?.data?.detail || 'Error al asignar horario');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleQuitar = async () => {
-    if (!confirm('¿Quitar el horario asignado a este empleado?')) return;
-    setSaving(true);
-    try {
-      await api.delete(`/asistencia/empleados/${empleadoId}/horario`);
-      setAsignacion(null);
-      setEditMode(false);
-    } catch (e: unknown) {
-      const err = e as { response?: { data?: { detail?: string } } };
-      alert(err.response?.data?.detail || 'Error al quitar horario');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (asignacion === 'loading') return null;
-
-  return (
-    <div style={{ marginBottom: '16px', padding: '14px 18px', backgroundColor: '#f0f4ff', borderRadius: '8px', border: '1px solid #c7d2fe' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
-        <div>
-          <span style={{ fontWeight: 600, fontSize: '0.88rem', color: '#3730a3' }}>Horario asignado: </span>
-          {asignacion ? (
-            <span style={{ fontSize: '0.88rem', color: '#1e1b4b' }}>
-              {asignacion.horario.nombre} — {asignacion.horario.hora_entrada} a {asignacion.horario.hora_salida}
-              {asignacion.horario.hora_salida_sabado && (
-                <span style={{ marginLeft: '8px', fontSize: '0.8rem', color: '#d97706', fontWeight: 500 }}>
-                  · Sáb hasta {asignacion.horario.hora_salida_sabado}
-                </span>
-              )}
-              {asignacion.horario.activo === false && <span style={{ marginLeft: '6px', color: '#dc2626', fontSize: '0.78rem' }}>(inactivo)</span>}
-            </span>
-          ) : (
-            <span style={{ fontSize: '0.88rem', color: '#6b7280' }}>Sin horario</span>
-          )}
-        </div>
-        <div style={{ display: 'flex', gap: '6px' }}>
-          <button
-            onClick={() => { setEditMode(!editMode); setSelectedHorarioId(asignacion ? asignacion.horario.id : ''); }}
-            style={{ padding: '4px 12px', fontSize: '0.8rem', cursor: 'pointer', backgroundColor: '#6366f1', color: 'white', border: 'none', borderRadius: '4px' }}
-          >
-            {editMode ? 'Cancelar' : asignacion ? 'Cambiar' : 'Asignar'}
-          </button>
-          {asignacion && !editMode && (
-            <button
-              onClick={handleQuitar}
-              disabled={saving}
-              style={{ padding: '4px 12px', fontSize: '0.8rem', cursor: 'pointer', backgroundColor: '#ef4444', color: 'white', border: 'none', borderRadius: '4px' }}
-            >
-              Quitar
-            </button>
-          )}
-        </div>
-      </div>
-      {editMode && (
-        <div style={{ marginTop: '10px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-          <select
-            style={{ height: '34px', padding: '0 10px', border: '1px solid #c7d2fe', borderRadius: '6px', fontSize: '0.85rem', flex: 1, minWidth: '200px' }}
-            value={selectedHorarioId}
-            onChange={e => setSelectedHorarioId(e.target.value ? Number(e.target.value) : '')}
-          >
-            <option value="">-- Seleccione horario --</option>
-            {horarios.map(h => {
-              const sabLabel = (h as HorarioSimple & { hora_salida_sabado?: string | null }).hora_salida_sabado
-                ? ` · Sáb hasta ${(h as HorarioSimple & { hora_salida_sabado?: string | null }).hora_salida_sabado}`
-                : ' · Sin sábado';
-              return <option key={h.id} value={h.id}>{h.nombre} ({h.hora_entrada}–{h.hora_salida}{sabLabel})</option>;
-            })}
-          </select>
-          <button
-            onClick={handleAsignar}
-            disabled={!selectedHorarioId || saving}
-            style={{ padding: '4px 14px', fontSize: '0.85rem', cursor: 'pointer', backgroundColor: '#059669', color: 'white', border: 'none', borderRadius: '4px', opacity: !selectedHorarioId ? 0.5 : 1 }}
-          >
-            {saving ? 'Guardando...' : 'Guardar'}
-          </button>
-        </div>
-      )}
-    </div>
-  );
-};
 
 export const PersonalPage = () => {
   const [mainTab, setMainTab] = useState<'empleados' | 'departamentos'>('empleados');
@@ -209,6 +107,9 @@ export const PersonalPage = () => {
   const [search, setSearch] = useState('');
   const [filtroEstado, setFiltroEstado] = useState('activo');
   const [filtroEmpresa, setFiltroEmpresa] = useState('');
+  const [filtroDepto, setFiltroDepto] = useState('');
+  const [pagina, setPagina] = useState(1);
+  const POR_PAGINA = 30;
   const [selectedEmpleado, setSelectedEmpleado] = useState<Empleado | null>(null);
   const [showDetalle, setShowDetalle] = useState(false);
   const [detalleTab, setDetalleTab] = useState<'info' | 'asistencias'>('info');
@@ -274,6 +175,13 @@ export const PersonalPage = () => {
   }, [search, filtroEstado]);
 
   useEffect(() => { loadData(); }, [loadData]);
+
+  // Sincronizar selectedEmpleado cuando se recarga la lista (p.ej. después de editar)
+  useEffect(() => {
+    if (!selectedEmpleado) return;
+    const updated = empleados.find(e => e.id === selectedEmpleado.id);
+    if (updated) setSelectedEmpleado(updated);
+  }, [empleados]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-generar username al escribir nombre/apellido (solo en alta, no edición, no si el usuario lo editó manualmente)
   useEffect(() => {
@@ -369,9 +277,9 @@ export const PersonalPage = () => {
 
   const formTabStyle = (active: boolean): React.CSSProperties => ({
     padding: '10px 16px', cursor: 'pointer', border: 'none',
-    borderBottom: active ? '3px solid #007bff' : '3px solid transparent',
+    borderBottom: active ? '3px solid #0ea5e9' : '3px solid transparent',
     backgroundColor: active ? 'rgba(0,123,255,0.08)' : 'transparent',
-    fontWeight: active ? 600 : 400, fontSize: '0.88rem', color: active ? '#007bff' : '#555',
+    fontWeight: active ? 600 : 400, fontSize: '0.88rem', color: active ? '#0ea5e9' : '#555',
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -574,9 +482,11 @@ export const PersonalPage = () => {
     return empleados.filter(e => e.empresa_id === empresaId && e.estado === 'activo');
   };
 
-  const filteredEmpleados = filtroEmpresa
-    ? empleados.filter(e => String(e.empresa_id) === filtroEmpresa)
-    : empleados;
+  const filteredEmpleados = empleados.filter(e => {
+    if (filtroEmpresa && String(e.empresa_id) !== filtroEmpresa) return false;
+    if (filtroDepto && String(e.departamento_id) !== filtroDepto) return false;
+    return true;
+  });
 
   const loadChecadas = async (empleadoId: number) => {
     setLoadingChecadas(true);
@@ -614,9 +524,9 @@ export const PersonalPage = () => {
 
   const mainTabStyle = (active: boolean): React.CSSProperties => ({
     padding: '10px 28px', cursor: 'pointer', border: 'none',
-    borderBottom: active ? '3px solid #007bff' : '3px solid transparent',
+    borderBottom: active ? '3px solid #0ea5e9' : '3px solid transparent',
     backgroundColor: 'transparent', fontWeight: active ? 700 : 400,
-    fontSize: '1rem', color: active ? '#007bff' : '#888',
+    fontSize: '1rem', color: active ? '#0ea5e9' : '#888',
   });
 
   return (
@@ -707,63 +617,119 @@ export const PersonalPage = () => {
           {/* Search + Filters */}
           <div style={{ ...cardStyle, marginBottom: '20px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
             <input type="text" placeholder="Buscar por nombre, numero o email..."
-              value={search} onChange={e => setSearch(e.target.value)}
+              value={search} onChange={e => { setSearch(e.target.value); setPagina(1); }}
               onKeyDown={e => e.key === 'Enter' && loadData()}
               style={{ ...inputStyle, maxWidth: '300px' }} />
-            <select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)} style={{ ...inputStyle, maxWidth: '160px' }}>
+            <select value={filtroEstado} onChange={e => { setFiltroEstado(e.target.value); setPagina(1); }} style={{ ...inputStyle, maxWidth: '160px' }}>
               <option value="">Todos los estados</option>
               <option value="activo">Activos</option>
               <option value="inactivo">Inactivos</option>
               <option value="baja">Bajas</option>
             </select>
-            <select value={filtroEmpresa} onChange={e => setFiltroEmpresa(e.target.value)} style={{ ...inputStyle, maxWidth: '200px' }}>
+            <select value={filtroEmpresa} onChange={e => { setFiltroEmpresa(e.target.value); setFiltroDepto(''); setPagina(1); }} style={{ ...inputStyle, maxWidth: '200px' }}>
               <option value="">Todas las empresas</option>
               {activeEmpresas.map(emp => (
                 <option key={emp.id} value={String(emp.id)}>{emp.nombre}</option>
               ))}
             </select>
+            <select
+              value={filtroDepto}
+              onChange={e => { setFiltroDepto(e.target.value); setPagina(1); }}
+              style={{ ...inputStyle, maxWidth: '200px' }}
+              disabled={!filtroEmpresa}
+            >
+              <option value="">Todos los departamentos</option>
+              {departamentos
+                .filter(d => !filtroEmpresa || String(d.empresa_id) === filtroEmpresa)
+                .map(d => (
+                  <option key={d.id} value={String(d.id)}>{d.nombre}</option>
+                ))
+              }
+            </select>
             <button onClick={loadData} style={btnPrimary}>Buscar</button>
           </div>
 
           {/* Table */}
-          {filteredEmpleados.length === 0 ? (
-            <p style={{ textAlign: 'center', color: '#888', padding: '40px 0' }}>No se encontraron empleados.</p>
-          ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '10px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
-                <thead>
-                  <tr style={{ backgroundColor: '#f8f9fa' }}>
-                    {['No.', 'Nombre completo', 'Empresa', 'Depto.', 'Puesto', 'Jefe inmediato', 'Telefono', 'Estado', 'Acciones'].map(h => (
-                      <th key={h} style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredEmpleados.map(emp => (
-                    <tr key={emp.id} style={{ borderBottom: '1px solid #eee' }} onDoubleClick={() => viewDetail(emp)}>
-                      <td style={{ padding: '11px 14px', fontWeight: 500 }}>{emp.numero_empleado}</td>
-                      <td style={{ padding: '11px 14px' }}>{nombreCompleto(emp)}</td>
-                      <td style={{ padding: '11px 14px', color: '#555' }}>{emp.empresa?.nombre || getEmpresaNombre(emp.empresa_id)}</td>
-                      <td style={{ padding: '11px 14px', color: '#555' }}>{emp.departamento?.nombre || getDeptoNombre(emp.departamento_id)}</td>
-                      <td style={{ padding: '11px 14px', color: '#555' }}>{emp.puesto?.nombre || '-'}</td>
-                      <td style={{ padding: '11px 14px', color: '#555' }}>{emp.jefe ? `${emp.jefe.nombre} ${emp.jefe.apellido_paterno || ''} ${emp.jefe.apellido_materno || ''}`.trim() : '-'}</td>
-                      <td style={{ padding: '11px 14px', color: '#555' }}>{emp.telefono || '-'}</td>
-                      <td style={{ padding: '11px 14px' }}>{estadoBadge(emp.estado)}</td>
-                      <td style={{ padding: '11px 14px' }}>
-                        <button onClick={() => viewDetail(emp)} style={{ padding: '4px 12px', fontSize: '0.78rem', cursor: 'pointer', backgroundColor: '#17a2b8', color: 'white', border: 'none', borderRadius: '4px' }}>Ver</button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+          {(() => {
+            const totalPaginas = Math.max(1, Math.ceil(filteredEmpleados.length / POR_PAGINA));
+            const paginaReal = Math.min(pagina, totalPaginas);
+            const inicio = (paginaReal - 1) * POR_PAGINA;
+            const empPagina = filteredEmpleados.slice(inicio, inicio + POR_PAGINA);
+
+            const btnPag = (activo: boolean): React.CSSProperties => ({
+              padding: '5px 10px', border: '1px solid #d1d5db', borderRadius: '5px',
+              backgroundColor: activo ? '#0ea5e9' : 'white',
+              color: activo ? 'white' : '#374151',
+              cursor: activo ? 'default' : 'pointer', fontSize: '0.82rem', fontWeight: activo ? 700 : 400,
+            });
+
+            return filteredEmpleados.length === 0 ? (
+              <p style={{ textAlign: 'center', color: '#888', padding: '40px 0' }}>No se encontraron empleados.</p>
+            ) : (
+              <>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '10px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+                    <thead>
+                      <tr style={{ backgroundColor: '#f8f9fa' }}>
+                        {['No.', 'Nombre completo', 'Empresa', 'Depto.', 'Puesto', 'Jefe inmediato', 'Telefono', 'Estado', 'Acciones'].map(h => (
+                          <th key={h} style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {empPagina.map(emp => (
+                        <tr key={emp.id} style={{ borderBottom: '1px solid #eee' }} onDoubleClick={() => viewDetail(emp)}>
+                          <td style={{ padding: '11px 14px', fontWeight: 500 }}>{emp.numero_empleado}</td>
+                          <td style={{ padding: '11px 14px' }}>{nombreCompleto(emp)}</td>
+                          <td style={{ padding: '11px 14px', color: '#555' }}>{emp.empresa?.nombre || getEmpresaNombre(emp.empresa_id)}</td>
+                          <td style={{ padding: '11px 14px', color: '#555' }}>{emp.departamento?.nombre || getDeptoNombre(emp.departamento_id)}</td>
+                          <td style={{ padding: '11px 14px', color: '#555' }}>{emp.puesto?.nombre || '-'}</td>
+                          <td style={{ padding: '11px 14px', color: '#555' }}>{emp.jefe ? `${emp.jefe.nombre} ${emp.jefe.apellido_paterno || ''} ${emp.jefe.apellido_materno || ''}`.trim() : '-'}</td>
+                          <td style={{ padding: '11px 14px', color: '#555' }}>{emp.telefono || '-'}</td>
+                          <td style={{ padding: '11px 14px' }}>{estadoBadge(emp.estado)}</td>
+                          <td style={{ padding: '11px 14px' }}>
+                            <button onClick={() => viewDetail(emp)} style={{ padding: '4px 12px', fontSize: '0.78rem', cursor: 'pointer', backgroundColor: '#17a2b8', color: 'white', border: 'none', borderRadius: '4px' }}>Ver</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Paginación */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '14px', flexWrap: 'wrap', gap: '8px' }}>
+                  <span style={{ fontSize: '0.82rem', color: '#6b7280' }}>
+                    {filteredEmpleados.length} empleado(s) · mostrando {inicio + 1}–{Math.min(inicio + POR_PAGINA, filteredEmpleados.length)}
+                  </span>
+                  <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
+                    <button style={{ ...btnPag(false), opacity: paginaReal === 1 ? 0.4 : 1 }} disabled={paginaReal === 1} onClick={() => setPagina(1)}>«</button>
+                    <button style={{ ...btnPag(false), opacity: paginaReal === 1 ? 0.4 : 1 }} disabled={paginaReal === 1} onClick={() => setPagina(p => p - 1)}>‹</button>
+                    {Array.from({ length: totalPaginas }, (_, i) => i + 1)
+                      .filter(p => p === 1 || p === totalPaginas || Math.abs(p - paginaReal) <= 2)
+                      .reduce<(number | 'sep')[]>((acc, p, i, arr) => {
+                        if (i > 0 && p - (arr[i - 1] as number) > 1) acc.push('sep');
+                        acc.push(p);
+                        return acc;
+                      }, [])
+                      .map((p, i) =>
+                        p === 'sep'
+                          ? <span key={`s${i}`} style={{ padding: '5px 4px', color: '#9ca3af', fontSize: '0.82rem' }}>…</span>
+                          : <button key={p} style={btnPag(p === paginaReal)} onClick={() => setPagina(p as number)}>{p}</button>
+                      )
+                    }
+                    <button style={{ ...btnPag(false), opacity: paginaReal === totalPaginas ? 0.4 : 1 }} disabled={paginaReal === totalPaginas} onClick={() => setPagina(p => p + 1)}>›</button>
+                    <button style={{ ...btnPag(false), opacity: paginaReal === totalPaginas ? 0.4 : 1 }} disabled={paginaReal === totalPaginas} onClick={() => setPagina(totalPaginas)}>»</button>
+                  </div>
+                </div>
+              </>
+            );
+          })()}
         </>
       )}
 
       {/* ========== MODAL: FORMULARIO CREAR/EDITAR ========== */}
       {showFormModal && (
-        <div style={modalOverlay} onClick={() => setShowFormModal(false)}>
+        <div style={subModalOverlay} onClick={() => setShowFormModal(false)}>
           <div style={modalLarge} onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
               <h3 style={{ margin: 0 }}>{editingId ? 'Editar Empleado' : 'Alta de Empleado'}</h3>
@@ -1113,9 +1079,9 @@ export const PersonalPage = () => {
 
         const detTabStyle = (active: boolean): React.CSSProperties => ({
           padding: '8px 20px', cursor: 'pointer', border: 'none',
-          borderBottom: active ? '3px solid #007bff' : '3px solid transparent',
+          borderBottom: active ? '3px solid #0ea5e9' : '3px solid transparent',
           backgroundColor: 'transparent', fontWeight: active ? 600 : 400,
-          fontSize: '0.9rem', color: active ? '#007bff' : '#888',
+          fontSize: '0.9rem', color: active ? '#0ea5e9' : '#888',
         });
 
         return (
@@ -1129,13 +1095,28 @@ export const PersonalPage = () => {
                 <button onClick={() => setShowDetalle(false)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#999', lineHeight: 1 }}>&times;</button>
               </div>
 
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '16px' }}>
+              {/* Barra de acciones — siempre visible dentro del modal */}
+              <div style={{
+                display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '16px',
+                padding: '10px 14px', backgroundColor: '#f0f9ff',
+                borderRadius: '8px', border: '1px solid #bae6fd',
+                alignItems: 'center',
+              }}>
                 {estadoBadge(emp.estado)}
-                <button onClick={() => { setShowDetalle(false); startEdit(emp); }} style={{ ...btnPrimary, padding: '6px 16px', fontSize: '0.85rem' }}>Editar</button>
-                <button onClick={() => { setShowDetalle(false); openChecadorModal(emp); }} style={{ ...btnPrimary, padding: '6px 16px', fontSize: '0.85rem', backgroundColor: '#6f42c1' }}>Enviar a Checadores</button>
-                <button onClick={() => { setShowDetalle(false); openHuellaModal(emp); }} style={{ ...btnPrimary, padding: '6px 16px', fontSize: '0.85rem', backgroundColor: '#20c997' }}>Gestion Huella</button>
+                <div style={{ width: '1px', height: '24px', backgroundColor: '#bae6fd', margin: '0 4px' }} />
+                <button onClick={() => startEdit(emp)} style={{ ...btnPrimary, padding: '6px 16px', fontSize: '0.85rem' }}>
+                  Editar
+                </button>
+                <button onClick={() => openChecadorModal(emp)} style={{ ...btnPrimary, padding: '6px 16px', fontSize: '0.85rem', backgroundColor: '#6f42c1' }}>
+                  Enviar a Checadores
+                </button>
+                <button onClick={() => openHuellaModal(emp)} style={{ ...btnPrimary, padding: '6px 16px', fontSize: '0.85rem', backgroundColor: '#20c997' }}>
+                  Gestion Huella
+                </button>
                 {emp.estado !== 'baja' && (
-                  <button onClick={() => handleBaja(emp)} style={{ ...btnDanger, padding: '6px 16px', fontSize: '0.85rem' }}>Dar de Baja</button>
+                  <button onClick={() => handleBaja(emp)} style={{ ...btnDanger, padding: '6px 16px', fontSize: '0.85rem' }}>
+                    Dar de Baja
+                  </button>
                 )}
               </div>
 
@@ -1147,15 +1128,12 @@ export const PersonalPage = () => {
                   if (empChecadas.length === 0) loadChecadas(emp.id);
                 }}>Asistencias</button>
               </div>
-              {/* Banner horario activo */}
-              {detalleTab === 'info' && <HorarioEmpleadoPanel empleadoId={emp.id} horarios={horarios} />}
-
               {detalleTab === 'info' && (
                 <>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' }}>
                     {sections.map(section => (
                       <div key={section.title} style={{ padding: '16px', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
-                        <h4 style={{ margin: '0 0 12px 0', color: '#007bff', borderBottom: '1px solid #e5e7eb', paddingBottom: '6px', fontSize: '0.95rem' }}>{section.title}</h4>
+                        <h4 style={{ margin: '0 0 12px 0', color: '#0ea5e9', borderBottom: '1px solid #e5e7eb', paddingBottom: '6px', fontSize: '0.95rem' }}>{section.title}</h4>
                         {section.rows.map(([label, val]) => (
                           <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: '1px solid #f3f4f6' }}>
                             <span style={{ color: '#666', fontSize: '0.85rem' }}>{label}</span>
@@ -1234,7 +1212,7 @@ export const PersonalPage = () => {
 
       {/* ========== MODAL: ENVIAR A CHECADORES ========== */}
       {showChecadorModal && checadorTarget && (
-        <div style={modalOverlay} onClick={() => setShowChecadorModal(false)}>
+        <div style={subModalOverlay} onClick={() => setShowChecadorModal(false)}>
           <div style={modalSmall} onClick={e => e.stopPropagation()}>
             <h3 style={{ margin: '0 0 4px' }}>Enviar a Checadores</h3>
             <p style={{ color: '#666', margin: '0 0 16px', fontSize: '0.9rem' }}>
@@ -1280,7 +1258,7 @@ export const PersonalPage = () => {
           fontSize: '0.9rem', color: active ? '#20c997' : '#888',
         });
         return (
-          <div style={modalOverlay} onClick={cerrarHuellaModal}>
+          <div style={subModalOverlay} onClick={cerrarHuellaModal}>
             <div style={{ ...modalSmall, maxWidth: '550px' }} onClick={e => e.stopPropagation()}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                 <h3 style={{ margin: 0 }}>Gestion de Huella</h3>
@@ -1429,7 +1407,7 @@ export const PersonalPage = () => {
 
       {/* ========== MODAL: CREAR/EDITAR DEPARTAMENTO ========== */}
       {showDeptoModal && (
-        <div style={modalOverlay} onClick={() => setShowDeptoModal(false)}>
+        <div style={subModalOverlay} onClick={() => setShowDeptoModal(false)}>
           <div style={modalSmall} onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
               <h3 style={{ margin: 0 }}>{editingDeptoId ? 'Editar Departamento' : 'Nuevo Departamento'}</h3>

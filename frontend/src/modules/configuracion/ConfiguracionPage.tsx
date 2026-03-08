@@ -52,9 +52,9 @@ interface Horario {
 
 const tabStyle = (active: boolean): React.CSSProperties => ({
   padding: '10px 28px', cursor: 'pointer', border: 'none',
-  borderBottom: active ? '3px solid #6366f1' : '3px solid transparent',
+  borderBottom: active ? '3px solid #0ea5e9' : '3px solid transparent',
   backgroundColor: 'transparent', fontWeight: active ? 700 : 400,
-  fontSize: '1rem', color: active ? '#6366f1' : '#888',
+  fontSize: '1rem', color: active ? '#0ea5e9' : '#888',
 });
 
 const modalOverlay: React.CSSProperties = {
@@ -370,7 +370,7 @@ export const ConfiguracionPage = () => {
           {configTab === 'dispositivos' && (
             <button
               onClick={() => setShowDeviceForm(!showDeviceForm)}
-              style={{ padding: '8px 18px', backgroundColor: '#6366f1', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}
+              style={{ padding: '8px 18px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}
             >
               {showDeviceForm ? 'Cancelar' : '+ Registrar Dispositivo'}
             </button>
@@ -503,7 +503,7 @@ export const ConfiguracionPage = () => {
                     <button
                       type="button"
                       onClick={() => setShowApiKey(prev => ({ ...prev, [device.id]: !prev[device.id] }))}
-                      style={{ fontSize: '0.7rem', padding: '2px 8px', cursor: 'pointer', color: '#6366f1', background: 'none', border: '1px solid #6366f1', borderRadius: '3px' }}
+                      style={{ fontSize: '0.7rem', padding: '2px 8px', cursor: 'pointer', color: '#0ea5e9', background: 'none', border: '1px solid #0ea5e9', borderRadius: '3px' }}
                     >
                       {showApiKey[device.id] ? 'Ocultar' : 'Mostrar'}
                     </button>
@@ -525,7 +525,7 @@ export const ConfiguracionPage = () => {
 
               {/* Acciones */}
               <div style={{ marginTop: '12px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                <button onClick={() => probarComoAgente(device.id)} style={{ padding: '6px 12px', fontSize: '0.8rem', backgroundColor: '#6366f1', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
+                <button onClick={() => probarComoAgente(device.id)} style={{ padding: '6px 12px', fontSize: '0.8rem', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
                   Probar agente
                 </button>
                 <button onClick={() => eliminarDispositivo(device.id, device.nombre)} style={{ padding: '6px 12px', fontSize: '0.8rem', backgroundColor: '#dc3545', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
@@ -680,7 +680,7 @@ export const ConfiguracionPage = () => {
                       const num = i + 1;
                       const active = diasSeleccionados.includes(num);
                       return (
-                        <button type="button" key={num} onClick={() => toggleDia(num)} style={{ padding: '4px 10px', borderRadius: '4px', border: `1px solid ${active ? '#6366f1' : '#d1d5db'}`, backgroundColor: active ? '#6366f1' : 'white', color: active ? 'white' : '#374151', cursor: 'pointer', fontSize: '0.82rem', fontWeight: active ? 600 : 400 }}>
+                        <button type="button" key={num} onClick={() => toggleDia(num)} style={{ padding: '4px 10px', borderRadius: '4px', border: `1px solid ${active ? '#0ea5e9' : '#d1d5db'}`, backgroundColor: active ? '#0ea5e9' : 'white', color: active ? 'white' : '#374151', cursor: 'pointer', fontSize: '0.82rem', fontWeight: active ? 600 : 400 }}>
                           {d}
                         </button>
                       );
@@ -829,8 +829,8 @@ export const ConfiguracionPage = () => {
                       <td style={{ padding: '12px 16px' }}>
                         <span style={{
                           padding: '2px 10px', borderRadius: '12px', fontSize: '0.75rem', fontWeight: 600,
-                          backgroundColor: f.tipo === 'LFT' ? '#dbeafe' : '#fef9c3',
-                          color: f.tipo === 'LFT' ? '#1e40af' : '#854d0e',
+                          backgroundColor: f.tipo === 'LFT' ? '#e0f2fe' : '#fef9c3',
+                          color: f.tipo === 'LFT' ? '#0369a1' : '#854d0e',
                         }}>
                           {f.tipo === 'LFT' ? 'Obligatorio LFT' : 'Adicional'}
                         </span>

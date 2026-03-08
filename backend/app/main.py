@@ -23,7 +23,8 @@ def on_startup():
     from app.core.database import engine, Base, SessionLocal
     from app.modules.personal import models as pm
     from app.modules.asistencia import models as _am
-    from app.modules.notificaciones import models as _nm  # noqa: F401 – registra la tabla
+    from app.modules.notificaciones import models as _nm   # noqa: F401 – registra la tabla
+    from app.modules.incapacidades import models as _im   # noqa: F401 – registra la tabla
     from app.core.security import get_password_hash
 
     Base.metadata.create_all(bind=engine)
@@ -87,6 +88,7 @@ from app.modules.rh.routes import router as rh_router
 from app.modules.asistencia.routes import router as asistencia_router
 from app.modules.asistencia.biometric.iclock_routes import router as iclock_router
 from app.modules.notificaciones.routes import router as notificaciones_router
+from app.modules.incapacidades.routes import router as incapacidades_router
 
 app.include_router(auth_router)
 app.include_router(personal_router)
@@ -94,6 +96,7 @@ app.include_router(vacaciones_router)
 app.include_router(rh_router)
 app.include_router(asistencia_router)
 app.include_router(notificaciones_router)
+app.include_router(incapacidades_router)
 # iClock/ADMS: el dispositivo llama a /iclock/getrequest y /iclock/cdata (sin prefijo /api/v1)
 app.include_router(iclock_router)
 

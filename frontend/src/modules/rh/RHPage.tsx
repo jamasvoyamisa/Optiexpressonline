@@ -1,23 +1,27 @@
 import { useState } from 'react';
 import { PersonalPage } from '../personal/PersonalPage';
 import { VacacionesPage } from '../vacaciones/VacacionesPage';
+import { IncapacidadesPage } from './IncapacidadesPage';
+import { ReportesAsistenciaPage } from './ReportesAsistenciaPage';
 
-type Tab = 'personal' | 'vacaciones';
+type Tab = 'personal' | 'vacaciones' | 'incapacidades' | 'reportes';
 
 const tabs: { key: Tab; label: string }[] = [
   { key: 'personal', label: 'Empleados' },
   { key: 'vacaciones', label: 'Solicitudes de Vacaciones' },
+  { key: 'incapacidades', label: 'Incapacidades' },
+  { key: 'reportes', label: 'Reportes de Asistencia' },
 ];
 
 const tabStyle = (active: boolean): React.CSSProperties => ({
   padding: '12px 32px',
   cursor: 'pointer',
   border: 'none',
-  borderBottom: active ? '3px solid #007bff' : '3px solid transparent',
+  borderBottom: active ? '3px solid #0ea5e9' : '3px solid transparent',
   backgroundColor: 'transparent',
   fontWeight: active ? 700 : 400,
   fontSize: '1rem',
-  color: active ? '#007bff' : '#888',
+  color: active ? '#0369a1' : '#888',
   transition: 'color 0.15s, border-color 0.15s',
 });
 
@@ -45,6 +49,8 @@ export const RHPage = () => {
 
       {activeTab === 'personal' && <PersonalPage />}
       {activeTab === 'vacaciones' && <VacacionesPage />}
+      {activeTab === 'incapacidades' && <IncapacidadesPage />}
+      {activeTab === 'reportes' && <ReportesAsistenciaPage />}
     </div>
   );
 };

@@ -54,7 +54,7 @@ const estadoBadgeStyle = (estado: string): React.CSSProperties => {
     aprobada:      { background: '#dcfce7', color: '#166534', border: '1px solid #bbf7d0' },
     rechazada:     { background: '#fee2e2', color: '#991b1b', border: '1px solid #fecaca' },
     pendiente:     { background: '#fef9c3', color: '#92400e', border: '1px solid #fde68a' },
-    aprobada_jefe: { background: '#dbeafe', color: '#1e40af', border: '1px solid #bfdbfe' },
+    aprobada_jefe: { background: '#e0f2fe', color: '#0369a1', border: '1px solid #bae6fd' },
     cancelada:     { background: '#f3f4f6', color: '#6b7280', border: '1px solid #e5e7eb' },
   };
   return {
@@ -557,7 +557,7 @@ export const VacacionesPage = () => {
                       key={sol.id}
                       style={{
                         borderBottom: '1px solid #f0f0f0',
-                        backgroundColor: esAprobadaJefe ? '#f0f7ff' : undefined,
+                        backgroundColor: esAprobadaJefe ? '#f0f9ff' : undefined,
                       }}
                     >
                       <td style={{ ...td, color: '#6b7280', fontSize: '0.82rem' }}>
@@ -612,7 +612,7 @@ export const VacacionesPage = () => {
                             disabled={loadingDoc === sol.id}
                             style={{
                               padding: '5px 12px',
-                              backgroundColor: '#1e40af', color: 'white',
+                              backgroundColor: '#0369a1', color: 'white',
                               border: 'none', borderRadius: 5,
                               cursor: loadingDoc === sol.id ? 'wait' : 'pointer',
                               fontSize: '0.78rem', fontWeight: 600,
@@ -668,8 +668,8 @@ export const VacacionesPage = () => {
                       onClick={() => setPagina(p as number)}
                       style={{
                         padding: '6px 10px', border: '1px solid', borderRadius: '5px', fontSize: '0.82rem', cursor: 'pointer', minWidth: '34px',
-                        borderColor: p === paginaActual ? '#1e40af' : '#d1d5db',
-                        backgroundColor: p === paginaActual ? '#1e40af' : 'white',
+                        borderColor: p === paginaActual ? '#0369a1' : '#d1d5db',
+                        backgroundColor: p === paginaActual ? '#0369a1' : 'white',
                         color: p === paginaActual ? 'white' : '#374151',
                         fontWeight: p === paginaActual ? 700 : 400,
                       }}
@@ -711,7 +711,7 @@ export const VacacionesPage = () => {
               Al confirmar, los días quedarán oficialmente registrados como vacaciones aprobadas.
             </p>
             {isSuperuser && (
-              <p style={{ margin: '0 0 12px', fontSize: '0.78rem', backgroundColor: '#f0f7ff', color: '#1e40af', padding: '6px 10px', borderRadius: 5, fontWeight: 500 }}>
+              <p style={{ margin: '0 0 12px', fontSize: '0.78rem', backgroundColor: '#f0f9ff', color: '#0369a1', padding: '6px 10px', borderRadius: 5, fontWeight: 500 }}>
                 Estás confirmando como Administrador.
               </p>
             )}

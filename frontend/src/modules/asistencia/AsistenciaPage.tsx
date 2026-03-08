@@ -164,7 +164,7 @@ export const AsistenciaPage = () => {
         {[
           { label: 'Total Checadas', value: estadisticas.totalChecadas, color: '#333' },
           { label: 'Empleados Hoy', value: estadisticas.empleadosHoy, color: '#28a745' },
-          { label: 'Dispositivos', value: estadisticas.dispositivosActivos, color: '#007bff' },
+          { label: 'Dispositivos', value: estadisticas.dispositivosActivos, color: '#0ea5e9' },
         ].map((s) => (
           <div key={s.label} style={{ padding: '18px', backgroundColor: 'white', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
             <div style={{ color: '#888', fontSize: '0.85rem', marginBottom: '4px' }}>{s.label}</div>
@@ -192,7 +192,7 @@ export const AsistenciaPage = () => {
           <input type="date" value={filtros.fecha_inicio} onChange={(e) => setFiltros({ ...filtros, fecha_inicio: e.target.value })} style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} placeholder="Desde" />
           <input type="date" value={filtros.fecha_fin} onChange={(e) => setFiltros({ ...filtros, fecha_fin: e.target.value })} style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} placeholder="Hasta" />
         </div>
-        <button onClick={handleFiltros} style={{ padding: '8px 20px', backgroundColor: '#007bff', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>
+        <button onClick={handleFiltros} style={{ padding: '8px 20px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>
           Aplicar Filtros
         </button>
       </div>

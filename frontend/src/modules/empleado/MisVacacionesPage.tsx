@@ -41,11 +41,11 @@ const tabStyle = (active: boolean): React.CSSProperties => ({
   padding: '12px 20px',
   cursor: 'pointer',
   border: 'none',
-  borderBottom: active ? '3px solid #007bff' : '3px solid transparent',
+  borderBottom: active ? '3px solid #0ea5e9' : '3px solid transparent',
   backgroundColor: 'transparent',
   fontWeight: active ? 700 : 400,
   fontSize: '0.95rem',
-  color: active ? '#007bff' : '#666',
+  color: active ? '#0ea5e9' : '#666',
 });
 
 const th = { padding: '11px 13px', textAlign: 'left' as const, borderBottom: '2px solid #dee2e6', fontSize: '0.82rem', fontWeight: 600, color: '#555', backgroundColor: '#f8f9fa' };
@@ -356,7 +356,7 @@ export const MisVacacionesPage = () => {
                             Completada
                           </span>
                         ) : (
-                          <span style={{ backgroundColor: '#dbeafe', color: '#1e40af', borderRadius: 5, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                          <span style={{ backgroundColor: '#e0f2fe', color: '#0369a1', borderRadius: 5, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
                             Programada
                           </span>
                         )}
@@ -410,7 +410,7 @@ export const MisVacacionesPage = () => {
                           </span>
                         )}
                         {s.estado === 'aprobada_jefe' && (
-                          <span style={{ backgroundColor: '#dbeafe', color: '#1e40af', borderRadius: 5, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                          <span style={{ backgroundColor: '#e0f2fe', color: '#0369a1', borderRadius: 5, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
                             En revisión RH
                           </span>
                         )}
@@ -545,7 +545,7 @@ export const MisVacacionesPage = () => {
                     borderRadius: '10px',
                     border: '1px solid #e5e7eb',
                     boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
-                    backgroundColor: '#1e40af',
+                    backgroundColor: '#0369a1',
                     fontWeight: 700,
                     fontSize: '0.85rem',
                     color: 'white',
@@ -581,7 +581,7 @@ export const MisVacacionesPage = () => {
                       : sun
                         ? '#f5f3ff'
                         : yaTomado
-                          ? '#dbeafe'
+                          ? '#e0f2fe'
                           : inRange
                             ? '#dcfce7'
                             : '#fff';
@@ -593,7 +593,7 @@ export const MisVacacionesPage = () => {
                       : sun
                         ? '#8b7fa8'
                         : yaTomado
-                          ? '#1e40af'
+                          ? '#0369a1'
                           : inRange
                             ? '#15803d'
                             : '#1f2937';

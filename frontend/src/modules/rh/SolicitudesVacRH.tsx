@@ -20,7 +20,7 @@ interface EmpleadoResumen {
 
 const ESTADO_COLOR: Record<string, React.CSSProperties> = {
   pendiente:     { backgroundColor: '#fef3c7', color: '#92400e', borderRadius: 6, padding: '2px 10px', fontWeight: 600, fontSize: '0.78rem' },
-  aprobada_jefe: { backgroundColor: '#dbeafe', color: '#1e40af', borderRadius: 6, padding: '2px 10px', fontWeight: 600, fontSize: '0.78rem' },
+  aprobada_jefe: { backgroundColor: '#e0f2fe', color: '#0369a1', borderRadius: 6, padding: '2px 10px', fontWeight: 600, fontSize: '0.78rem' },
   aprobada:      { backgroundColor: '#d1fae5', color: '#065f46', borderRadius: 6, padding: '2px 10px', fontWeight: 600, fontSize: '0.78rem' },
   rechazada:     { backgroundColor: '#fee2e2', color: '#991b1b', borderRadius: 6, padding: '2px 10px', fontWeight: 600, fontSize: '0.78rem' },
   cancelada:     { backgroundColor: '#f3f4f6', color: '#6b7280', borderRadius: 6, padding: '2px 10px', fontWeight: 600, fontSize: '0.78rem' },
@@ -365,7 +365,7 @@ export const SolicitudesVacRH = () => {
                     style={{
                       padding: '5px 10px', border: '1px solid #d1d5db', borderRadius: 5, cursor: 'pointer',
                       fontSize: '0.82rem', fontWeight: pg === paginaActual ? 700 : 400,
-                      backgroundColor: pg === paginaActual ? '#1e40af' : 'white',
+                      backgroundColor: pg === paginaActual ? '#0369a1' : 'white',
                       color: pg === paginaActual ? 'white' : '#374151',
                     }}>{pg}</button>
                 );

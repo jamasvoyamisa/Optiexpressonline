@@ -702,9 +702,20 @@ class AsistenciaService:
             ).all()
         } if empleado_ids else {}
 
+        # Pre-cargar empleados con incapacidad activa ese día para evitar generar faltas
+        from app.modules.incapacidades import service as incapacidad_service
+        con_incapacidad = {
+            emp_id for emp_id in empleado_ids
+            if incapacidad_service.empleado_tiene_incapacidad_activa(db, emp_id, fecha)
+        }
+
         for asig in asignaciones:
             horario = asig.horario
             if not horario or not horario.activo:
+                continue
+
+            # Si el empleado tiene incapacidad activa ese día → no generar incidencia
+            if asig.empleado_id in con_incapacidad:
                 continue
 
             # dias_semana usa 1=lunes…7=domingo; weekday() devuelve 0=lun…6=dom

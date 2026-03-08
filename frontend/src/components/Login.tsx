@@ -110,7 +110,7 @@ export const Login = () => {
             style={{
               width: '100%',
               padding: '0.75rem',
-              backgroundColor: '#007bff',
+              backgroundColor: '#0ea5e9',
               color: 'white',
               border: 'none',
               borderRadius: '4px',

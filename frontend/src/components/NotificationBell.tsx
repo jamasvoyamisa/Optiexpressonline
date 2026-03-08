@@ -190,7 +190,7 @@ export const NotificationBell = ({ dispositivos = [] }: Props) => {
                   border: 'none',
                   cursor: 'pointer',
                   fontSize: '0.75rem',
-                  color: '#6366f1',
+                  color: '#0ea5e9',
                   fontWeight: 600,
                   padding: '2px 6px',
                 }}
@@ -293,14 +293,14 @@ export const NotificationBell = ({ dispositivos = [] }: Props) => {
                     padding: '10px 14px',
                     borderBottom: '1px solid #f3f4f6',
                     cursor: n.leida ? 'default' : 'pointer',
-                    backgroundColor: n.leida ? 'white' : '#f0f4ff',
+                    backgroundColor: n.leida ? 'white' : '#f0f9ff',
                     transition: 'background 0.1s',
                     display: 'flex',
                     gap: '10px',
                     alignItems: 'flex-start',
                   }}
                   onMouseEnter={e => { if (!n.leida) (e.currentTarget as HTMLDivElement).style.backgroundColor = '#e8eeff'; }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = n.leida ? 'white' : '#f0f4ff'; }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = n.leida ? 'white' : '#f0f9ff'; }}
                 >
                   {/* Ícono de tipo */}
                   <div style={{
@@ -344,7 +344,7 @@ export const NotificationBell = ({ dispositivos = [] }: Props) => {
                       width: '8px',
                       height: '8px',
                       borderRadius: '50%',
-                      backgroundColor: '#6366f1',
+                      backgroundColor: '#0ea5e9',
                       flexShrink: 0,
                       marginTop: '5px',
                     }} />
