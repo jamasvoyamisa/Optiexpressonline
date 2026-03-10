@@ -1,0 +1,7 @@
+venv/
+config.yaml
+buffer*.db
+synced_*.txt
+agent.log
+*.pyc
+__pycache__/

@@ -38,6 +38,9 @@ agent-local/buffer.db
 agent-local/*.log
 agent-local/config.yaml
 
+# Agent Linux (config con API keys - no subir)
+agent-linux/config.yaml
+
 # OS
 .DS_Store
 
