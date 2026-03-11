@@ -142,6 +142,7 @@ class EmpleadoBase(BaseModel):
     departamento_id: Optional[int] = None
     puesto_id: Optional[int] = None
     exento_incidencias: Optional[bool] = False
+    puede_checar_remoto: Optional[bool] = False
     curp: Optional[str] = None
     rfc: Optional[str] = None
     nss: Optional[str] = None
@@ -192,9 +193,15 @@ class EmpleadoUpdate(BaseModel):
     horario_sabado_id: Optional[int] = None  # None = no labora sábados; enviar explícitamente para cambiar
     estado: Optional[EstadoEmpleado] = None
     exento_incidencias: Optional[bool] = None  # Usuario especial: no genera incidencias automáticas
+    puede_checar_remoto: Optional[bool] = None  # Permiso para checar desde portal web remoto
     fecha_ingreso: Optional[datetime] = None
     fecha_baja: Optional[datetime] = None
     password: Optional[str] = None
+
+
+class PermisosEspecialesUpdate(BaseModel):
+    exento_incidencias: Optional[bool] = None
+    puede_checar_remoto: Optional[bool] = None
 
 
 class EmpleadoJefeResponse(BaseModel):
@@ -219,6 +226,8 @@ class EmpleadoResponse(EmpleadoBase):
     fecha_baja: Optional[datetime] = None
     horario_id: Optional[int] = None      # Horario L-V activo (empleado_horario)
     horario_sabado_id: Optional[int] = None  # Horario sábado (None = no labora sábados)
+    exento_incidencias: bool = False
+    puede_checar_remoto: bool = False
     created_at: datetime
     updated_at: Optional[datetime] = None
     rol: Optional[RolResponse] = None

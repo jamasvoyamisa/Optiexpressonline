@@ -61,8 +61,8 @@ const cardStyle: React.CSSProperties = {
 };
 
 const btnPrimary: React.CSSProperties = {
-  padding: '10px 24px', backgroundColor: '#0ea5e9', color: 'white', border: 'none',
-  borderRadius: '6px', cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem',
+  padding: '9px 20px', backgroundColor: '#0ea5e9', color: 'white', border: 'none',
+  borderRadius: '7px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', whiteSpace: 'nowrap',
 };
 
 const btnSuccess: React.CSSProperties = { ...btnPrimary, backgroundColor: '#28a745' };
@@ -95,6 +95,55 @@ const modalSmall: React.CSSProperties = {
 const modalLarge: React.CSSProperties = {
   ...modalSmall, maxWidth: '800px', maxHeight: '90vh', overflowY: 'auto',
 };
+
+
+// ────────────────────────────────────────────────────────────────────────────
+// Panel de permisos especiales (solo admin)
+// ────────────────────────────────────────────────────────────────────────────
+function PermisosEspecialesPanel({ emp, onUpdated }: { emp: Empleado; onUpdated: (updated: Empleado) => void }) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const toggle = async (campo: 'exento_incidencias' | 'puede_checar_remoto', valor: boolean) => {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await api.patch<Empleado>(`/personal/empleados/${emp.id}/permisos-especiales`, { [campo]: valor });
+      onUpdated(res.data);
+    } catch {
+      setError('No se pudo guardar el cambio.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={{ marginBottom: '14px', padding: '10px 14px', backgroundColor: '#f8f9fa', border: '1px solid #dee2e6', borderRadius: '6px' }}>
+      <p style={{ margin: '0 0 8px', fontSize: '0.8rem', fontWeight: 600, color: '#6c757d' }}>Permisos especiales</p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: saving ? 'not-allowed' : 'pointer', fontSize: '0.88rem' }}>
+          <input
+            type="checkbox"
+            checked={emp.exento_incidencias ?? false}
+            disabled={saving}
+            onChange={e => toggle('exento_incidencias', e.target.checked)}
+          />
+          Exento de incidencias (no aparece en reportes de asistencia)
+        </label>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: saving ? 'not-allowed' : 'pointer', fontSize: '0.88rem' }}>
+          <input
+            type="checkbox"
+            checked={emp.puede_checar_remoto ?? false}
+            disabled={saving}
+            onChange={e => toggle('puede_checar_remoto', e.target.checked)}
+          />
+          Puede checar remotamente (portal web)
+        </label>
+      </div>
+      {error && <p style={{ margin: '6px 0 0', color: '#dc3545', fontSize: '0.8rem' }}>{error}</p>}
+    </div>
+  );
+}
 
 
 export const PersonalPage = () => {
@@ -1301,6 +1350,17 @@ export const PersonalPage = () => {
                   </button>
                 )}
               </div>
+
+              {/* Panel de permisos especiales — solo admin */}
+              {isAdmin && (
+                <PermisosEspecialesPanel
+                  emp={emp}
+                  onUpdated={(updated) => {
+                    setEmpleados((prev) => prev.map((e) => e.id === updated.id ? updated : e));
+                    setSelectedEmpleado(updated);
+                  }}
+                />
+              )}
 
               {/* Sub-tabs dentro del detalle */}
               <div style={{ display: 'flex', borderBottom: '2px solid #e5e7eb', marginBottom: '16px' }}>

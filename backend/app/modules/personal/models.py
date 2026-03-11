@@ -117,8 +117,10 @@ class Empleado(Base):
     fecha_ingreso = Column(DateTime(timezone=True))
     fecha_baja = Column(DateTime(timezone=True), nullable=True)
 
-    # Usuario especial: no genera incidencias automáticas (faltas, retardos, salida anticipada, incompleta)
+    # Usuario especial: no genera incidencias automáticas ni aparece en reportes de asistencia
     exento_incidencias = Column(Boolean, default=False, nullable=False)
+    # Permiso para checar desde el portal web remoto (solo el admin lo puede otorgar)
+    puede_checar_remoto = Column(Boolean, default=False, nullable=False)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

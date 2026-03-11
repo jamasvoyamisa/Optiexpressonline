@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../../services/api';
+import { useIsMobile } from '../../hooks/useIsMobile';
 import type { EmpleadoResponse } from '../../types/api';
 
 const cardBase: React.CSSProperties = {
@@ -12,6 +13,7 @@ const cardBase: React.CSSProperties = {
 };
 
 export const MisDatosPage = () => {
+  const isMobile = useIsMobile();
   const [empleado, setEmpleado] = useState<EmpleadoResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -34,16 +36,22 @@ export const MisDatosPage = () => {
         style={{
           ...cardBase,
           boxShadow: hover ? '0 6px 16px rgba(0,0,0,0.08)' : cardBase.boxShadow,
-          transform: hover ? 'translateY(-2px)' : 'translateY(0)',
+          transform: !isMobile && hover ? 'translateY(-2px)' : 'translateY(0)',
         }}
         onMouseEnter={() => setHover(true)}
         onMouseLeave={() => setHover(false)}
       >
-        <h2 style={{ margin: '0 0 16px 0', fontSize: '1.1rem', color: '#374151', fontWeight: 700 }}>{title}</h2>
+        <h2 style={{ margin: '0 0 14px 0', fontSize: '1rem', color: '#1e3a5f', fontWeight: 700, borderBottom: '2px solid #e0f2fe', paddingBottom: '8px' }}>{title}</h2>
         {rows.map((r) => (
-          <div key={r.label} style={{ display: 'flex', padding: '8px 0', borderBottom: '1px solid #f3f4f6' }}>
-            <span style={{ fontWeight: 600, width: '180px', flexShrink: 0, color: '#555' }}>{r.label}</span>
-            <span style={{ color: '#1f2937' }}>{r.value ?? '-'}</span>
+          <div key={r.label} style={{
+            display: 'flex',
+            flexDirection: isMobile ? 'column' : 'row',
+            padding: '8px 0',
+            borderBottom: '1px solid #f3f4f6',
+            gap: isMobile ? '2px' : undefined,
+          }}>
+            <span style={{ fontWeight: 600, width: isMobile ? 'auto' : '160px', flexShrink: 0, color: '#6b7280', fontSize: '0.8rem' }}>{r.label}</span>
+            <span style={{ color: '#1f2937', fontSize: '0.9rem', fontWeight: isMobile ? 500 : undefined }}>{r.value ?? '-'}</span>
           </div>
         ))}
       </div>
@@ -97,9 +105,13 @@ export const MisDatosPage = () => {
   }
 
   return (
-    <div style={{ padding: '24px' }}>
-      <h1 style={{ marginBottom: '24px' }}>Mis datos</h1>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '20px' }}>
+    <div style={{ padding: isMobile ? '16px' : '24px' }}>
+      <h1 style={{ marginBottom: '20px', fontSize: isMobile ? '1.3rem' : '1.6rem' }}>Mis datos</h1>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: isMobile ? '1fr' : 'repeat(2, 1fr)',
+        gap: isMobile ? '12px' : '20px',
+      }}>
         {cards.map((c) => (
           <Card key={c.title} title={c.title} rows={c.rows} />
         ))}

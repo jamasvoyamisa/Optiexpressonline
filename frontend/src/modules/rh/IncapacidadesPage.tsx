@@ -268,7 +268,7 @@ export const IncapacidadesPage = () => {
         <h1 style={{ margin: 0, fontSize: '1.4rem' }}>Incapacidades</h1>
         <button
           onClick={abrirNueva}
-          style={{ padding: '9px 18px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem' }}
+          style={{ padding: '9px 20px', backgroundColor: '#28a745', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', whiteSpace: 'nowrap' }}
         >
           + Registrar incapacidad
         </button>
@@ -533,7 +533,7 @@ export const IncapacidadesPage = () => {
                 type="button"
                 onClick={guardar}
                 disabled={guardando}
-                style={{ padding: '9px 20px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: 6, cursor: guardando ? 'not-allowed' : 'pointer', fontWeight: 600 }}
+                style={{ padding: '9px 20px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '7px', cursor: guardando ? 'not-allowed' : 'pointer', fontWeight: 600, fontSize: '0.88rem', opacity: guardando ? 0.6 : 1 }}
               >
                 {guardando ? 'Guardando...' : editando ? 'Guardar cambios' : 'Registrar'}
               </button>

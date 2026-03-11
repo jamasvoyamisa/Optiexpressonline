@@ -70,8 +70,8 @@ const modalSmall: React.CSSProperties = {
 
 const labelStyle: React.CSSProperties = { display: 'block', marginBottom: '4px', fontSize: '0.85rem', fontWeight: 500, color: '#374151' };
 const inputStyle: React.CSSProperties = { width: '100%', height: '38px', padding: '0 12px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '0.9rem', boxSizing: 'border-box' };
-const btnSuccess: React.CSSProperties = { padding: '10px 24px', backgroundColor: '#28a745', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem' };
-const btnSecondary: React.CSSProperties = { padding: '10px 24px', backgroundColor: '#6c757d', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem' };
+const btnSuccess: React.CSSProperties = { padding: '9px 20px', backgroundColor: '#28a745', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', whiteSpace: 'nowrap' };
+const btnSecondary: React.CSSProperties = { padding: '9px 20px', backgroundColor: '#6c757d', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', whiteSpace: 'nowrap' };
 
 export const ConfiguracionPage = () => {
   const [configTab, setConfigTab] = useState<ConfigTab>('dispositivos');
@@ -83,7 +83,7 @@ export const ConfiguracionPage = () => {
   const [showApiKey, setShowApiKey] = useState<Record<number, boolean>>({});
   const [showEmpresaModal, setShowEmpresaModal] = useState(false);
   const [editingEmpresaId, setEditingEmpresaId] = useState<number | null>(null);
-  const [empresaForm, setEmpresaForm] = useState({ nombre: '', rfc: '', direccion: '', telefono: '', checadas_remotas: false });
+  const [empresaForm, setEmpresaForm] = useState({ nombre: '', rfc: '', direccion: '', telefono: '' });
   const [saving, setSaving] = useState(false);
 
   // Festivos state
@@ -360,13 +360,13 @@ export const ConfiguracionPage = () => {
   };
 
   const openNewEmpresa = () => {
-    setEmpresaForm({ nombre: '', rfc: '', direccion: '', telefono: '', checadas_remotas: false });
+    setEmpresaForm({ nombre: '', rfc: '', direccion: '', telefono: '' });
     setEditingEmpresaId(null);
     setShowEmpresaModal(true);
   };
 
   const startEditEmpresa = (emp: EmpresaResponse) => {
-    setEmpresaForm({ nombre: emp.nombre, rfc: emp.rfc || '', direccion: emp.direccion || '', telefono: emp.telefono || '', checadas_remotas: emp.checadas_remotas ?? false });
+    setEmpresaForm({ nombre: emp.nombre, rfc: emp.rfc || '', direccion: emp.direccion || '', telefono: emp.telefono || '' });
     setEditingEmpresaId(emp.id);
     setShowEmpresaModal(true);
   };
@@ -380,7 +380,7 @@ export const ConfiguracionPage = () => {
       if (empresaForm.rfc) payload.rfc = empresaForm.rfc;
       if (empresaForm.direccion) payload.direccion = empresaForm.direccion;
       if (empresaForm.telefono) payload.telefono = empresaForm.telefono;
-      payload.checadas_remotas = empresaForm.checadas_remotas;
+      payload.checadas_remotas = true; // Siempre habilitadas
       if (editingEmpresaId) {
         await api.put(`/personal/empresas/${editingEmpresaId}`, payload);
         alert('Empresa actualizada');
@@ -416,14 +416,14 @@ export const ConfiguracionPage = () => {
         <div>
           <h1 style={{ margin: 0 }}>Configuracion</h1>
           <p style={{ margin: '4px 0 0', color: '#888', fontSize: '0.9rem' }}>
-            {configTab === 'dispositivos' ? 'Dispositivos biometricos' : configTab === 'empresas' ? 'Empresas' : configTab === 'usuarios_especiales' ? 'Usuarios que no generan incidencias' : 'Horarios de trabajo'}
+            {configTab === 'dispositivos' ? 'Dispositivos Biometricos' : configTab === 'empresas' ? 'Empresas' : configTab === 'usuarios_especiales' ? 'Usuarios que no generan incidencias' : 'Horarios de trabajo'}
           </p>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
           {configTab === 'dispositivos' && (
             <button
               onClick={() => setShowDeviceForm(!showDeviceForm)}
-              style={{ padding: '8px 18px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}
+              style={{ padding: '9px 20px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', whiteSpace: 'nowrap' }}
             >
               {showDeviceForm ? 'Cancelar' : '+ Registrar Dispositivo'}
             </button>
@@ -613,7 +613,7 @@ export const ConfiguracionPage = () => {
               <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '10px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
                 <thead>
                   <tr style={{ backgroundColor: '#f8f9fa' }}>
-                    {['Nombre', 'RFC', 'Direccion', 'Telefono', 'Empleados', 'Checadas remotas', 'Estado', 'Acciones'].map(h => (
+                    {['Nombre', 'RFC', 'Direccion', 'Telefono', 'Empleados', 'Estado', 'Acciones'].map(h => (
                       <th key={h} style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>{h}</th>
                     ))}
                   </tr>
@@ -628,13 +628,6 @@ export const ConfiguracionPage = () => {
                         <td style={{ padding: '11px 14px', color: '#555', maxWidth: '250px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{emp.direccion || '-'}</td>
                         <td style={{ padding: '11px 14px', color: '#555' }}>{emp.telefono || '-'}</td>
                         <td style={{ padding: '11px 14px', fontWeight: 600 }}>{count}</td>
-                        <td style={{ padding: '11px 14px' }}>
-                          {emp.checadas_remotas ? (
-                            <span style={{ padding: '3px 8px', borderRadius: '4px', fontSize: '0.75rem', backgroundColor: '#dbeafe', color: '#1d4ed8', fontWeight: 500 }}>Sí</span>
-                          ) : (
-                            <span style={{ color: '#9ca3af', fontSize: '0.85rem' }}>—</span>
-                          )}
-                        </td>
                         <td style={{ padding: '11px 14px' }}>
                           <span style={{ padding: '3px 10px', borderRadius: '4px', fontSize: '0.8rem', backgroundColor: emp.activo ? '#d4edda' : '#f8d7da', color: emp.activo ? '#155724' : '#721c24', fontWeight: 500 }}>
                             {emp.activo ? 'Activa' : 'Inactiva'}
@@ -827,13 +820,6 @@ export const ConfiguracionPage = () => {
                   <label style={labelStyle}>Telefono</label>
                   <input style={inputStyle} value={empresaForm.telefono}
                     onChange={e => setEmpresaForm(p => ({ ...p, telefono: e.target.value }))} />
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <input type="checkbox" id="checadas_remotas" checked={empresaForm.checadas_remotas}
-                    onChange={e => setEmpresaForm(p => ({ ...p, checadas_remotas: e.target.checked }))} />
-                  <label htmlFor="checadas_remotas" style={{ ...labelStyle, margin: 0, cursor: 'pointer' }}>
-                    Habilitar checadas remotas (portal web)
-                  </label>
                 </div>
               </div>
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>

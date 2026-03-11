@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
 import { generarDocumentoPrestamo } from '../prestamos/documentoPrestamo';
+import { useIsMobile } from '../../hooks/useIsMobile';
 
 interface SolicitudPrestamo {
   id: number;
@@ -58,6 +59,7 @@ const calcularDescuentoQuincenal = (monto: number, plazo: number) => {
 };
 
 export const MisPrestamosPage = () => {
+  const isMobile = useIsMobile();
   const [solicitudes, setSolicitudes] = useState<SolicitudPrestamo[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -121,14 +123,25 @@ export const MisPrestamosPage = () => {
     }
   };
 
+  const verDocumento = (sol: SolicitudPrestamo) => {
+    const w = window.open('', '_blank', 'width=820,height=920,scrollbars=yes');
+    if (!w) { alert('Permite ventanas emergentes para ver el documento'); return; }
+    w.document.write('<html><body style="font-family:system-ui;padding:40px;text-align:center;color:#666">Cargando documento...</body></html>');
+    (async () => {
+      try {
+        const res = await api.get(`personal/empleados/${sol.empleado_id}`);
+        generarDocumentoPrestamo(sol, res.data, w);
+      } catch {
+        generarDocumentoPrestamo(sol, null, w);
+      }
+    })();
+  };
+
   return (
-    <div style={{ padding: '24px' }}>
+    <div style={{ padding: isMobile ? '16px' : '24px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
-        <h1 style={{ margin: 0, fontSize: '1.4rem' }}>Mis préstamos</h1>
-        <button
-          onClick={abrirNueva}
-          style={{ padding: '9px 18px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem' }}
-        >
+        <h1 style={{ margin: 0, fontSize: isMobile ? '1.3rem' : '1.4rem' }}>Mis préstamos</h1>
+        <button onClick={abrirNueva} style={{ padding: '9px 18px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem' }}>
           + Nueva solicitud
         </button>
       </div>
@@ -139,7 +152,47 @@ export const MisPrestamosPage = () => {
         <div style={{ padding: '32px', textAlign: 'center', backgroundColor: 'white', borderRadius: '10px', border: '1px solid #e5e7eb', color: '#9ca3af' }}>
           No tienes solicitudes de préstamo. Haz clic en "Nueva solicitud" para crear una.
         </div>
+      ) : isMobile ? (
+        /* ── Vista móvil: tarjetas ── */
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+          {solicitudes.map(sol => {
+            const estadoStyle = ESTADO_STYLE[sol.estado] ?? ESTADO_STYLE.pendiente;
+            return (
+              <div key={sol.id} style={{ backgroundColor: 'white', borderRadius: '10px', border: '1px solid #e5e7eb', padding: '16px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: '1.15rem', color: '#1e3a5f' }}>{formatMonto(sol.monto)}</div>
+                    <div style={{ fontSize: '0.82rem', color: '#6b7280', marginTop: '2px' }}>
+                      {sol.plazo_meses} meses · {sol.descuento_quincenal ? formatMonto(sol.descuento_quincenal) + '/q' : ''}
+                    </div>
+                  </div>
+                  <span style={{ backgroundColor: estadoStyle.bg, color: estadoStyle.color, borderRadius: 5, padding: '4px 10px', fontSize: '0.78rem', fontWeight: 600 }}>
+                    {ESTADO_LABEL[sol.estado] ?? sol.estado}
+                  </span>
+                </div>
+                {sol.motivo && <p style={{ margin: '0 0 8px', fontSize: '0.85rem', color: '#374151' }}>{sol.motivo}</p>}
+                <div style={{ fontSize: '0.78rem', color: '#9ca3af', marginBottom: '10px' }}>
+                  {new Date(sol.created_at).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' })}
+                  {sol.comentarios_aprobacion && sol.estado !== 'pendiente' && (
+                    <div style={{ marginTop: '4px', color: '#6b7280' }}>{sol.comentarios_aprobacion}</div>
+                  )}
+                </div>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button onClick={() => verDocumento(sol)} style={{ flex: 1, padding: '8px', backgroundColor: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1', borderRadius: 6, cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}>
+                    Ver documento
+                  </button>
+                  {sol.estado === 'pendiente' && (
+                    <button onClick={() => cancelar(sol.id)} disabled={cancelando} style={{ padding: '8px 14px', backgroundColor: '#fff7ed', color: '#c2410c', border: '1px solid #fed7aa', borderRadius: 6, cursor: cancelando ? 'not-allowed' : 'pointer', fontSize: '0.85rem', fontWeight: 600 }}>
+                      Cancelar
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       ) : (
+        /* ── Vista desktop: tabla ── */
         <div style={{ overflowX: 'auto', backgroundColor: 'white', borderRadius: '10px', border: '1px solid #e5e7eb', boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -170,42 +223,14 @@ export const MisPrestamosPage = () => {
                     <td style={td}>
                       {new Date(sol.created_at).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' })}
                       {sol.comentarios_aprobacion && sol.estado !== 'pendiente' && (
-                        <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 4 }} title={sol.comentarios_aprobacion}>
-                          {sol.comentarios_aprobacion}
-                        </div>
+                        <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 4 }}>{sol.comentarios_aprobacion}</div>
                       )}
                     </td>
                     <td style={{ ...td, textAlign: 'center' }}>
                       <div style={{ display: 'flex', gap: 6, justifyContent: 'center', flexWrap: 'wrap' }}>
-                        <button
-                          onClick={() => {
-                            const w = window.open('', '_blank', 'width=820,height=920,scrollbars=yes');
-                            if (!w) {
-                              alert('Permite ventanas emergentes para ver el documento');
-                              return;
-                            }
-                            w.document.write('<html><body style="font-family:system-ui;padding:40px;text-align:center;color:#666">Cargando documento...</body></html>');
-                            (async () => {
-                              try {
-                                const res = await api.get(`personal/empleados/${sol.empleado_id}`);
-                                generarDocumentoPrestamo(sol, res.data, w);
-                              } catch {
-                                generarDocumentoPrestamo(sol, null, w);
-                              }
-                            })();
-                          }}
-                          style={{ padding: '4px 10px', backgroundColor: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1', borderRadius: 5, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600 }}
-                        >
-                          Ver documento
-                        </button>
+                        <button onClick={() => verDocumento(sol)} style={{ padding: '4px 10px', backgroundColor: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1', borderRadius: 5, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600 }}>Ver documento</button>
                         {sol.estado === 'pendiente' && (
-                          <button
-                            onClick={() => cancelar(sol.id)}
-                            disabled={cancelando}
-                            style={{ padding: '4px 10px', backgroundColor: '#fff7ed', color: '#c2410c', border: '1px solid #fed7aa', borderRadius: 5, cursor: cancelando ? 'not-allowed' : 'pointer', fontSize: '0.78rem', fontWeight: 600 }}
-                          >
-                            Cancelar
-                          </button>
+                          <button onClick={() => cancelar(sol.id)} disabled={cancelando} style={{ padding: '4px 10px', backgroundColor: '#fff7ed', color: '#c2410c', border: '1px solid #fed7aa', borderRadius: 5, cursor: cancelando ? 'not-allowed' : 'pointer', fontSize: '0.78rem', fontWeight: 600 }}>Cancelar</button>
                         )}
                       </div>
                     </td>

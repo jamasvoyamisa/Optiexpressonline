@@ -254,7 +254,7 @@ export const PrestamosPage = () => {
         {isRH && (
           <button
             onClick={abrirNueva}
-            style={{ padding: '9px 18px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem' }}
+            style={{ padding: '9px 20px', backgroundColor: '#28a745', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', whiteSpace: 'nowrap' }}
           >
             + Registrar solicitud (RH)
           </button>

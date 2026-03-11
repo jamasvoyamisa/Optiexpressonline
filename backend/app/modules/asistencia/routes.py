@@ -459,8 +459,11 @@ def get_dashboard_stats(
     fin_mes = inicio_mes + timedelta(days=32)
     fin_mes = fin_mes.replace(day=1) - timedelta(days=1)
 
-    # Base query empleados
-    q_empleados = db.query(pm.Empleado)
+    # Base query empleados (excluir cuentas de sistema y exentos de incidencias)
+    q_empleados = db.query(pm.Empleado).filter(
+        pm.Empleado.empresa_id.isnot(None),
+        pm.Empleado.exento_incidencias == False,
+    )
     if solo_mi_area:
         q_empleados = q_empleados.filter(pm.Empleado.departamento_id.in_(depto_ids))
 
@@ -1216,8 +1219,12 @@ def reporte_resumen_asistencia(
     if (ff - fi).days > 366:
         raise HTTPException(status_code=400, detail="El rango máximo es 1 año")
 
-    # ── Obtener empleados del scope ──
-    q = db.query(pm.Empleado).filter(pm.Empleado.estado == pm.EstadoEmpleado.ACTIVO)
+    # ── Obtener empleados del scope (excluir cuentas de sistema y usuarios exentos de incidencias) ──
+    q = db.query(pm.Empleado).filter(
+        pm.Empleado.estado == pm.EstadoEmpleado.ACTIVO,
+        pm.Empleado.empresa_id.isnot(None),
+        pm.Empleado.exento_incidencias == False,
+    )
     if empleado_id:
         q = q.filter(pm.Empleado.id == empleado_id)
     elif departamento_id:
@@ -1388,6 +1395,12 @@ def reporte_detalle_empleado(
     from datetime import date, timedelta, datetime as dt
     from app.modules.incapacidades import models as inc_models
     from app.core.timezone_utils import to_mexico, mexico_date_to_utc_range
+    from app.modules.personal import models as pm
+
+    # Bloquear acceso al detalle de cuentas de sistema o usuarios exentos
+    emp_check = db.query(pm.Empleado).filter(pm.Empleado.id == empleado_id).first()
+    if not emp_check or emp_check.empresa_id is None or emp_check.exento_incidencias:
+        raise HTTPException(status_code=403, detail="No disponible para este usuario")
 
     try:
         fi = date.fromisoformat(fecha_inicio)

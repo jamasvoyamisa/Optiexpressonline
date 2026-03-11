@@ -450,6 +450,31 @@ def update_empleado(
     return db_empleado
 
 
+@router.patch("/empleados/{empleado_id}/permisos-especiales", response_model=schemas.EmpleadoResponse)
+def set_permisos_especiales(
+    empleado_id: int,
+    body: schemas.PermisosEspecialesUpdate,
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db),
+):
+    """
+    Actualiza los permisos especiales de un empleado (exento_incidencias, puede_checar_remoto).
+    Solo el Administrador (superuser) puede usar este endpoint.
+    """
+    if not current_extra.get("is_superuser"):
+        raise HTTPException(status_code=403, detail="Solo el Administrador puede gestionar permisos especiales.")
+    emp = service.PersonalService.get_empleado(db, empleado_id)
+    if not emp:
+        raise HTTPException(status_code=404, detail="Empleado no encontrado")
+    if body.exento_incidencias is not None:
+        emp.exento_incidencias = body.exento_incidencias
+    if body.puede_checar_remoto is not None:
+        emp.puede_checar_remoto = body.puede_checar_remoto
+    db.commit()
+    db.refresh(emp)
+    return emp
+
+
 @router.delete("/empleados/{empleado_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_empleado(empleado_id: int, db: Session = Depends(get_db)):
     """Eliminar empleado (dar de baja)"""

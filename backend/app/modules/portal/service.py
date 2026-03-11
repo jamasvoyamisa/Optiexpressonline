@@ -74,6 +74,10 @@ def registrar_checada_remota(
     if not empleado:
         return ChecadaRemotaResponse(ok=False, mensaje="Credenciales incorrectas.")
 
+    # Verificar permiso individual de checada remota
+    if not empleado.puede_checar_remoto:
+        return ChecadaRemotaResponse(ok=False, mensaje="No tienes permiso para checar de forma remota.")
+
     if not _verificar_password(empleado, password):
         return ChecadaRemotaResponse(ok=False, mensaje="Credenciales incorrectas.")
 

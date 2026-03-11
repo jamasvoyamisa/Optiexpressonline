@@ -149,6 +149,7 @@ export interface EmpleadoResponse {
   horario_id?: number | null;
   horario_sabado_id?: number | null;
   exento_incidencias?: boolean;
+  puede_checar_remoto?: boolean;
   created_at?: string;
   updated_at?: string | null;
   empresa?: EmpresaResponse | null;

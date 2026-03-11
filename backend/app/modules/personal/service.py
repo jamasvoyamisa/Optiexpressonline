@@ -458,6 +458,9 @@ class PersonalService:
             joinedload(models.Empleado.horarios_asignados),
         )
 
+        # Excluir siempre cuentas de sistema (sin empresa asignada)
+        query = query.filter(models.Empleado.empresa_id.isnot(None))
+
         if exento_incidencias is not None:
             query = query.filter(models.Empleado.exento_incidencias == exento_incidencias)
         elif admin_rol_ids:

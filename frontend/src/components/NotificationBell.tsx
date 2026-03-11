@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../services/api';
+import { useIsMobile } from '../hooks/useIsMobile';
 import type { Dispositivo } from '../types';
 
 interface Notificacion {
@@ -31,7 +32,8 @@ const NOMBRE_DISPOSITIVO_PORTAL = 'Portal Checadas Remotas';
 const esDispositivoPortal = (d: Dispositivo) => (d.nombre || '').trim() === NOMBRE_DISPOSITIVO_PORTAL;
 
 function timeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr.endsWith('Z') || dateStr.includes('+') ? dateStr : dateStr + 'Z').getTime();
+  // Sin 'Z': el navegador lo trata como hora local (México), que es como lo guarda el servidor
+  const diff = Date.now() - new Date(dateStr).getTime();
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return 'ahora';
   if (mins < 60) return `hace ${mins} min`;
@@ -42,6 +44,7 @@ function timeAgo(dateStr: string): string {
 }
 
 export const NotificationBell = ({ dispositivos = [] }: Props) => {
+  const isMobile = useIsMobile();
   const dispositivosConAlertas = dispositivos.filter(d => !esDispositivoPortal(d));
   const inactivos = dispositivosConAlertas.filter(d => !d.activo);
   const sinConexion = dispositivosConAlertas.filter(d => {
@@ -152,7 +155,20 @@ export const NotificationBell = ({ dispositivos = [] }: Props) => {
 
       {/* Panel desplegable */}
       {open && (
-        <div style={{
+        <div style={isMobile ? {
+          position: 'fixed',
+          top: '60px',
+          left: '8px',
+          right: '8px',
+          width: 'auto',
+          maxHeight: '70vh',
+          overflowY: 'auto',
+          backgroundColor: 'white',
+          borderRadius: '10px',
+          boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
+          zIndex: 1000,
+          border: '1px solid #e5e7eb',
+        } : {
           position: 'absolute',
           top: 'calc(100% + 8px)',
           right: 0,

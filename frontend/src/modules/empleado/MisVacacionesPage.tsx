@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../../services/api';
+import { useIsMobile } from '../../hooks/useIsMobile';
 
 interface Solicitud {
   id: number;
@@ -78,6 +79,7 @@ interface DiaFestivo {
 }
 
 export const MisVacacionesPage = () => {
+  const isMobile = useIsMobile();
   const [solicitudes, setSolicitudes] = useState<Solicitud[]>([]);
   const [balance, setBalance] = useState<Balance | null>(null);
   const [loading, setLoading] = useState(true);
@@ -159,7 +161,8 @@ export const MisVacacionesPage = () => {
   };
 
   // Calendario: lunes = 0, domingo = 6 (no elegible)
-  const weekDays = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+  const weekDaysFull = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+  const weekDaysShort = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
   const firstOfMonth = new Date(calYear, calMonth, 1);
   const lastOfMonth = new Date(calYear, calMonth + 1, 0);
   const startPad = (firstOfMonth.getDay() + 6) % 7;
@@ -251,8 +254,8 @@ export const MisVacacionesPage = () => {
   };
 
   return (
-    <div style={{ padding: '24px' }}>
-      <h1 style={{ marginBottom: '20px' }}>Vacaciones</h1>
+    <div style={{ padding: isMobile ? '14px' : '24px' }}>
+      <h1 style={{ marginBottom: '16px', fontSize: isMobile ? '1.3rem' : '1.6rem' }}>Vacaciones</h1>
 
       {/* Tarjetas siempre visibles */}
       {balance && (
@@ -300,14 +303,14 @@ export const MisVacacionesPage = () => {
       )}
 
       {/* Pestañas debajo de las tarjetas */}
-      <div style={{ display: 'flex', borderBottom: '2px solid #e5e7eb', marginBottom: '24px' }}>
-        <button style={tabStyle(activeTab === 'nueva')} onClick={() => setActiveTab('nueva')}>
+      <div style={{ display: 'flex', borderBottom: '2px solid #e5e7eb', marginBottom: '20px', overflowX: 'auto', whiteSpace: 'nowrap' }}>
+        <button style={{ ...tabStyle(activeTab === 'nueva'), padding: isMobile ? '10px 14px' : '12px 20px', fontSize: isMobile ? '0.85rem' : '0.95rem' }} onClick={() => setActiveTab('nueva')}>
           Nueva Solicitud
         </button>
-        <button style={tabStyle(activeTab === 'pendientes')} onClick={() => setActiveTab('pendientes')}>
+        <button style={{ ...tabStyle(activeTab === 'pendientes'), padding: isMobile ? '10px 14px' : '12px 20px', fontSize: isMobile ? '0.85rem' : '0.95rem' }} onClick={() => setActiveTab('pendientes')}>
           Solicitudes Pendientes
         </button>
-        <button style={tabStyle(activeTab === 'registros')} onClick={() => setActiveTab('registros')}>
+        <button style={{ ...tabStyle(activeTab === 'registros'), padding: isMobile ? '10px 14px' : '12px 20px', fontSize: isMobile ? '0.85rem' : '0.95rem' }} onClick={() => setActiveTab('registros')}>
           Vacaciones Ejercidas
         </button>
       </div>
@@ -321,6 +324,30 @@ export const MisVacacionesPage = () => {
             <p style={{ color: '#666', padding: '24px', backgroundColor: '#f8f9fa', borderRadius: '8px' }}>
               No tienes vacaciones tomadas (aprobadas) registradas.
             </p>
+          ) : isMobile ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {registros.map((s) => {
+                const completada = s.fecha_fin.slice(0, 10) < todayLocal;
+                return (
+                  <div key={s.id} style={{ backgroundColor: 'white', borderRadius: '10px', border: '1px solid #e5e7eb', padding: '14px 16px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                      <div style={{ fontWeight: 700, color: '#1e3a5f' }}>
+                        {new Date(s.fecha_inicio).toLocaleDateString('es-MX', { dateStyle: 'short' })} — {new Date(s.fecha_fin).toLocaleDateString('es-MX', { dateStyle: 'short' })}
+                      </div>
+                      <span style={{ fontWeight: 700, color: '#374151' }}>{s.dias_solicitados} días</span>
+                    </div>
+                    <div style={{ fontSize: '0.82rem', color: '#6b7280', marginBottom: '8px' }}>
+                      Autorizó: {s.jefe_aprobador_nombre || '—'}
+                      {s.comentarios_aprobacion && <div style={{ marginTop: '2px' }}>{s.comentarios_aprobacion}</div>}
+                    </div>
+                    {completada
+                      ? <span style={{ backgroundColor: '#d1fae5', color: '#065f46', borderRadius: 5, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 600 }}>Completada</span>
+                      : <span style={{ backgroundColor: '#e0f2fe', color: '#0369a1', borderRadius: 5, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 600 }}>Programada</span>
+                    }
+                  </div>
+                );
+              })}
+            </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
@@ -344,22 +371,13 @@ export const MisVacacionesPage = () => {
                       <td style={td}>{new Date(s.fecha_fin).toLocaleDateString('es-MX', { dateStyle: 'short' })}</td>
                       <td style={{ ...td, textAlign: 'center', fontWeight: 600 }}>{s.dias_solicitados}</td>
                       <td style={td}>{s.jefe_aprobador_nombre || '—'}</td>
-                      <td style={td}>
-                        {s.fecha_aprobacion
-                          ? new Date(s.fecha_aprobacion).toLocaleDateString('es-MX', { dateStyle: 'short' })
-                          : '—'}
-                      </td>
+                      <td style={td}>{s.fecha_aprobacion ? new Date(s.fecha_aprobacion).toLocaleDateString('es-MX', { dateStyle: 'short' }) : '—'}</td>
                       <td style={{ ...td, color: '#555' }}>{s.comentarios_aprobacion || '—'}</td>
                       <td style={{ ...td, textAlign: 'center' }}>
-                        {completada ? (
-                          <span style={{ backgroundColor: '#d1fae5', color: '#065f46', borderRadius: 5, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                            Completada
-                          </span>
-                        ) : (
-                          <span style={{ backgroundColor: '#e0f2fe', color: '#0369a1', borderRadius: 5, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                            Programada
-                          </span>
-                        )}
+                        {completada
+                          ? <span style={{ backgroundColor: '#d1fae5', color: '#065f46', borderRadius: 5, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 600, whiteSpace: 'nowrap' }}>Completada</span>
+                          : <span style={{ backgroundColor: '#e0f2fe', color: '#0369a1', borderRadius: 5, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 600, whiteSpace: 'nowrap' }}>Programada</span>
+                        }
                       </td>
                     </tr>
                     );
@@ -383,6 +401,37 @@ export const MisVacacionesPage = () => {
             <p style={{ color: '#666', padding: '24px', backgroundColor: '#f8f9fa', borderRadius: '8px' }}>
               No tienes solicitudes en proceso ni rechazadas.
             </p>
+          ) : isMobile ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {pendientes.map((s) => (
+                <div key={s.id} style={{ backgroundColor: 'white', borderRadius: '10px', border: '1px solid #e5e7eb', padding: '14px 16px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
+                    <div style={{ fontWeight: 700, color: '#1e3a5f', fontSize: '0.95rem' }}>
+                      {new Date(s.fecha_inicio).toLocaleDateString('es-MX', { dateStyle: 'short' })} — {new Date(s.fecha_fin).toLocaleDateString('es-MX', { dateStyle: 'short' })}
+                      <span style={{ fontWeight: 400, color: '#6b7280', marginLeft: '6px', fontSize: '0.85rem' }}>{s.dias_solicitados} días</span>
+                    </div>
+                    {s.estado === 'pendiente' && <span style={{ backgroundColor: '#fef3c7', color: '#92400e', borderRadius: 5, padding: '3px 8px', fontSize: '0.75rem', fontWeight: 600, whiteSpace: 'nowrap' }}>Pendiente</span>}
+                    {s.estado === 'aprobada_jefe' && <span style={{ backgroundColor: '#e0f2fe', color: '#0369a1', borderRadius: 5, padding: '3px 8px', fontSize: '0.75rem', fontWeight: 600, whiteSpace: 'nowrap' }}>En revisión RH</span>}
+                    {s.estado === 'rechazada' && <span style={{ backgroundColor: '#fee2e2', color: '#991b1b', borderRadius: 5, padding: '3px 8px', fontSize: '0.75rem', fontWeight: 600, whiteSpace: 'nowrap' }}>Rechazada</span>}
+                  </div>
+                  {s.motivo && <p style={{ margin: '0 0 8px', fontSize: '0.83rem', color: '#6b7280' }}>{s.motivo}</p>}
+                  <div style={{ display: 'flex', gap: '8px' }}>
+                    {s.estado === 'rechazada' && (
+                      <button onClick={() => setModalRechazo({ motivo: s.motivo ?? null, comentario: s.comentarios_aprobacion ?? null })}
+                        style={{ padding: '7px 14px', backgroundColor: '#fee2e2', color: '#991b1b', border: '1px solid #fca5a5', borderRadius: 6, cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}>
+                        Ver motivo
+                      </button>
+                    )}
+                    {s.estado === 'pendiente' && (
+                      <button onClick={() => setModalCancelar(s)}
+                        style={{ padding: '7px 14px', backgroundColor: '#fff7ed', color: '#c2410c', border: '1px solid #fed7aa', borderRadius: 6, cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}>
+                        Cancelar solicitud
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
@@ -404,65 +453,25 @@ export const MisVacacionesPage = () => {
                       <td style={{ ...td, textAlign: 'center' }}>{s.dias_solicitados}</td>
                       <td style={{ ...td, color: '#555' }}>{s.motivo || '—'}</td>
                       <td style={{ ...td, textAlign: 'center' }}>
-                        {s.estado === 'pendiente' && (
-                          <span style={{ backgroundColor: '#fef3c7', color: '#92400e', borderRadius: 5, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                            Pendiente de Aprobación
-                          </span>
-                        )}
-                        {s.estado === 'aprobada_jefe' && (
-                          <span style={{ backgroundColor: '#e0f2fe', color: '#0369a1', borderRadius: 5, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                            En revisión RH
-                          </span>
-                        )}
-                        {s.estado === 'rechazada' && (
-                          <span style={{ backgroundColor: '#fee2e2', color: '#991b1b', borderRadius: 5, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                            Rechazada
-                          </span>
-                        )}
+                        {s.estado === 'pendiente' && <span style={{ backgroundColor: '#fef3c7', color: '#92400e', borderRadius: 5, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 600, whiteSpace: 'nowrap' }}>Pendiente de Aprobación</span>}
+                        {s.estado === 'aprobada_jefe' && <span style={{ backgroundColor: '#e0f2fe', color: '#0369a1', borderRadius: 5, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 600, whiteSpace: 'nowrap' }}>En revisión RH</span>}
+                        {s.estado === 'rechazada' && <span style={{ backgroundColor: '#fee2e2', color: '#991b1b', borderRadius: 5, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 600, whiteSpace: 'nowrap' }}>Rechazada</span>}
                       </td>
                       <td style={{ ...td, textAlign: 'center' }}>
                         <div style={{ display: 'flex', gap: '6px', justifyContent: 'center', alignItems: 'center' }}>
                           {s.estado === 'rechazada' && (
-                            <button
-                              onClick={() => setModalRechazo({
-                                motivo: s.motivo ?? null,
-                                comentario: s.comentarios_aprobacion ?? null,
-                              })}
-                              style={{
-                                padding: '4px 10px',
-                                backgroundColor: '#fee2e2',
-                                color: '#991b1b',
-                                border: '1px solid #fca5a5',
-                                borderRadius: 5,
-                                cursor: 'pointer',
-                                fontSize: '0.78rem',
-                                fontWeight: 600,
-                              }}
-                            >
+                            <button onClick={() => setModalRechazo({ motivo: s.motivo ?? null, comentario: s.comentarios_aprobacion ?? null })}
+                              style={{ padding: '4px 10px', backgroundColor: '#fee2e2', color: '#991b1b', border: '1px solid #fca5a5', borderRadius: 5, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600 }}>
                               Ver
                             </button>
                           )}
                           {s.estado === 'pendiente' && (
-                            <button
-                              onClick={() => setModalCancelar(s)}
-                              style={{
-                                padding: '4px 10px',
-                                backgroundColor: '#fff7ed',
-                                color: '#c2410c',
-                                border: '1px solid #fed7aa',
-                                borderRadius: 5,
-                                cursor: 'pointer',
-                                fontSize: '0.78rem',
-                                fontWeight: 600,
-                                whiteSpace: 'nowrap',
-                              }}
-                            >
+                            <button onClick={() => setModalCancelar(s)}
+                              style={{ padding: '4px 10px', backgroundColor: '#fff7ed', color: '#c2410c', border: '1px solid #fed7aa', borderRadius: 5, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
                               Cancelar
                             </button>
                           )}
-                          {s.estado !== 'rechazada' && s.estado !== 'pendiente' && (
-                            <span style={{ color: '#d1d5db' }}>—</span>
-                          )}
+                          {s.estado !== 'rechazada' && s.estado !== 'pendiente' && <span style={{ color: '#d1d5db' }}>—</span>}
                         </div>
                       </td>
                     </tr>
@@ -536,23 +545,23 @@ export const MisVacacionesPage = () => {
             </button>
           </div>
 
-          {/* Calendario a ancho total con datos México (santo/festivo) - días como tarjetas flotantes */}
-          <div style={{ backgroundColor: '#f1f5f9', borderRadius: '12px', border: '1px solid #e5e7eb', marginBottom: '20px', width: '100%', padding: '12px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: '4px', marginBottom: '8px' }}>
-              {weekDays.map((w) => (
+          {/* Calendario */}
+          <div style={{ backgroundColor: '#f1f5f9', borderRadius: '12px', border: '1px solid #e5e7eb', marginBottom: '20px', width: '100%', padding: isMobile ? '6px' : '12px' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: isMobile ? '2px' : '4px', marginBottom: isMobile ? '4px' : '8px' }}>
+              {(isMobile ? weekDaysShort : weekDaysFull).map((w) => (
                 <div
                   key={w}
                   style={{
-                    minHeight: '44px',
+                    minHeight: isMobile ? '28px' : '44px',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    borderRadius: '10px',
+                    borderRadius: '6px',
                     border: '1px solid #e5e7eb',
                     boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
                     backgroundColor: '#0369a1',
                     fontWeight: 700,
-                    fontSize: '0.85rem',
+                    fontSize: isMobile ? '0.7rem' : '0.85rem',
                     color: 'white',
                   }}
                 >
@@ -560,7 +569,7 @@ export const MisVacacionesPage = () => {
                 </div>
               ))}
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gridAutoRows: '88px', gap: '4px', padding: 0 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gridAutoRows: isMobile ? '52px' : '88px', gap: isMobile ? '2px' : '4px', padding: 0 }}>
               {Array.from({ length: startPad }, (_, i) => (
                 <div key={`pad-${i}`} style={{ minHeight: '80px' }} />
               ))}
@@ -612,19 +621,19 @@ export const MisVacacionesPage = () => {
                     disabled={noElegible}
                     style={{
                       height: '100%',
-                      minHeight: '88px',
+                      minHeight: isMobile ? '52px' : '88px',
                       display: 'flex',
                       flexDirection: 'column',
                       alignItems: 'center',
                       justifyContent: 'flex-start',
-                      paddingTop: '10px',
+                      paddingTop: isMobile ? '6px' : '10px',
                       paddingBottom: '4px',
-                      paddingLeft: '3px',
-                      paddingRight: '3px',
-                      borderRadius: '10px',
+                      paddingLeft: '2px',
+                      paddingRight: '2px',
+                      borderRadius: isMobile ? '6px' : '10px',
                       border: esFestivo ? '2px solid #fb923c' : '1px solid #e5e7eb',
                       boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
-                      fontSize: '1rem',
+                      fontSize: isMobile ? '0.85rem' : '1rem',
                       fontWeight: 700,
                       cursor: noElegible ? 'not-allowed' : 'pointer',
                       backgroundColor: bg,
@@ -634,7 +643,7 @@ export const MisVacacionesPage = () => {
                     }}
                   >
                     <span style={{ lineHeight: 1 }}>{day}</span>
-                    {mexicoLabel && (
+                    {mexicoLabel && !isMobile && (
                       <span style={{
                         fontSize: '0.68rem',
                         fontWeight: esFestivo ? 700 : 500,
@@ -651,6 +660,9 @@ export const MisVacacionesPage = () => {
                       }}>
                         {esFestivo ? `🎉 ${mexicoLabel}` : mexicoLabel}
                       </span>
+                    )}
+                    {isMobile && esFestivo && (
+                      <span style={{ fontSize: '0.6rem', marginTop: '2px', lineHeight: 1 }}>🎉</span>
                     )}
                   </button>
                 );
