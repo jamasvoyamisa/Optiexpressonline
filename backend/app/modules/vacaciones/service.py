@@ -1,6 +1,6 @@
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, or_, extract
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from datetime import datetime, timedelta, date
 from decimal import Decimal
 import calendar
@@ -164,7 +164,10 @@ class VacacionesService:
         solicitudes_pendientes = db.query(models.SolicitudVacaciones).filter(
             and_(
                 models.SolicitudVacaciones.empleado_id == empleado_id,
-                models.SolicitudVacaciones.estado == models.EstadoSolicitud.PENDIENTE
+                models.SolicitudVacaciones.estado.in_([
+                    models.EstadoSolicitud.PENDIENTE,
+                    models.EstadoSolicitud.APROBADA_JEFE,
+                ])
             )
         ).all()
         dias_pendientes = sum(s.dias_solicitados for s in solicitudes_pendientes)
@@ -286,6 +289,38 @@ class VacacionesService:
         return count
     
     @staticmethod
+    def _dias_disponibles_para_solicitar(db: Session, empleado_id: int) -> Tuple[Decimal, Decimal]:
+        """
+        Retorna (dias_disponibles_totales, dias_ya_reservados).
+        dias_ya_reservados = solicitudes PENDIENTE + APROBADA_JEFE.
+        """
+        VacacionesService.ensure_periodos_empleado(db, empleado_id)
+        hoy = date.today()
+        periodos = (
+            db.query(models.BalancePeriodoVacaciones)
+            .filter(
+                models.BalancePeriodoVacaciones.empleado_id == empleado_id,
+                models.BalancePeriodoVacaciones.fecha_limite_goce >= hoy,
+            )
+            .all()
+        )
+        total_disponibles = sum(
+            max(Decimal("0"), Decimal(p.dias_derecho) - (p.dias_tomados or Decimal("0")))
+            for p in periodos
+        )
+        solicitudes_reservadas = db.query(models.SolicitudVacaciones).filter(
+            and_(
+                models.SolicitudVacaciones.empleado_id == empleado_id,
+                models.SolicitudVacaciones.estado.in_([
+                    models.EstadoSolicitud.PENDIENTE,
+                    models.EstadoSolicitud.APROBADA_JEFE,
+                ])
+            )
+        ).all()
+        dias_reservados = sum(Decimal(str(s.dias_solicitados)) for s in solicitudes_reservadas)
+        return total_disponibles, dias_reservados
+
+    @staticmethod
     def create_solicitud(db: Session, solicitud: schemas.SolicitudVacacionesCreate) -> models.SolicitudVacaciones:
         """Crear nueva solicitud de vacaciones"""
         # No permitir solicitar vacaciones para días ya pasados (solo desde la fecha actual en adelante)
@@ -306,6 +341,17 @@ class VacacionesService:
             solicitud.fecha_fin,
             db=db,
         )
+
+        # Validar que no exceda los días disponibles
+        total_disponibles, dias_reservados = VacacionesService._dias_disponibles_para_solicitar(db, solicitud.empleado_id)
+        dias_poder_solicitar = total_disponibles - dias_reservados
+        if dias_poder_solicitar <= 0:
+            raise ValueError("No tienes días disponibles para solicitar. Tu balance de vacaciones es 0 o ya tienes solicitudes pendientes que consumen todos tus días.")
+        if dias_solicitados > dias_poder_solicitar:
+            raise ValueError(
+                f"No puedes solicitar más de {int(dias_poder_solicitar)} días. "
+                f"Tienes {int(total_disponibles)} días disponibles y ya tienes {int(dias_reservados)} días en solicitudes pendientes."
+            )
         
         # Obtener jefe del empleado
         jefe_id = empleado.jefe_id
@@ -367,14 +413,14 @@ class VacacionesService:
             if estado_enum is not None:
                 query = query.filter(models.SolicitudVacaciones.estado == estado_enum)
         if jefe_id:
-            # Solicitudes pendientes: área del jefe/gerente/supervisor, o (si es Gerente General) de empleados con puesto gerente/supervisor
-            es_gerente_general = personal_service.PersonalService.get_es_gerente_general(db, jefe_id)
+            # Solicitudes pendientes: área del jefe/gerente/supervisor, o (si es Director/Gerente General) de empleados con puesto gerente/supervisor
+            es_gerente_o_director = personal_service.PersonalService.get_es_gerente_o_director(db, jefe_id)
             depto_ids = personal_service.PersonalService.get_departamento_ids_que_administro(db, jefe_id)
             cond_jefe = models.SolicitudVacaciones.jefe_aprobador_id == jefe_id
             query = query.join(personal_models.Empleado, models.SolicitudVacaciones.empleado_id == personal_models.Empleado.id)
             query = query.filter(models.SolicitudVacaciones.estado == models.EstadoSolicitud.PENDIENTE)
             cond_area = or_(cond_jefe, personal_models.Empleado.departamento_id.in_(depto_ids)) if depto_ids else cond_jefe
-            if es_gerente_general:
+            if es_gerente_o_director:
                 query = query.outerjoin(personal_models.Puesto, personal_models.Empleado.puesto_id == personal_models.Puesto.id)
                 cond_puesto_gerente_supervisor = or_(
                     personal_models.Puesto.nombre.ilike("%gerente%"),
@@ -394,9 +440,11 @@ class VacacionesService:
         aprobar: bool,
         comentarios: Optional[str] = None,
         bypass_permiso: bool = False,
-        es_gerente_general: bool = False
+        es_gerente_o_director: bool = False,
+        es_gerente_general: bool = False,
+        departamento_ids_que_administro: Optional[list] = None
     ) -> Optional[models.SolicitudVacaciones]:
-        """Aprobar o rechazar. bypass_permiso=True: super admin autoriza todo. es_gerente_general: solo aprueba si el solicitante es gerente o supervisor."""
+        """Aprobar o rechazar. Solo Admin aprueba todo. Director y Gerente General aprueban gerentes/supervisores. Gerente General además aprueba empleados de su área."""
         solicitud = db.query(models.SolicitudVacaciones).filter(
             models.SolicitudVacaciones.id == solicitud_id
         ).first()
@@ -408,18 +456,32 @@ class VacacionesService:
         if jefe_id == solicitud.empleado_id:
             raise ValueError("No puedes aprobar tus propias vacaciones. Solicita a tu superior jerárquico que las apruebe.")
         
+        empleado = db.query(personal_models.Empleado).options(
+            joinedload(personal_models.Empleado.puesto_rel)
+        ).filter(personal_models.Empleado.id == solicitud.empleado_id).first()
+        
+        puesto_n = (empleado.puesto_rel.nombre or "").strip().lower() if (empleado and empleado.puesto_rel) else ""
+        solicitante_es_gerente = "gerente" in puesto_n
+        solicitante_es_supervisor = "supervisor" in puesto_n
+        
         if not bypass_permiso:
-            empleado = db.query(personal_models.Empleado).options(
-                joinedload(personal_models.Empleado.puesto_rel)
-            ).filter(personal_models.Empleado.id == solicitud.empleado_id).first()
-            if es_gerente_general:
-                # Gerente General solo puede aprobar vacaciones de empleados con puesto Gerente o Supervisor
-                if not empleado or not empleado.puesto_rel:
-                    raise ValueError("Solo puedes aprobar vacaciones de gerentes y supervisores")
-                puesto_n = (empleado.puesto_rel.nombre or "").strip().lower()
-                if "gerente" not in puesto_n and "supervisor" not in puesto_n:
-                    raise ValueError("Solo puedes aprobar vacaciones de gerentes y supervisores")
+            if solicitante_es_gerente or solicitante_es_supervisor:
+                # Las vacaciones de gerentes/supervisores solo las aprueban Admin, Director o Gerente General (el gerente de área no puede aprobar a otro gerente ni a sí mismo)
+                if not es_gerente_o_director:
+                    raise ValueError(
+                        "Las vacaciones de gerentes y supervisores solo las puede aprobar Administrador, Director o Gerente General. "
+                        "Los gerentes de área no pueden aprobar sus propias vacaciones ni las de otros gerentes."
+                    )
+            elif es_gerente_o_director:
+                # Director y Gerente General aprueban gerentes/supervisores. Gerente General además aprueba empleados de su área.
+                if solicitante_es_gerente or solicitante_es_supervisor:
+                    pass  # OK
+                elif es_gerente_general and departamento_ids_que_administro and empleado and empleado.departamento_id and empleado.departamento_id in departamento_ids_que_administro:
+                    pass  # Gerente General aprueba empleados de su área
+                else:
+                    raise ValueError("Solo puedes aprobar vacaciones de gerentes y supervisores. Las de empleados regulares las aprueba el gerente de su área.")
             else:
+                # Empleado regular: gerente/jefe de área puede aprobar
                 aprobadores = personal_service.PersonalService.get_ids_aprobadores_area(db, empleado.departamento_id if empleado else None)
                 if jefe_id not in aprobadores and solicitud.jefe_aprobador_id != jefe_id:
                     raise ValueError("No tienes permisos para aprobar esta solicitud")

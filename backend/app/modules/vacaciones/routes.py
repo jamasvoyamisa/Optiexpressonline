@@ -167,7 +167,7 @@ def aprobar_solicitud(
     current_extra: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db)
 ):
-    """Aprobar o rechazar. Super admin autoriza todo. Gerente General solo aprueba vacaciones de gerentes/supervisores."""
+    """Aprobar o rechazar. Gerentes aprueban vacaciones de su área. Las vacaciones de gerentes/supervisores solo las aprueban Admin, Director o Gerente General. RH solo confirma."""
     try:
         result = service.VacacionesService.aprobar_solicitud(
             db,
@@ -176,7 +176,9 @@ def aprobar_solicitud(
             aprobacion.aprobar,
             aprobacion.comentarios,
             bypass_permiso=current_extra.get("is_superuser") is True,
-            es_gerente_general=current_extra.get("is_gerente_general") is True
+            es_gerente_o_director=current_extra.get("is_gerente_general") is True or current_extra.get("is_director") is True,
+            es_gerente_general=current_extra.get("is_gerente_general") is True,
+            departamento_ids_que_administro=current_extra.get("departamento_ids_que_administro") or []
         )
         if result:
             _set_jefe_aprobador_nombre(result)

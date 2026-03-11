@@ -30,20 +30,20 @@ Solo otro Superadmin. No se puede autoaprobar (regla universal).
 
 ---
 
-## Nivel 2 — Gerente General 🏢
+## Nivel 2 — Director y Gerente General 🏢
 
 **Cómo se detecta en el backend:**
-- Rol en BD: `Gerente General`
-- Flag resultante: `is_gerente_general = True`
+- **Director**: Puesto en BD = `Director` → `is_director = True`
+- **Gerente General**: Rol en BD = `Gerente General` **o** Puesto = `Gerente General` → `is_gerente_general = True`
 
-**¿Qué puede hacer?**
-- Aprobar o rechazar vacaciones **únicamente** de empleados cuyo Puesto contenga `"gerente"` o `"supervisor"` (búsqueda `ilike`, sin distinguir mayúsculas).
-- Ve en "Mi Área" las solicitudes pendientes de gerentes y supervisores de todos los departamentos.
-- **NO** puede aprobar vacaciones de empleados regulares → error: *"Solo puedes aprobar vacaciones de gerentes y supervisores"*.
-- **NO** puede aprobar sus propias vacaciones (regla universal).
+**¿Qué pueden hacer?**
+- **Director**: Aprobar vacaciones **únicamente** de gerentes y supervisores (cualquier área). No aprueba empleados regulares.
+- **Gerente General**: Aprobar vacaciones de (1) gerentes y supervisores de cualquier área, y (2) empleados de **su área** (departamento asignado). Justifica incidencias de su área.
+- Ven en "Solicitudes a aprobar" y "Mi Área" las solicitudes pendientes.
+- **NO** pueden aprobar sus propias vacaciones (regla universal).
 
 **¿Quién aprueba SUS vacaciones?**
-Solo el **Superadmin**. El Gerente General no tiene área que lo supervise en el sistema.
+Solo el **Superadmin**.
 
 ---
 
@@ -63,7 +63,7 @@ Solo el **Superadmin**. El Gerente General no tiene área que lo supervise en el
 - **NO** puede aprobar sus propias vacaciones (regla universal).
 
 **¿Quién aprueba SUS vacaciones?**
-El **Gerente General** (si el puesto del gerente contiene "gerente"/"supervisor") o el **Superadmin**.
+El **Director**, **Gerente General** (si el puesto contiene "gerente"/"supervisor") o el **Superadmin**.
 
 ---
 
@@ -113,7 +113,7 @@ El Gerente/Supervisor de su departamento (`jefe_aprobador_id` asignado al crear 
    → ✅ Aprueba sin restricciones
    ↓ no
 
-3. ¿is_gerente_general?
+3. ¿es_gerente_o_director (Director o Gerente General)?
    → ¿puesto del solicitante contiene "gerente" / "supervisor"?
        Sí → ✅ Aprueba
        No → ❌ Error: solo gerentes/supervisores
@@ -137,8 +137,9 @@ El Gerente/Supervisor de su departamento (`jefe_aprobador_id` asignado al crear 
 
 | Rol              | Puede aprobar a...                         | Sus vacaciones las aprueba... |
 |------------------|--------------------------------------------|-------------------------------|
-| Superadmin       | Todos (sin restricciones)                  | Otro Superadmin               |
-| Gerente General  | Gerentes y supervisores de cualquier área  | Superadmin                    |
-| Gerente de área  | Empleados de su departamento               | Gerente General o Superadmin  |
+| Superadmin       | **Todos** (sin restricciones)              | Otro Superadmin               |
+| Director        | Gerentes y supervisores de cualquier área  | Superadmin                    |
+| Gerente General | Gerentes/supervisores + empleados de su área | Superadmin                 |
+| Gerente de área  | Empleados de su departamento               | Director, Gerente General o Superadmin  |
 | RH               | Nadie (salvo que sea jefe de dpto.)        | Su gerente o Superadmin       |
 | Empleado         | Nadie                                      | Su gerente o Superadmin       |

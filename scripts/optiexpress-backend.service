@@ -1,0 +1,16 @@
+[Unit]
+Description=Optiexpress Backend API
+After=network.target mysql.service
+
+[Service]
+Type=simple
+User=marco
+Group=marco
+WorkingDirectory=/opt/optiexpress/backend
+ExecStart=/opt/optiexpress/backend/venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 9081
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

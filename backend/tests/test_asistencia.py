@@ -1,5 +1,6 @@
 """
-Pruebas del módulo de asistencia - dispositivos, getrequest, etc.
+Pruebas del módulo de asistencia - dispositivos, etc.
+ADMS (iclock) ya no se usa; solo el agente local sincroniza.
 """
 import pytest
 from fastapi.testclient import TestClient
@@ -40,30 +41,6 @@ def setup_db():
     Base.metadata.create_all(bind=engine)
     yield
     Base.metadata.drop_all(bind=engine)
-
-
-def test_server_url():
-    """GET /api/v1/asistencia/server-url retorna la URL del servidor"""
-    response = client.get("/api/v1/asistencia/server-url")
-    assert response.status_code == 200
-    data = response.json()
-    assert "url" in data
-    assert "getrequest" in data
-    assert "iclock" in data["getrequest"]
-
-
-def test_getrequest_sin_sn():
-    """GET /iclock/getrequest sin SN retorna OK"""
-    response = client.get("/iclock/getrequest")
-    assert response.status_code == 200
-    assert response.text == "OK"
-
-
-def test_getrequest_sn_no_registrado():
-    """GET /iclock/getrequest con SN no registrado retorna OK (no rompe)"""
-    response = client.get("/iclock/getrequest?SN=NOEXISTE123")
-    assert response.status_code == 200
-    assert response.text == "OK"
 
 
 def test_health():

@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_serializer
 from typing import Optional, List
 from datetime import datetime, date
 from .models import TipoChecada, TipoIncidencia
@@ -9,7 +9,7 @@ class DispositivoBase(BaseModel):
     nombre: str
     ip_local: Optional[str] = None
     ubicacion: Optional[str] = None
-    serial_number: Optional[str] = None  # SN del dispositivo (ZKTeco ADMS)
+    serial_number: Optional[str] = None  # Opcional; el agente no lo requiere
 
 
 class DispositivoCreate(DispositivoBase):
@@ -93,15 +93,6 @@ class FingerprintTemplateResponse(BaseModel):
 
     class Config:
         from_attributes = True
-
-
-class MarkReplicateDoneRequest(BaseModel):
-    numero_empleado: str
-
-
-class ReplicateRequest(BaseModel):
-    numero_empleado: str
-    dispositivo_ids: List[int]
 
 
 class DispositivoResponse(DispositivoBase):
@@ -214,6 +205,15 @@ class AsistenciaResponse(AsistenciaBase):
     created_at: datetime
     empleado_nombre: Optional[str] = None
     empleado_numero: Optional[str] = None
+
+    @field_serializer("timestamp", "created_at")
+    def serialize_datetime_mexico(self, dt: datetime):
+        """Serializa datetime en hora México para que el frontend muestre correctamente."""
+        if dt is None:
+            return None
+        from app.core.timezone_utils import to_mexico
+        ts_mex = to_mexico(dt) or dt
+        return ts_mex.isoformat()
 
     class Config:
         from_attributes = True

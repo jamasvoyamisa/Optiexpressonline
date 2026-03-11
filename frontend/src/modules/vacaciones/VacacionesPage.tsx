@@ -118,10 +118,7 @@ const generarDocumento = (sol: SolicitudVacaciones, emp: EmpleadoResumen | null)
   @media print { .no-print { display: none !important; } }
   .page { max-width: 740px; margin: 0 auto; padding: 40px 48px 48px; }
   .doc-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 28px; }
-  .logo-area { display: flex; flex-direction: column; align-items: flex-start; }
-  .logo-diamond { width: 44px; height: 44px; margin-bottom: 4px; }
-  .logo-grupo { font-size: 10px; font-weight: 400; color: #1e3a8a; letter-spacing: 1px; text-transform: uppercase; }
-  .logo-cristal { font-size: 22px; font-weight: 900; color: #1e3a8a; letter-spacing: 1px; line-height: 1; }
+  .logo-area { display: flex; align-items: center; gap: 24px; }
   .doc-title { font-size: 22px; font-weight: 700; color: #1e3a8a; text-align: right; align-self: flex-end; }
   .fecha-header { display: flex; align-items: center; gap: 6px; margin-bottom: 20px; justify-content: flex-end; font-size: 12px; }
   .fecha-header .lbl { color: #555; }
@@ -160,20 +157,9 @@ const generarDocumento = (sol: SolicitudVacaciones, emp: EmpleadoResumen | null)
 </div>
 <div class="page">
   <div class="doc-header">
-    <div class="logo-area">
-      <svg class="logo-diamond" viewBox="0 0 80 80" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <polygon points="40,4 76,28 76,52 40,76 4,52 4,28" fill="none" stroke="#1e3a8a" stroke-width="3"/>
-        <polygon points="40,4 20,28 40,20 60,28" fill="#1e3a8a" opacity="0.15"/>
-        <polygon points="20,28 4,28 4,52 40,76" fill="#1e3a8a" opacity="0.08"/>
-        <polygon points="60,28 76,28 76,52 40,76" fill="#1e3a8a" opacity="0.12"/>
-        <polygon points="20,28 40,20 60,28 40,76" fill="#1e3a8a" opacity="0.2"/>
-        <line x1="20" y1="28" x2="60" y2="28" stroke="#1e3a8a" stroke-width="1.5"/>
-        <line x1="20" y1="28" x2="40" y2="76" stroke="#1e3a8a" stroke-width="1"/>
-        <line x1="60" y1="28" x2="40" y2="76" stroke="#1e3a8a" stroke-width="1"/>
-        <line x1="40" y1="20" x2="40" y2="76" stroke="#1e3a8a" stroke-width="1" opacity="0.4"/>
-      </svg>
-      <div class="logo-grupo">GRUPO</div>
-      <div class="logo-cristal">CRISTAL</div>
+    <div class="logo-area" style="display:flex;align-items:center;gap:24px;">
+      <img src="/GPOCristal.png" alt="Grupo Cristal" style="height:48px;max-width:140px;object-fit:contain;" onerror="this.style.display='none'"/>
+      <img src="/Raiz.png" alt="Raiz" style="height:44px;max-width:120px;object-fit:contain;" onerror="this.style.display='none'"/>
     </div>
     <div class="doc-title">Solicitud de vacaciones</div>
   </div>

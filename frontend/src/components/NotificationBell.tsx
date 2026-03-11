@@ -16,14 +16,6 @@ interface Props {
   dispositivos?: Dispositivo[];
 }
 
-const TIPO_ICON: Record<string, string> = {
-  nueva_solicitud: '📋',
-  solicitud_aprobada_jefe: '✅',
-  solicitud_aprobada: '🎉',
-  solicitud_rechazada: '❌',
-  solicitud_pendiente_rh: '⏳',
-};
-
 const TIPO_COLOR: Record<string, string> = {
   nueva_solicitud: '#3b82f6',
   solicitud_aprobada_jefe: '#f59e0b',
@@ -33,6 +25,10 @@ const TIPO_COLOR: Record<string, string> = {
 };
 
 const MS_1_DIA = 24 * 60 * 60 * 1000;
+const NOMBRE_DISPOSITIVO_PORTAL = 'Portal Checadas Remotas';
+
+/** Dispositivos que no deben generar alertas de conexión (portal web no tiene agente) */
+const esDispositivoPortal = (d: Dispositivo) => (d.nombre || '').trim() === NOMBRE_DISPOSITIVO_PORTAL;
 
 function timeAgo(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr.endsWith('Z') || dateStr.includes('+') ? dateStr : dateStr + 'Z').getTime();
@@ -46,8 +42,9 @@ function timeAgo(dateStr: string): string {
 }
 
 export const NotificationBell = ({ dispositivos = [] }: Props) => {
-  const inactivos = dispositivos.filter(d => !d.activo);
-  const sinConexion = dispositivos.filter(d => {
+  const dispositivosConAlertas = dispositivos.filter(d => !esDispositivoPortal(d));
+  const inactivos = dispositivosConAlertas.filter(d => !d.activo);
+  const sinConexion = dispositivosConAlertas.filter(d => {
     const u = d.ultima_sync_agente;
     if (!u) return true;
     const diff = Date.now() - new Date(u.endsWith('Z') || u.includes('+') ? u : u + 'Z').getTime();
@@ -113,21 +110,23 @@ export const NotificationBell = ({ dispositivos = [] }: Props) => {
         onClick={() => { setOpen(v => !v); if (!open) cargar(); }}
         title="Notificaciones"
         style={{
-          background: 'rgba(255,255,255,0.1)',
+          background: 'transparent',
           border: 'none',
-          borderRadius: '8px',
           cursor: 'pointer',
-          padding: '6px 8px',
+          padding: '4px 6px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
           position: 'relative',
-          transition: 'background 0.15s',
+          color: 'rgba(255,255,255,0.9)',
         }}
-        onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.2)')}
-        onMouseLeave={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.1)')}
+        onMouseEnter={e => (e.currentTarget.style.color = 'white')}
+        onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.9)')}
       >
-        <span style={{ fontSize: '1.25rem', lineHeight: 1 }}>🔔</span>
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+          <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+        </svg>
         {(noLeidas + totalAlertas) > 0 && (
           <span style={{
             position: 'absolute',
@@ -212,7 +211,7 @@ export const NotificationBell = ({ dispositivos = [] }: Props) => {
                 color: '#b45309',
                 backgroundColor: '#fffbeb',
               }}>
-                ⚠️ Alertas de dispositivos
+                Alertas de dispositivos
               </div>
               {inactivos.map(d => (
                 <div key={`inactivo-${d.id}`} style={{
@@ -224,10 +223,9 @@ export const NotificationBell = ({ dispositivos = [] }: Props) => {
                   alignItems: 'center',
                 }}>
                   <div style={{
-                    width: '34px', height: '34px', borderRadius: '50%',
-                    backgroundColor: '#fee2e2', display: 'flex', alignItems: 'center',
-                    justifyContent: 'center', flexShrink: 0, fontSize: '1rem',
-                  }}>🔴</div>
+                    width: '10px', height: '10px', borderRadius: '50%',
+                    backgroundColor: '#dc2626', flexShrink: 0,
+                  }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: '0.82rem', fontWeight: 600, color: '#991b1b' }}>
                       Dispositivo inactivo
@@ -248,10 +246,9 @@ export const NotificationBell = ({ dispositivos = [] }: Props) => {
                   alignItems: 'center',
                 }}>
                   <div style={{
-                    width: '34px', height: '34px', borderRadius: '50%',
-                    backgroundColor: '#fef3c7', display: 'flex', alignItems: 'center',
-                    justifyContent: 'center', flexShrink: 0, fontSize: '1rem',
-                  }}>🟡</div>
+                    width: '10px', height: '10px', borderRadius: '50%',
+                    backgroundColor: '#d97706', flexShrink: 0,
+                  }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: '0.82rem', fontWeight: 600, color: '#92400e' }}>
                       Sin conexión +1 día
@@ -302,20 +299,15 @@ export const NotificationBell = ({ dispositivos = [] }: Props) => {
                   onMouseEnter={e => { if (!n.leida) (e.currentTarget as HTMLDivElement).style.backgroundColor = '#e8eeff'; }}
                   onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = n.leida ? 'white' : '#f0f9ff'; }}
                 >
-                  {/* Ícono de tipo */}
+                  {/* Indicador de tipo */}
                   <div style={{
-                    width: '34px',
-                    height: '34px',
+                    width: '10px',
+                    height: '10px',
                     borderRadius: '50%',
-                    backgroundColor: `${TIPO_COLOR[n.tipo] ?? '#6b7280'}18`,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
+                    backgroundColor: TIPO_COLOR[n.tipo] ?? '#6b7280',
                     flexShrink: 0,
-                    fontSize: '1rem',
-                  }}>
-                    {TIPO_ICON[n.tipo] ?? '🔔'}
-                  </div>
+                    marginTop: '6px',
+                  }} />
 
                   {/* Contenido */}
                   <div style={{ flex: 1, minWidth: 0 }}>

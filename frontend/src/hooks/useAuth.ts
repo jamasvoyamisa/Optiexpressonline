@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef, createContext, useContext, ReactNode } from 'react';
 import api from '../services/api';
 
-const INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutos
-const ACTIVITY_EVENTS = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll', 'click'] as const;
+const INACTIVITY_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutos sin actividad → cierre automático
+const ACTIVITY_EVENTS = ['mousemove', 'mousedown', 'keydown', 'keyup', 'input', 'change', 'touchstart', 'scroll', 'click'] as const;
 
 export interface AuthMe {
   id: number;
@@ -14,6 +14,11 @@ export interface AuthMe {
   rol_id?: number | null;
   is_jefe: boolean;
   is_superuser?: boolean;
+  is_rh?: boolean;
+  is_gerente_general?: boolean;
+  is_director?: boolean;
+  /** True si puede ver Dashboard (Administrador, Director, Gerente General, RH). */
+  puede_ver_dashboard?: boolean;
   /** True si es gerente (área a cargo) o supervisor en su departamento; puede ver Mi Área (incidencias y solicitudes). */
   puede_ver_mi_area?: boolean;
   departamento_ids: number[];
@@ -49,7 +54,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const inactivityTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isAuthenticatedRef = useRef(false);
 
-  const doLogout = useCallback(() => {
+  const doLogout = useCallback((porInactividad: boolean = false) => {
+    if (porInactividad) {
+      sessionStorage.setItem('logout_reason', 'inactivity');
+    }
     localStorage.removeItem('token');
     setAuthState({ isAuthenticated: false, user: null, authMe: null, loading: false });
   }, []);
@@ -57,10 +65,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const resetInactivityTimer = useCallback(() => {
     if (!isAuthenticatedRef.current) return;
     if (inactivityTimer.current) clearTimeout(inactivityTimer.current);
-    inactivityTimer.current = setTimeout(doLogout, INACTIVITY_TIMEOUT_MS);
+    inactivityTimer.current = setTimeout(() => doLogout(true), INACTIVITY_TIMEOUT_MS);
   }, [doLogout]);
 
-  // Escuchar eventos de actividad del usuario cuando está autenticado
+  // Escuchar solo actividad del usuario (mouse, teclado, formularios). Las peticiones API como checadas cada 30s NO cuentan.
   useEffect(() => {
     isAuthenticatedRef.current = authState.isAuthenticated;
     if (!authState.isAuthenticated) {
@@ -71,7 +79,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ACTIVITY_EVENTS.forEach((ev) => window.removeEventListener(ev, resetInactivityTimer));
       return;
     }
-    // Iniciar temporizador y escuchar actividad
     resetInactivityTimer();
     ACTIVITY_EVENTS.forEach((ev) => window.addEventListener(ev, resetInactivityTimer, { passive: true }));
     return () => {
@@ -113,29 +120,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [fetchAuthMe]);
 
   const login = useCallback(async (username: string, password: string): Promise<AuthMe | null> => {
-    try {
-      const response = await api.post<{ access_token: string; user: any; me?: AuthMe }>('/auth/login', {
-        username,
-        password,
-      });
-      const { access_token, user, me } = response.data;
-      if (!access_token) {
-        console.error('Login: no se recibió token');
-        return null;
-      }
-      localStorage.setItem('token', access_token);
-      const authMeData = me ?? await fetchAuthMe();
-      setAuthState({
-        isAuthenticated: true,
-        user: user ?? authMeData,
-        authMe: authMeData,
-        loading: false,
-      });
-      return authMeData;
-    } catch (error) {
-      console.error('Error al iniciar sesión:', error);
+    const response = await api.post<{ access_token: string; user: any; me?: AuthMe }>('/auth/login', {
+      username,
+      password,
+    });
+    const { access_token, user, me } = response.data;
+    if (!access_token) {
+      console.error('Login: no se recibió token');
       return null;
     }
+    localStorage.setItem('token', access_token);
+    const authMeData = me ?? await fetchAuthMe();
+    setAuthState({
+      isAuthenticated: true,
+      user: user ?? authMeData,
+      authMe: authMeData,
+      loading: false,
+    });
+    return authMeData;
   }, [fetchAuthMe]);
 
   const logout = useCallback(() => {

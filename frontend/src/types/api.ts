@@ -44,6 +44,7 @@ export interface EmpresaResponse {
   direccion?: string | null;
   telefono?: string | null;
   activo: boolean;
+  checadas_remotas?: boolean;
   rango_inicio?: number | null;
   rango_fin?: number | null;
   created_at?: string;
@@ -55,6 +56,7 @@ export interface EmpresaCreate {
   rfc?: string;
   direccion?: string;
   telefono?: string;
+  checadas_remotas?: boolean;
 }
 
 export interface EmpresaUpdate {
@@ -63,6 +65,7 @@ export interface EmpresaUpdate {
   direccion?: string;
   telefono?: string;
   activo?: boolean;
+  checadas_remotas?: boolean;
 }
 
 // ========== PUESTO ==========
@@ -71,7 +74,19 @@ export interface PuestoResponse {
   nombre: string;
   orden: number;
   activo: boolean;
+  empresa_id?: number | null;
+  departamento_id?: number | null;
+  empresa_nombre?: string | null;
+  departamento_nombre?: string | null;
   created_at?: string;
+}
+
+export interface PuestoCreate {
+  empresa_id: number;
+  departamento_id: number;
+  nombre: string;
+  orden?: number;
+  activo?: boolean;
 }
 
 // ========== DEPARTAMENTO ==========
@@ -131,6 +146,9 @@ export interface EmpleadoResponse {
   pin_checador?: string | null;
   fecha_ingreso?: string | null;
   fecha_baja?: string | null;
+  horario_id?: number | null;
+  horario_sabado_id?: number | null;
+  exento_incidencias?: boolean;
   created_at?: string;
   updated_at?: string | null;
   empresa?: EmpresaResponse | null;

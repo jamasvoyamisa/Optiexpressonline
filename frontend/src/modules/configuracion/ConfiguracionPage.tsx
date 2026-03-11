@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import api from '../../services/api';
-import { Dispositivo, DispositivoCreate, EmpresaResponse } from '../../types';
+import { Dispositivo, DispositivoCreate, EmpresaResponse, EmpleadoResponse } from '../../types';
 
 const toLocalDate = (iso: string) =>
   new Date(iso.endsWith('Z') || iso.includes('+') ? iso : iso + 'Z');
@@ -29,7 +29,7 @@ const fmtRelativo = (iso: string): string => {
   return fmtDate(iso);
 };
 
-type ConfigTab = 'dispositivos' | 'empresas' | 'horarios' | 'festivos';
+type ConfigTab = 'dispositivos' | 'empresas' | 'horarios' | 'festivos' | 'usuarios_especiales';
 
 interface DiaFestivo {
   id: number;
@@ -83,7 +83,7 @@ export const ConfiguracionPage = () => {
   const [showApiKey, setShowApiKey] = useState<Record<number, boolean>>({});
   const [showEmpresaModal, setShowEmpresaModal] = useState(false);
   const [editingEmpresaId, setEditingEmpresaId] = useState<number | null>(null);
-  const [empresaForm, setEmpresaForm] = useState({ nombre: '', rfc: '', direccion: '', telefono: '' });
+  const [empresaForm, setEmpresaForm] = useState({ nombre: '', rfc: '', direccion: '', telefono: '', checadas_remotas: false });
   const [saving, setSaving] = useState(false);
 
   // Festivos state
@@ -103,12 +103,62 @@ export const ConfiguracionPage = () => {
   const [diasSeleccionados, setDiasSeleccionados] = useState<number[]>([1, 2, 3, 4, 5]);
   const [trabajaSabado, setTrabajaSabado] = useState(false);
 
+  // Usuarios especiales (exento de incidencias)
+  const [usuariosEspeciales, setUsuariosEspeciales] = useState<EmpleadoResponse[]>([]);
+  const [loadingUsuariosEspeciales, setLoadingUsuariosEspeciales] = useState(false);
+  const [showAgregarEspecialModal, setShowAgregarEspecialModal] = useState(false);
+  const [busquedaEspecial, setBusquedaEspecial] = useState('');
+  const [empleadosBusqueda, setEmpleadosBusqueda] = useState<EmpleadoResponse[]>([]);
+  const [togglingEspecial, setTogglingEspecial] = useState<number | null>(null);
+
   useEffect(() => {
     loadData();
     loadFestivos();
     const interval = setInterval(loadData, 30000);
     return () => clearInterval(interval);
   }, []);
+
+  const loadUsuariosEspeciales = async () => {
+    setLoadingUsuariosEspeciales(true);
+    try {
+      const res = await api.get<EmpleadoResponse[]>('/personal/empleados', { params: { exento_incidencias: true, limit: 500 } });
+      setUsuariosEspeciales(Array.isArray(res.data) ? res.data : []);
+    } catch {
+      setUsuariosEspeciales([]);
+    } finally {
+      setLoadingUsuariosEspeciales(false);
+    }
+  };
+
+  useEffect(() => {
+    if (configTab === 'usuarios_especiales') loadUsuariosEspeciales();
+  }, [configTab]);
+
+  const buscarEmpleadosParaEspecial = async () => {
+    if (!busquedaEspecial.trim()) return;
+    try {
+      const res = await api.get<EmpleadoResponse[]>('/personal/empleados', { params: { search: busquedaEspecial.trim(), limit: 30 } });
+      const list = Array.isArray(res.data) ? res.data : [];
+      const yaEspeciales = new Set(usuariosEspeciales.map(u => u.id));
+      setEmpleadosBusqueda(list.filter(e => !yaEspeciales.has(e.id)));
+    } catch {
+      setEmpleadosBusqueda([]);
+    }
+  };
+
+  const toggleExentoIncidencias = async (emp: EmpleadoResponse, valor: boolean) => {
+    setTogglingEspecial(emp.id);
+    try {
+      await api.put(`/personal/empleados/${emp.id}`, { exento_incidencias: valor });
+      loadUsuariosEspeciales();
+      if (showAgregarEspecialModal) buscarEmpleadosParaEspecial();
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { detail?: string } } };
+      alert(e.response?.data?.detail || 'Error al actualizar');
+    } finally {
+      setTogglingEspecial(null);
+    }
+  };
 
   const loadFestivos = async (año?: number) => {
     const y = año ?? festivoAño;
@@ -310,13 +360,13 @@ export const ConfiguracionPage = () => {
   };
 
   const openNewEmpresa = () => {
-    setEmpresaForm({ nombre: '', rfc: '', direccion: '', telefono: '' });
+    setEmpresaForm({ nombre: '', rfc: '', direccion: '', telefono: '', checadas_remotas: false });
     setEditingEmpresaId(null);
     setShowEmpresaModal(true);
   };
 
   const startEditEmpresa = (emp: EmpresaResponse) => {
-    setEmpresaForm({ nombre: emp.nombre, rfc: emp.rfc || '', direccion: emp.direccion || '', telefono: emp.telefono || '' });
+    setEmpresaForm({ nombre: emp.nombre, rfc: emp.rfc || '', direccion: emp.direccion || '', telefono: emp.telefono || '', checadas_remotas: emp.checadas_remotas ?? false });
     setEditingEmpresaId(emp.id);
     setShowEmpresaModal(true);
   };
@@ -326,8 +376,11 @@ export const ConfiguracionPage = () => {
     if (!empresaForm.nombre.trim()) { alert('El nombre de la empresa es obligatorio'); return; }
     setSaving(true);
     try {
-      const payload: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(empresaForm)) { if (v) payload[k] = v; }
+      const payload: Record<string, unknown> = { nombre: empresaForm.nombre };
+      if (empresaForm.rfc) payload.rfc = empresaForm.rfc;
+      if (empresaForm.direccion) payload.direccion = empresaForm.direccion;
+      if (empresaForm.telefono) payload.telefono = empresaForm.telefono;
+      payload.checadas_remotas = empresaForm.checadas_remotas;
       if (editingEmpresaId) {
         await api.put(`/personal/empresas/${editingEmpresaId}`, payload);
         alert('Empresa actualizada');
@@ -363,7 +416,7 @@ export const ConfiguracionPage = () => {
         <div>
           <h1 style={{ margin: 0 }}>Configuracion</h1>
           <p style={{ margin: '4px 0 0', color: '#888', fontSize: '0.9rem' }}>
-            {configTab === 'dispositivos' ? 'Dispositivos biometricos' : configTab === 'empresas' ? 'Empresas' : 'Horarios de trabajo'}
+            {configTab === 'dispositivos' ? 'Dispositivos biometricos' : configTab === 'empresas' ? 'Empresas' : configTab === 'usuarios_especiales' ? 'Usuarios que no generan incidencias' : 'Horarios de trabajo'}
           </p>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
@@ -384,6 +437,9 @@ export const ConfiguracionPage = () => {
           {configTab === 'festivos' && (
             <button onClick={() => setShowFestivoModal(true)} style={btnSuccess}>+ Agregar Festivo</button>
           )}
+          {configTab === 'usuarios_especiales' && (
+            <button onClick={() => { setShowAgregarEspecialModal(true); setBusquedaEspecial(''); setEmpleadosBusqueda([]); }} style={btnSuccess}>+ Agregar usuario especial</button>
+          )}
           <button
             onClick={() => { setLoading(true); loadData(); }}
             disabled={loading}
@@ -400,6 +456,7 @@ export const ConfiguracionPage = () => {
         <button style={tabStyle(configTab === 'empresas')} onClick={() => setConfigTab('empresas')}>Empresas</button>
         <button style={tabStyle(configTab === 'horarios')} onClick={() => setConfigTab('horarios')}>Horarios</button>
         <button style={tabStyle(configTab === 'festivos')} onClick={() => { setConfigTab('festivos'); loadFestivos(); }}>Días Festivos</button>
+        <button style={tabStyle(configTab === 'usuarios_especiales')} onClick={() => setConfigTab('usuarios_especiales')}>Usuarios especiales</button>
       </div>
 
       {/* ====== TAB: DISPOSITIVOS ====== */}
@@ -432,8 +489,8 @@ export const ConfiguracionPage = () => {
                 </div>
                 <div>
                   <label style={labelStyle}>Numero de serie (SN)</label>
-                  <input type="text" name="serial_number" placeholder="Opcional, para ADMS/iClock" style={inputStyle} />
-                  <span style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '4px', display: 'block' }}>Si usas agente local, puedes dejarlo vacio</span>
+                  <input type="text" name="serial_number" placeholder="No necesario para agente" style={inputStyle} />
+                  <span style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: '4px', display: 'block' }}>Opcional. El agente local no lo requiere.</span>
                 </div>
               </div>
               <div style={{ padding: '10px 12px', backgroundColor: '#f0f9ff', borderRadius: '6px', marginBottom: '20px', fontSize: '0.8rem', color: '#0369a1' }}>
@@ -483,10 +540,12 @@ export const ConfiguracionPage = () => {
               </div>
               {device.ubicacion && <p style={{ margin: '4px 0', color: '#666', fontSize: '0.9rem' }}>Ubicacion: {device.ubicacion}</p>}
 
-              {/* Última conexión del agente (la que importa para recibir datos) */}
+              {/* Última conexión del agente (portal web no usa agente) */}
               <p style={{ margin: '6px 0', fontSize: '0.9rem' }}>
                 <span style={{ color: '#666', fontWeight: 600 }}>Última conexión del agente: </span>
-                {device.ultima_sync_agente ? (
+                {(device.nombre || '').trim() === 'Portal Checadas Remotas' ? (
+                  <span style={{ color: '#6b7280', fontStyle: 'italic' }}>Portal web — no aplica</span>
+                ) : device.ultima_sync_agente ? (
                   <span style={{ color: '#1565c0', fontWeight: 600 }}>
                     {fmtRelativo(device.ultima_sync_agente)}
                   </span>
@@ -525,9 +584,11 @@ export const ConfiguracionPage = () => {
 
               {/* Acciones */}
               <div style={{ marginTop: '12px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                <button onClick={() => probarComoAgente(device.id)} style={{ padding: '6px 12px', fontSize: '0.8rem', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
-                  Probar agente
-                </button>
+                {(device.nombre || '').trim() !== 'Portal Checadas Remotas' && (
+                  <button onClick={() => probarComoAgente(device.id)} style={{ padding: '6px 12px', fontSize: '0.8rem', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
+                    Probar agente
+                  </button>
+                )}
                 <button onClick={() => eliminarDispositivo(device.id, device.nombre)} style={{ padding: '6px 12px', fontSize: '0.8rem', backgroundColor: '#dc3545', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
                   Eliminar
                 </button>
@@ -552,7 +613,7 @@ export const ConfiguracionPage = () => {
               <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '10px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
                 <thead>
                   <tr style={{ backgroundColor: '#f8f9fa' }}>
-                    {['Nombre', 'RFC', 'Direccion', 'Telefono', 'Empleados', 'Estado', 'Acciones'].map(h => (
+                    {['Nombre', 'RFC', 'Direccion', 'Telefono', 'Empleados', 'Checadas remotas', 'Estado', 'Acciones'].map(h => (
                       <th key={h} style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>{h}</th>
                     ))}
                   </tr>
@@ -567,6 +628,13 @@ export const ConfiguracionPage = () => {
                         <td style={{ padding: '11px 14px', color: '#555', maxWidth: '250px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{emp.direccion || '-'}</td>
                         <td style={{ padding: '11px 14px', color: '#555' }}>{emp.telefono || '-'}</td>
                         <td style={{ padding: '11px 14px', fontWeight: 600 }}>{count}</td>
+                        <td style={{ padding: '11px 14px' }}>
+                          {emp.checadas_remotas ? (
+                            <span style={{ padding: '3px 8px', borderRadius: '4px', fontSize: '0.75rem', backgroundColor: '#dbeafe', color: '#1d4ed8', fontWeight: 500 }}>Sí</span>
+                          ) : (
+                            <span style={{ color: '#9ca3af', fontSize: '0.85rem' }}>—</span>
+                          )}
+                        </td>
                         <td style={{ padding: '11px 14px' }}>
                           <span style={{ padding: '3px 10px', borderRadius: '4px', fontSize: '0.8rem', backgroundColor: emp.activo ? '#d4edda' : '#f8d7da', color: emp.activo ? '#155724' : '#721c24', fontWeight: 500 }}>
                             {emp.activo ? 'Activa' : 'Inactiva'}
@@ -760,6 +828,13 @@ export const ConfiguracionPage = () => {
                   <input style={inputStyle} value={empresaForm.telefono}
                     onChange={e => setEmpresaForm(p => ({ ...p, telefono: e.target.value }))} />
                 </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <input type="checkbox" id="checadas_remotas" checked={empresaForm.checadas_remotas}
+                    onChange={e => setEmpresaForm(p => ({ ...p, checadas_remotas: e.target.checked }))} />
+                  <label htmlFor="checadas_remotas" style={{ ...labelStyle, margin: 0, cursor: 'pointer' }}>
+                    Habilitar checadas remotas (portal web)
+                  </label>
+                </div>
               </div>
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
                 <button type="button" onClick={() => setShowEmpresaModal(false)} style={btnSecondary}>Cancelar</button>
@@ -894,6 +969,106 @@ export const ConfiguracionPage = () => {
                     </button>
                   </div>
                 </form>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ====== TAB: USUARIOS ESPECIALES ====== */}
+      {configTab === 'usuarios_especiales' && (
+        <div>
+          <div style={{ padding: '16px', backgroundColor: '#f0f9ff', borderRadius: '8px', marginBottom: '20px', border: '1px solid #bae6fd' }}>
+            <p style={{ margin: 0, fontSize: '0.9rem', color: '#0369a1' }}>
+              <strong>Usuarios especiales</strong> no generan incidencias automáticas (faltas, retardos, salida anticipada, incompleta). Útil para directivos, visitas o personal con horarios flexibles.
+            </p>
+          </div>
+          {loadingUsuariosEspeciales ? (
+            <p style={{ color: '#666' }}>Cargando usuarios especiales...</p>
+          ) : usuariosEspeciales.length === 0 ? (
+            <div style={{ padding: '40px', textAlign: 'center', backgroundColor: '#f9fafb', borderRadius: '10px', border: '1px solid #e5e7eb' }}>
+              <p style={{ color: '#6b7280', margin: 0 }}>No hay usuarios especiales configurados.</p>
+              <p style={{ color: '#9ca3af', fontSize: '0.9rem', margin: '8px 0 0' }}>Usa "Agregar usuario especial" para asignar empleados que no generen incidencias.</p>
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto', backgroundColor: 'white', borderRadius: '10px', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ backgroundColor: '#f8f9fa' }}>
+                    <th style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>No.</th>
+                    <th style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>Nombre</th>
+                    <th style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>Departamento</th>
+                    <th style={{ padding: '12px 14px', textAlign: 'center', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>Acción</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {usuariosEspeciales.map(emp => (
+                    <tr key={emp.id} style={{ borderBottom: '1px solid #eee' }}>
+                      <td style={{ padding: '11px 14px', fontWeight: 500 }}>{emp.numero_empleado}</td>
+                      <td style={{ padding: '11px 14px' }}>{emp.nombre} {emp.apellido_paterno || ''}</td>
+                      <td style={{ padding: '11px 14px', color: '#555' }}>{emp.departamento?.nombre || '—'}</td>
+                      <td style={{ padding: '11px 14px', textAlign: 'center' }}>
+                        <button
+                          onClick={() => toggleExentoIncidencias(emp, false)}
+                          disabled={togglingEspecial === emp.id}
+                          style={{ padding: '4px 12px', fontSize: '0.8rem', backgroundColor: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: '4px', cursor: togglingEspecial === emp.id ? 'not-allowed' : 'pointer' }}
+                        >
+                          {togglingEspecial === emp.id ? '...' : 'Quitar'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Modal Agregar usuario especial */}
+          {showAgregarEspecialModal && (
+            <div style={modalOverlay} onClick={() => setShowAgregarEspecialModal(false)}>
+              <div style={{ ...modalSmall, maxWidth: '520px' }} onClick={e => e.stopPropagation()}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', paddingBottom: '12px', borderBottom: '1px solid #e5e7eb' }}>
+                  <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Agregar usuario especial</h3>
+                  <button type="button" onClick={() => setShowAgregarEspecialModal(false)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#9ca3af' }}>&times;</button>
+                </div>
+                <p style={{ margin: '0 0 12px', fontSize: '0.9rem', color: '#6b7280' }}>Busca un empleado para asignarlo como usuario especial (no generará incidencias).</p>
+                <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
+                  <input
+                    type="text"
+                    placeholder="Nombre, número o email..."
+                    value={busquedaEspecial}
+                    onChange={e => setBusquedaEspecial(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && buscarEmpleadosParaEspecial()}
+                    style={{ ...inputStyle, flex: 1 }}
+                  />
+                  <button onClick={buscarEmpleadosParaEspecial} style={{ ...btnSuccess, flexShrink: 0 }}>Buscar</button>
+                </div>
+                {empleadosBusqueda.length > 0 && (
+                  <div style={{ maxHeight: '280px', overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: '6px' }}>
+                    {empleadosBusqueda.map(emp => (
+                      <div key={emp.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', borderBottom: '1px solid #f3f4f6' }}>
+                        <div>
+                          <span style={{ fontWeight: 600 }}>{emp.nombre} {emp.apellido_paterno || ''}</span>
+                          <span style={{ marginLeft: 8, color: '#6b7280', fontSize: '0.85rem' }}>#{emp.numero_empleado}</span>
+                          {emp.departamento?.nombre && <span style={{ marginLeft: 8, fontSize: '0.8rem', color: '#9ca3af' }}>{emp.departamento.nombre}</span>}
+                        </div>
+                        <button
+                          onClick={() => { toggleExentoIncidencias(emp, true); }}
+                          disabled={togglingEspecial === emp.id}
+                          style={{ padding: '4px 12px', fontSize: '0.8rem', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: '4px', cursor: togglingEspecial === emp.id ? 'not-allowed' : 'pointer' }}
+                        >
+                          {togglingEspecial === emp.id ? '...' : 'Agregar'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {busquedaEspecial && empleadosBusqueda.length === 0 && (
+                  <p style={{ color: '#6b7280', fontSize: '0.9rem', padding: '12px 0' }}>No se encontraron empleados o ya están en la lista.</p>
+                )}
+                <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'flex-end' }}>
+                  <button onClick={() => setShowAgregarEspecialModal(false)} style={btnSecondary}>Cerrar</button>
+                </div>
               </div>
             </div>
           )}

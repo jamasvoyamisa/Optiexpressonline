@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
+import { parseTimestampForMexico } from '../../utils/date';
+import { useAuth } from '../../hooks/useAuth';
 import { Empleado, EmpleadoCreate, Dispositivo, Asistencia, EmpresaResponse, DepartamentoResponse, PuestoResponse } from '../../types';
 
 interface FormData extends Omit<EmpleadoCreate, 'registrar_en_checador' | 'dispositivo_ids'> {
@@ -16,6 +18,7 @@ interface HorarioSimple {
   nombre: string;
   hora_entrada: string;
   hora_salida: string;
+  hora_salida_sabado?: string | null;
   activo: boolean;
 }
 
@@ -95,7 +98,9 @@ const modalLarge: React.CSSProperties = {
 
 
 export const PersonalPage = () => {
-  const [mainTab, setMainTab] = useState<'empleados' | 'departamentos'>('empleados');
+  const { authMe } = useAuth();
+  const isAdmin = authMe?.is_superuser === true;
+  const [mainTab, setMainTab] = useState<'empleados' | 'departamentos' | 'puestos'>('empleados');
   const [empleados, setEmpleados] = useState<Empleado[]>([]);
   const [empresas, setEmpresas] = useState<EmpresaResponse[]>([]);
   const [departamentos, setDepartamentos] = useState<DepartamentoResponse[]>([]);
@@ -130,17 +135,22 @@ export const PersonalPage = () => {
   const [editingDeptoId, setEditingDeptoId] = useState<number | null>(null);
   const [deptoForm, setDeptoForm] = useState({ nombre: '', empresa_id: 0 as number | undefined, jefe_id: null as number | null });
 
+  // Modal puesto (crear / editar)
+  const [showPuestoModal, setShowPuestoModal] = useState(false);
+  const [editingPuestoId, setEditingPuestoId] = useState<number | null>(null);
+  const [puestoForm, setPuestoForm] = useState({ empresa_id: undefined as number | undefined, departamento_id: undefined as number | undefined, nombre: '', orden: 0, activo: true });
+  const [filtroEmpresaPuesto, setFiltroEmpresaPuesto] = useState('');
+  const [filtroDeptoPuesto, setFiltroDeptoPuesto] = useState('');
+
   // Modal checadores
   const [showChecadorModal, setShowChecadorModal] = useState(false);
   const [checadorTarget, setChecadorTarget] = useState<Empleado | null>(null);
   const [checadorDevices, setChecadorDevices] = useState<number[]>([]);
 
-  // Modal huella (enroll + replicar)
+  // Modal huella (solo registrar; cola de replicación eliminada)
   const [showHuellaModal, setShowHuellaModal] = useState(false);
   const [huellaTarget, setHuellaTarget] = useState<Empleado | null>(null);
-  const [huellaTab, setHuellaTab] = useState<'registrar' | 'replicar'>('registrar');
   const [enrollDevice, setEnrollDevice] = useState<number | null>(null);
-  const [replicarDevices, setReplicarDevices] = useState<number[]>([]);
   const [tieneHuella, setTieneHuella] = useState(false);
   const [huellaTemplates, setHuellaTemplates] = useState<{ id: number; finger_index: number; source_device_nombre: string | null; updated_at: string | null }[]>([]);
   const [enrollingHuella, setEnrollingHuella] = useState(false);
@@ -158,7 +168,7 @@ export const PersonalPage = () => {
         api.get('/asistencia/devices'),
         api.get('/personal/empresas?limit=500'),
         api.get('/personal/departamentos?limit=500'),
-        api.get('/personal/puestos'),
+        api.get('/personal/puestos'), // sin activo = todos (para puestos tab); form filtra activos
         api.get('/asistencia/horarios?activo=true'),
       ]);
       setEmpleados(empRes.data);
@@ -267,6 +277,8 @@ export const PersonalPage = () => {
       dispositivo_ids: [],
       password: '',
       username: emp.username || '',
+      horario_id: emp.horario_id ?? undefined,
+      horario_sabado_id: emp.horario_sabado_id ?? null,
     });
     setEditingId(emp.id);
     setUsernameManual(false);
@@ -298,6 +310,8 @@ export const PersonalPage = () => {
       for (const [key, val] of Object.entries(form)) {
         if (key === 'dispositivo_ids') {
           if (Array.isArray(val) && val.length > 0) payload[key] = val;
+        } else if (key === 'horario_id' || key === 'horario_sabado_id') {
+          payload[key] = val ?? null;
         } else if (val !== '' && val !== null && val !== undefined && val !== false) {
           payload[key] = val;
         } else if (key === 'registrar_en_checador') {
@@ -366,7 +380,6 @@ export const PersonalPage = () => {
 
   const openHuellaModal = async (emp: Empleado) => {
     setHuellaTarget(emp);
-    setReplicarDevices([]);
     setEnrollDevice(null);
     setEnrollStatus('idle');
     setEnrollId(null);
@@ -377,11 +390,9 @@ export const PersonalPage = () => {
       const templates = Array.isArray(res.data) ? res.data : [];
       setHuellaTemplates(templates);
       setTieneHuella(templates.length > 0);
-      setHuellaTab(templates.length > 0 ? 'replicar' : 'registrar');
     } catch {
       setTieneHuella(false);
       setHuellaTemplates([]);
-      setHuellaTab('registrar');
     }
   };
 
@@ -403,17 +414,6 @@ export const PersonalPage = () => {
     setShowHuellaModal(false);
   };
 
-  const replicarHuella = async () => {
-    if (!huellaTarget || replicarDevices.length === 0) { alert('Selecciona al menos un dispositivo destino'); return; }
-    try {
-      await api.post('/asistencia/replicate-fingerprint', { numero_empleado: huellaTarget.numero_empleado, dispositivo_ids: replicarDevices });
-      alert(`Huella en proceso de replicacion a ${replicarDevices.length} dispositivo(s).`);
-      setShowHuellaModal(false);
-    } catch (error: unknown) {
-      const err = error as { response?: { data?: { detail?: string } } };
-      alert(err.response?.data?.detail || 'Error al replicar');
-    }
-  };
 
   const getEmpresaNombre = (empresaId?: number | null) => {
     if (!empresaId) return '-';
@@ -472,6 +472,90 @@ export const PersonalPage = () => {
     }
   };
 
+  // ---- Puesto CRUD ----
+  const PUESTOS_RESERVADOS = ['director', 'gerente general', 'rh'];
+  const isPuestoReservado = (nombre: string) => PUESTOS_RESERVADOS.includes((nombre || '').trim().toLowerCase());
+
+  const openNewPuesto = () => {
+    const maxOrden = puestos.length > 0 ? Math.max(...puestos.map(p => p.orden), 0) + 1 : 0;
+    const primeraEmpresa = activeEmpresas[0]?.id;
+    const primerDepto = primeraEmpresa ? deptosForEmpresa(primeraEmpresa)[0]?.id : undefined;
+    setPuestoForm({ empresa_id: primeraEmpresa, departamento_id: primerDepto, nombre: '', orden: maxOrden, activo: true });
+    setEditingPuestoId(null);
+    setShowPuestoModal(true);
+  };
+
+  const startEditPuesto = (p: PuestoResponse) => {
+    setPuestoForm({
+      empresa_id: p.empresa_id ?? undefined,
+      departamento_id: p.departamento_id ?? undefined,
+      nombre: p.nombre,
+      orden: p.orden,
+      activo: p.activo,
+    });
+    setEditingPuestoId(p.id);
+    setShowPuestoModal(true);
+  };
+
+  const handlePuestoSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!puestoForm.nombre.trim()) { alert('Nombre es obligatorio'); return; }
+    if (!editingPuestoId) {
+      if (isPuestoReservado(puestoForm.nombre)) {
+        alert('No se puede crear: Director, Gerente General y RH son asignados por el Administrador.');
+        return;
+      }
+      if (!puestoForm.empresa_id || !puestoForm.departamento_id) {
+        alert('Selecciona empresa y departamento para crear el puesto.');
+        return;
+      }
+    }
+    setSaving(true);
+    try {
+      if (editingPuestoId) {
+        await api.put(`/personal/puestos/${editingPuestoId}`, { nombre: puestoForm.nombre, orden: puestoForm.orden, activo: puestoForm.activo });
+        alert('Puesto actualizado');
+      } else {
+        await api.post('/personal/puestos', {
+          empresa_id: puestoForm.empresa_id,
+          departamento_id: puestoForm.departamento_id,
+          nombre: puestoForm.nombre.trim(),
+          orden: puestoForm.orden,
+          activo: puestoForm.activo,
+        });
+        alert('Puesto creado');
+      }
+      setShowPuestoModal(false);
+      loadData();
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { detail?: string } } };
+      alert(err.response?.data?.detail || 'Error al guardar puesto');
+    } finally { setSaving(false); }
+  };
+
+  const togglePuestoActivo = async (p: PuestoResponse) => {
+    if (isPuestoReservado(p.nombre)) { alert('No se puede desactivar: Director, Gerente General y RH son puestos del sistema.'); return; }
+    try {
+      await api.put(`/personal/puestos/${p.id}`, { activo: !p.activo });
+      loadData();
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { detail?: string } } };
+      alert(err.response?.data?.detail || 'Error');
+    }
+  };
+
+  const deletePuesto = async (p: PuestoResponse) => {
+    if (isPuestoReservado(p.nombre)) { alert('No se puede eliminar: Director, Gerente General y RH son puestos del sistema.'); return; }
+    if (!confirm(`¿Eliminar el puesto "${p.nombre}"?`)) return;
+    try {
+      await api.delete(`/personal/puestos/${p.id}`);
+      loadData();
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { detail?: string } } };
+      alert(err.response?.data?.detail || 'Error al eliminar');
+    }
+  };
+
   const deptosForEmpresa = (empresaId?: number) => {
     if (!empresaId) return [];
     return departamentos.filter(d => d.empresa_id === empresaId && d.activo);
@@ -521,6 +605,19 @@ export const PersonalPage = () => {
 
   const activeDevices = dispositivos.filter(d => d.activo);
   const activeEmpresas = empresas.filter(e => e.activo);
+  // Puestos para el formulario de empleado: globales (Director, Gerente General, RH) + los del departamento seleccionado
+  const activePuestos = puestos.filter(p => {
+    if (!p.activo) return false;
+    const esGlobal = p.empresa_id == null && p.departamento_id == null;
+    const esDelDepto = form.empresa_id && form.departamento_id &&
+      p.empresa_id === form.empresa_id && p.departamento_id === form.departamento_id;
+    if (esGlobal || esDelDepto) {
+      if (isAdmin) return true;
+      if (editingId && form.puesto_id === p.id && isPuestoReservado(p.nombre)) return true;
+      return !isPuestoReservado(p.nombre);
+    }
+    return false;
+  });
 
   const mainTabStyle = (active: boolean): React.CSSProperties => ({
     padding: '10px 28px', cursor: 'pointer', border: 'none',
@@ -540,6 +637,7 @@ export const PersonalPage = () => {
       <div style={{ display: 'flex', borderBottom: '2px solid #e5e7eb', marginBottom: '20px' }}>
         <button style={mainTabStyle(mainTab === 'empleados')} onClick={() => setMainTab('empleados')}>Empleados</button>
         <button style={mainTabStyle(mainTab === 'departamentos')} onClick={() => setMainTab('departamentos')}>Departamentos</button>
+        <button style={mainTabStyle(mainTab === 'puestos')} onClick={() => setMainTab('puestos')}>Puestos</button>
       </div>
 
       {/* ====== TAB: DEPARTAMENTOS ====== */}
@@ -593,25 +691,107 @@ export const PersonalPage = () => {
         </>
       )}
 
+      {/* ====== TAB: PUESTOS ====== */}
+      {mainTab === 'puestos' && (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+              <p style={{ margin: 0, color: '#555' }}>
+                {puestos.filter(p => {
+                  if (filtroEmpresaPuesto && (p.empresa_id !== Number(filtroEmpresaPuesto))) return false;
+                  if (filtroDeptoPuesto && (p.departamento_id !== Number(filtroDeptoPuesto))) return false;
+                  return true;
+                }).length} puesto(s) registrado(s)
+              </p>
+              <select value={filtroEmpresaPuesto} onChange={e => { setFiltroEmpresaPuesto(e.target.value); setFiltroDeptoPuesto(''); }} style={{ ...inputStyle, maxWidth: '180px' }}>
+                <option value="">Todas las empresas</option>
+                {activeEmpresas.map(emp => (
+                  <option key={emp.id} value={String(emp.id)}>{emp.nombre}</option>
+                ))}
+              </select>
+              <select value={filtroDeptoPuesto} onChange={e => setFiltroDeptoPuesto(e.target.value)} style={{ ...inputStyle, maxWidth: '180px' }} disabled={!filtroEmpresaPuesto}>
+                <option value="">Todos los departamentos</option>
+                {deptosForEmpresa(filtroEmpresaPuesto ? Number(filtroEmpresaPuesto) : undefined).map(d => (
+                  <option key={d.id} value={String(d.id)}>{d.nombre}</option>
+                ))}
+              </select>
+            </div>
+            <button onClick={openNewPuesto} style={btnSuccess}>+ Nuevo Puesto</button>
+          </div>
+          {puestos.length === 0 ? (
+            <p style={{ textAlign: 'center', color: '#888', padding: '40px 0' }}>No hay puestos registrados.</p>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '10px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+                <thead>
+                  <tr style={{ backgroundColor: '#f8f9fa' }}>
+                    {['Nombre', 'Empresa', 'Departamento', 'Orden', 'Empleados', 'Estado', 'Acciones'].map(h => (
+                      <th key={h} style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {puestos
+                    .filter(p => {
+                      if (filtroEmpresaPuesto && (p.empresa_id !== Number(filtroEmpresaPuesto))) return false;
+                      if (filtroDeptoPuesto && (p.departamento_id !== Number(filtroDeptoPuesto))) return false;
+                      return true;
+                    })
+                    .map(p => {
+                    const count = empleados.filter(e => e.puesto_id === p.id).length;
+                    const reservado = isPuestoReservado(p.nombre);
+                    return (
+                      <tr key={p.id} style={{ borderBottom: '1px solid #eee' }}>
+                        <td style={{ padding: '11px 14px', fontWeight: 500 }}>{p.nombre}{reservado ? ' (sistema)' : ''}</td>
+                        <td style={{ padding: '11px 14px', color: '#555' }}>{p.empresa_nombre ?? '—'}</td>
+                        <td style={{ padding: '11px 14px', color: '#555' }}>{p.departamento_nombre ?? '—'}</td>
+                        <td style={{ padding: '11px 14px', color: '#555' }}>{p.orden}</td>
+                        <td style={{ padding: '11px 14px', fontWeight: 600 }}>{count}</td>
+                        <td style={{ padding: '11px 14px' }}>
+                          <span style={{ padding: '3px 10px', borderRadius: '4px', fontSize: '0.8rem', backgroundColor: p.activo ? '#d4edda' : '#f8d7da', color: p.activo ? '#155724' : '#721c24', fontWeight: 500 }}>
+                            {p.activo ? 'Activo' : 'Inactivo'}
+                          </span>
+                        </td>
+                        <td style={{ padding: '11px 14px' }}>
+                          <div style={{ display: 'flex', gap: '5px' }}>
+                            <button onClick={() => startEditPuesto(p)} style={{ padding: '4px 10px', fontSize: '0.78rem', cursor: 'pointer', backgroundColor: '#ffc107', color: '#000', border: 'none', borderRadius: '4px' }}>Editar</button>
+                            {!reservado && (
+                              <>
+                                <button onClick={() => togglePuestoActivo(p)} style={{ padding: '4px 10px', fontSize: '0.78rem', cursor: 'pointer', backgroundColor: p.activo ? '#dc3545' : '#28a745', color: 'white', border: 'none', borderRadius: '4px' }}>
+                                  {p.activo ? 'Desactivar' : 'Activar'}
+                                </button>
+                                <button onClick={() => deletePuesto(p)} style={{ padding: '4px 10px', fontSize: '0.78rem', cursor: 'pointer', backgroundColor: '#dc3545', color: 'white', border: 'none', borderRadius: '4px' }}>Eliminar</button>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+
       {/* ====== TAB: EMPLEADOS ====== */}
       {mainTab === 'empleados' && (
         <>
-          {/* Stats */}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '14px' }}>
-            <button onClick={openNewForm} style={btnSuccess}>+ Nuevo Empleado</button>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '14px', marginBottom: '20px' }}>
+          {/* Stats + botón en la misma línea */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center', marginBottom: '20px' }}>
             {[
               { label: 'Total', value: stats.total, color: '#333' },
               { label: 'Activos', value: stats.activos, color: '#28a745' },
               { label: 'Inactivos', value: stats.inactivos, color: '#ffc107' },
               { label: 'Bajas', value: stats.bajas, color: '#dc3545' },
             ].map(s => (
-              <div key={s.label} style={{ ...cardStyle, padding: '16px' }}>
-                <div style={{ color: '#888', fontSize: '0.82rem', marginBottom: '2px' }}>{s.label}</div>
-                <div style={{ fontSize: '1.7rem', fontWeight: 'bold', color: s.color }}>{s.value}</div>
+              <div key={s.label} style={{ ...cardStyle, padding: '12px 16px', minWidth: '90px', flex: '1 1 90px', maxWidth: '140px' }}>
+                <div style={{ color: '#888', fontSize: '0.78rem', marginBottom: '2px' }}>{s.label}</div>
+                <div style={{ fontSize: '1.4rem', fontWeight: 'bold', color: s.color }}>{s.value}</div>
               </div>
             ))}
+            <button onClick={openNewForm} style={{ ...btnSuccess, marginLeft: 'auto' }}>+ Nuevo Empleado</button>
           </div>
 
           {/* Search + Filters */}
@@ -848,7 +1028,7 @@ export const PersonalPage = () => {
                         onChange={e => handleChange('puesto_id', e.target.value ? Number(e.target.value) : undefined)}
                         required>
                         <option value="">-- Seleccione puesto --</option>
-                        {puestos.map(p => (
+                        {activePuestos.map(p => (
                           <option key={p.id} value={p.id}>{p.nombre}</option>
                         ))}
                       </select>
@@ -891,7 +1071,9 @@ export const PersonalPage = () => {
                         >
                           <option value="">-- Selecciona horario sábado --</option>
                           {horarios.map(h => (
-                            <option key={h.id} value={h.id}>{h.nombre} ({h.hora_entrada} – {h.hora_salida})</option>
+                            <option key={h.id} value={h.id}>
+                              {h.nombre} ({h.hora_entrada} – {h.hora_salida_sabado || h.hora_salida})
+                            </option>
                           ))}
                         </select>
                       ) : (
@@ -1062,7 +1244,7 @@ export const PersonalPage = () => {
         const empDayRows: EmpDayRow[] = (() => {
           const map = new Map<string, EmpDayRow>();
           for (const c of empChecadas) {
-            const d = new Date(c.timestamp);
+            const d = parseTimestampForMexico(c.timestamp);
             const fechaSort = d.toISOString().slice(0, 10);
             const fechaStr = d.toLocaleDateString('es-MX', { weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit' });
             if (!map.has(fechaSort)) map.set(fechaSort, { key: fechaSort, fecha: fechaStr, fechaSort, esTiempoExtra: false });
@@ -1249,19 +1431,13 @@ export const PersonalPage = () => {
         </div>
       )}
 
-      {/* ========== MODAL: HUELLA (REGISTRAR + REPLICAR) ========== */}
+      {/* ========== MODAL: REGISTRAR HUELLA ========== */}
       {showHuellaModal && huellaTarget && (() => {
-        const hTabStyle = (active: boolean): React.CSSProperties => ({
-          padding: '8px 20px', cursor: 'pointer', border: 'none',
-          borderBottom: active ? '3px solid #20c997' : '3px solid transparent',
-          backgroundColor: 'transparent', fontWeight: active ? 600 : 400,
-          fontSize: '0.9rem', color: active ? '#20c997' : '#888',
-        });
         return (
           <div style={subModalOverlay} onClick={cerrarHuellaModal}>
             <div style={{ ...modalSmall, maxWidth: '550px' }} onClick={e => e.stopPropagation()}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-                <h3 style={{ margin: 0 }}>Gestion de Huella</h3>
+                <h3 style={{ margin: 0 }}>Registrar Huella</h3>
                 <button onClick={cerrarHuellaModal} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#999', lineHeight: 1 }}>&times;</button>
               </div>
               <p style={{ color: '#666', margin: '0 0 16px', fontSize: '0.9rem' }}>
@@ -1293,15 +1469,7 @@ export const PersonalPage = () => {
                 </div>
               )}
 
-              {/* Sub-tabs */}
-              <div style={{ display: 'flex', borderBottom: '2px solid #e5e7eb', marginBottom: '16px' }}>
-                <button style={hTabStyle(huellaTab === 'registrar')} onClick={() => setHuellaTab('registrar')}>Registrar Huella</button>
-                <button style={hTabStyle(huellaTab === 'replicar')} onClick={() => setHuellaTab('replicar')}>Replicar a Dispositivos</button>
-              </div>
-
-              {/* TAB: REGISTRAR */}
-              {huellaTab === 'registrar' && (
-                <div>
+              <div>
                   {/* Confirmacion: solicitud enviada al agente */}
                   {enrollStatus === 'completed' && (
                     <div style={{ padding: '16px', backgroundColor: '#d4edda', borderRadius: '8px', marginBottom: '16px', display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
@@ -1352,54 +1520,6 @@ export const PersonalPage = () => {
                     </>
                   )}
                 </div>
-              )}
-
-              {/* TAB: REPLICAR */}
-              {huellaTab === 'replicar' && (
-                <div>
-                  {!tieneHuella ? (
-                    <div style={{ padding: '20px', backgroundColor: '#fff3cd', borderRadius: '8px', marginBottom: '16px' }}>
-                      <p style={{ margin: 0, color: '#856404', fontWeight: 500 }}>Este empleado no tiene huella registrada.</p>
-                      <p style={{ margin: '8px 0 0', color: '#856404', fontSize: '0.85rem' }}>
-                        Primero registra su huella en la pestana "Registrar Huella".
-                      </p>
-                    </div>
-                  ) : (
-                    <>
-                      <p style={{ margin: '0 0 12px', fontSize: '0.85rem', color: '#555' }}>
-                        Selecciona los dispositivos a los que deseas copiar la huella:
-                      </p>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
-                        {activeDevices.map(d => (
-                          <label key={d.id} style={{
-                            ...checkboxDeviceStyle,
-                            backgroundColor: replicarDevices.includes(d.id) ? '#e0f2f1' : 'white',
-                            borderColor: replicarDevices.includes(d.id) ? '#20c997' : '#d1d5db',
-                          }}>
-                            <input type="checkbox" checked={replicarDevices.includes(d.id)}
-                              onChange={() => setReplicarDevices(prev =>
-                                prev.includes(d.id) ? prev.filter(x => x !== d.id) : [...prev, d.id]
-                              )}
-                              style={{ width: '16px', height: '16px' }} />
-                            <div>
-                              <div style={{ fontWeight: 500 }}>{d.nombre}</div>
-                              {d.ubicacion && <div style={{ fontSize: '0.78rem', color: '#666' }}>{d.ubicacion}</div>}
-                            </div>
-                          </label>
-                        ))}
-                      </div>
-                    </>
-                  )}
-                  <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-                    <button onClick={cerrarHuellaModal} style={btnSecondary}>Cancelar</button>
-                    {tieneHuella && (
-                      <button onClick={replicarHuella} style={{ ...btnPrimary, backgroundColor: '#20c997' }} disabled={replicarDevices.length === 0}>
-                        Replicar a {replicarDevices.length} dispositivo(s)
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         );
@@ -1447,6 +1567,77 @@ export const PersonalPage = () => {
                 <button type="button" onClick={() => setShowDeptoModal(false)} style={btnSecondary}>Cancelar</button>
                 <button type="submit" style={saving ? { ...btnSuccess, opacity: 0.6, cursor: 'not-allowed' } : btnSuccess} disabled={saving}>
                   {saving ? 'Guardando...' : editingDeptoId ? 'Guardar Cambios' : 'Crear Departamento'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ========== MODAL: CREAR/EDITAR PUESTO ========== */}
+      {showPuestoModal && (
+        <div style={subModalOverlay} onClick={() => setShowPuestoModal(false)}>
+          <div style={modalSmall} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h3 style={{ margin: 0 }}>{editingPuestoId ? 'Editar Puesto' : 'Nuevo Puesto'}</h3>
+              <button onClick={() => setShowPuestoModal(false)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#999', lineHeight: 1 }}>&times;</button>
+            </div>
+            <form onSubmit={handlePuestoSubmit}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '20px' }}>
+                {!editingPuestoId && (
+                  <>
+                    <div>
+                      <label style={labelStyle}>Empresa *</label>
+                      <select style={inputStyle} value={puestoForm.empresa_id ?? ''}
+                        onChange={e => setPuestoForm(p => ({ ...p, empresa_id: e.target.value ? Number(e.target.value) : undefined, departamento_id: undefined }))} required>
+                        <option value="">-- Seleccionar empresa --</option>
+                        {activeEmpresas.map(emp => (
+                          <option key={emp.id} value={emp.id}>{emp.nombre}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Departamento *</label>
+                      <select style={inputStyle} value={puestoForm.departamento_id ?? ''}
+                        onChange={e => setPuestoForm(p => ({ ...p, departamento_id: e.target.value ? Number(e.target.value) : undefined }))}
+                        required disabled={!puestoForm.empresa_id}>
+                        <option value="">-- Seleccionar departamento --</option>
+                        {deptosForEmpresa(puestoForm.empresa_id).map(d => (
+                          <option key={d.id} value={d.id}>{d.nombre}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </>
+                )}
+                {editingPuestoId && (puestoForm.empresa_id != null || puestoForm.departamento_id != null) && (
+                  <p style={{ margin: 0, color: '#6b7280', fontSize: '0.9rem' }}>
+                    {puestos.find(x => x.id === editingPuestoId)?.empresa_nombre || '—'} / {puestos.find(x => x.id === editingPuestoId)?.departamento_nombre || '—'}
+                  </p>
+                )}
+                <div>
+                  <label style={labelStyle}>Nombre del puesto *</label>
+                  <input style={inputStyle} value={puestoForm.nombre}
+                    onChange={e => setPuestoForm(p => ({ ...p, nombre: e.target.value }))}
+                    placeholder="Ej: Operador, Vendedor" required disabled={!!editingPuestoId && isPuestoReservado(puestoForm.nombre)} />
+                  {!editingPuestoId && (
+                    <p style={{ fontSize: '0.78rem', color: '#666', margin: '4px 0 0' }}>No se pueden crear: Director, Gerente General, RH</p>
+                  )}
+                </div>
+                <div>
+                  <label style={labelStyle}>Orden</label>
+                  <input type="number" style={inputStyle} value={puestoForm.orden}
+                    onChange={e => setPuestoForm(p => ({ ...p, orden: parseInt(e.target.value, 10) || 0 }))} min={0} />
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <input type="checkbox" id="puesto-activo" checked={puestoForm.activo}
+                    onChange={e => setPuestoForm(p => ({ ...p, activo: e.target.checked }))} />
+                  <label htmlFor="puesto-activo" style={{ cursor: 'pointer', fontSize: '0.9rem' }}>Activo</label>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                <button type="button" onClick={() => setShowPuestoModal(false)} style={btnSecondary}>Cancelar</button>
+                <button type="submit" style={saving ? { ...btnSuccess, opacity: 0.6, cursor: 'not-allowed' } : btnSuccess} disabled={saving}>
+                  {saving ? 'Guardando...' : editingPuestoId ? 'Guardar Cambios' : 'Crear Puesto'}
                 </button>
               </div>
             </form>

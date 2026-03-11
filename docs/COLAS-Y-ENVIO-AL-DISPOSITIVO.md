@@ -53,7 +53,7 @@ Hay dos colas principales por dispositivo:
 - **Cuándo entra alguien:** Cuando se solicita "Iniciar registro de huella" para un empleado en un dispositivo.
 - **Orden:** Por fecha. El agente procesa **solo el primero** pendiente en cada ciclo; cuando termina (éxito o fallo), pasa al siguiente en el siguiente ciclo.
 
-Otras colas (menos frecuentes): pendientes de eliminar del dispositivo, pendientes de replicar huellas entre dispositivos.
+Otras colas (menos frecuentes): pendientes de eliminar del dispositivo.
 
 ---
 

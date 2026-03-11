@@ -1,0 +1,26 @@
+# Configuracion del Agente Windows Multi-Dispositivo ZKTeco
+# Copia este archivo a config.yaml y ajusta los valores
+
+# URL base del backend (sin /device-sync)
+api_url: "http://192.168.2.55:9081/api/v1/asistencia/device-sync"
+
+# Lista de dispositivos a gestionar
+devices:
+  - name: "Entrada Principal"
+    ip: "192.168.2.74"
+    port: 4370
+    api_key: "COPIAR_DE_LA_WEB"
+  # - name: "Cafeteria"
+  #   ip: "192.168.2.75"
+  #   port: 4370
+  #   api_key: "COPIAR_DE_LA_WEB_2"
+
+sync:
+  interval_seconds: 30
+
+buffer:
+  enabled: true
+
+logging:
+  level: "INFO"
+  file: "agent.log"

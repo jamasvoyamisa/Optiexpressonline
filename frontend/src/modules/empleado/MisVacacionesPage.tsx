@@ -480,7 +480,12 @@ export const MisVacacionesPage = () => {
           {/* Barra superior: título + botón Solicitar (solo si hay selección) */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', marginBottom: '16px' }}>
             <h2 style={{ margin: 0, fontSize: '1.1rem' }}>Selecciona el período de vacaciones</h2>
-            {rangeStart && (
+            {balance && Number(balance.dias_disponibles) - Number(balance.dias_pendientes) <= 0 && (
+              <span style={{ color: '#b91c1c', fontWeight: 600, fontSize: '0.9rem' }}>
+                No tienes días disponibles para solicitar
+              </span>
+            )}
+            {rangeStart && Number(balance?.dias_disponibles ?? 0) - Number(balance?.dias_pendientes ?? 0) > 0 && (
               <button
                 type="button"
                 onClick={() => setModalSolicitar(true)}
@@ -681,6 +686,11 @@ export const MisVacacionesPage = () => {
                 <dt style={{ color: '#666', fontWeight: 500 }}>Días a tomar</dt>
                 <dd style={{ margin: 0, fontWeight: 600, color: '#15803d' }}>{selectedCount} día{selectedCount !== 1 ? 's' : ''}</dd>
               </div>
+              {balance && selectedCount > Number(balance.dias_disponibles) - Number(balance.dias_pendientes) && (
+                <div style={{ marginBottom: '12px', padding: '10px', backgroundColor: '#fef2f2', color: '#b91c1c', borderRadius: '6px', fontSize: '0.9rem', fontWeight: 500 }}>
+                  No puedes solicitar más de {Number(balance.dias_disponibles) - Number(balance.dias_pendientes)} días. Tienes {Number(balance.dias_disponibles)} disponibles y {Number(balance.dias_pendientes)} ya en solicitudes pendientes.
+                </div>
+              )}
             </dl>
             <div style={{ marginBottom: '16px' }}>
               <label style={{ display: 'block', fontWeight: 600, marginBottom: '6px', fontSize: '0.9rem' }}>Motivo (opcional)</label>
@@ -703,8 +713,8 @@ export const MisVacacionesPage = () => {
               <button
                 type="button"
                 onClick={submitDesdeModal}
-                disabled={sending}
-                style={{ padding: '10px 20px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: '6px', cursor: sending ? 'not-allowed' : 'pointer', fontWeight: 600 }}
+                disabled={sending || (!!balance && selectedCount > Number(balance.dias_disponibles) - Number(balance.dias_pendientes))}
+                style={{ padding: '10px 20px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: '6px', cursor: sending ? 'not-allowed' : 'pointer', fontWeight: 600, opacity: (!!balance && selectedCount > Number(balance.dias_disponibles) - Number(balance.dias_pendientes)) ? 0.6 : 1 }}
               >
                 {sending ? 'Enviando...' : 'Confirmar solicitud'}
               </button>

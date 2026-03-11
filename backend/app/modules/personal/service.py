@@ -142,15 +142,128 @@ class PersonalService:
     # ========== PUESTOS ==========
 
     @staticmethod
-    def get_puestos(db: Session, activo: Optional[bool] = True) -> List[models.Puesto]:
-        query = db.query(models.Puesto).order_by(models.Puesto.orden.asc(), models.Puesto.id.asc())
+    def get_puestos(
+        db: Session,
+        activo: Optional[bool] = None,
+        empresa_id: Optional[int] = None,
+        departamento_id: Optional[int] = None,
+    ) -> List[models.Puesto]:
+        query = db.query(models.Puesto).options(
+            joinedload(models.Puesto.empresa),
+            joinedload(models.Puesto.departamento),
+        ).order_by(models.Puesto.orden.asc(), models.Puesto.id.asc())
         if activo is not None:
             query = query.filter(models.Puesto.activo == activo)
+        if empresa_id is not None:
+            query = query.filter(models.Puesto.empresa_id == empresa_id)
+        if departamento_id is not None:
+            query = query.filter(models.Puesto.departamento_id == departamento_id)
         return query.all()
 
     @staticmethod
     def get_puesto(db: Session, puesto_id: int) -> Optional[models.Puesto]:
-        return db.query(models.Puesto).filter(models.Puesto.id == puesto_id).first()
+        return db.query(models.Puesto).options(
+            joinedload(models.Puesto.empresa),
+            joinedload(models.Puesto.departamento),
+        ).filter(models.Puesto.id == puesto_id).first()
+
+    PUESTOS_RESERVADOS = {"director", "gerente general", "rh"}
+
+    @staticmethod
+    def _nombre_reservado(nombre: str) -> bool:
+        n = (nombre or "").strip().lower()
+        return n in PersonalService.PUESTOS_RESERVADOS
+
+    @staticmethod
+    def _puesto_to_response(p: models.Puesto) -> dict:
+        return {
+            "id": p.id, "nombre": p.nombre, "orden": p.orden, "activo": p.activo,
+            "empresa_id": p.empresa_id, "departamento_id": p.departamento_id,
+            "empresa_nombre": p.empresa.nombre if p.empresa else None,
+            "departamento_nombre": p.departamento.nombre if p.departamento else None,
+            "created_at": p.created_at,
+        }
+
+    @staticmethod
+    def create_puesto(db: Session, data: schemas.PuestoCreate) -> models.Puesto:
+        if PersonalService._nombre_reservado(data.nombre):
+            raise ValueError("No se puede crear el puesto: Director, Gerente General y RH son asignados por el Administrador.")
+        # Validar que departamento pertenezca a empresa
+        depto = db.query(models.Departamento).filter(
+            models.Departamento.id == data.departamento_id,
+            models.Departamento.empresa_id == data.empresa_id,
+        ).first()
+        if not depto:
+            raise ValueError("El departamento no pertenece a la empresa seleccionada.")
+        existing = db.query(models.Puesto).filter(
+            models.Puesto.empresa_id == data.empresa_id,
+            models.Puesto.departamento_id == data.departamento_id,
+            func.lower(func.trim(models.Puesto.nombre)) == data.nombre.strip().lower(),
+        ).first()
+        if existing:
+            raise ValueError("Ya existe un puesto con ese nombre en este departamento.")
+        p = models.Puesto(
+            empresa_id=data.empresa_id,
+            departamento_id=data.departamento_id,
+            nombre=data.nombre.strip(),
+            orden=data.orden,
+            activo=data.activo,
+        )
+        db.add(p)
+        db.commit()
+        db.refresh(p)
+        return p
+
+    @staticmethod
+    def update_puesto(db: Session, puesto_id: int, data: schemas.PuestoUpdate) -> Optional[models.Puesto]:
+        p = db.query(models.Puesto).filter(models.Puesto.id == puesto_id).first()
+        if not p:
+            return None
+        if data.nombre is not None:
+            if PersonalService._nombre_reservado(p.nombre):
+                pass  # No cambiar nombre de puestos reservados
+            elif PersonalService._nombre_reservado(data.nombre):
+                raise ValueError("No se puede usar: Director, Gerente General y RH son asignados por el Administrador.")
+            else:
+                # Unicidad dentro del mismo empresa+departamento (o global si ambos null)
+                q = db.query(models.Puesto).filter(
+                    models.Puesto.id != puesto_id,
+                    func.lower(func.trim(models.Puesto.nombre)) == data.nombre.strip().lower(),
+                )
+                if p.empresa_id is not None and p.departamento_id is not None:
+                    q = q.filter(
+                        models.Puesto.empresa_id == p.empresa_id,
+                        models.Puesto.departamento_id == p.departamento_id,
+                    )
+                else:
+                    q = q.filter(
+                        models.Puesto.empresa_id.is_(None),
+                        models.Puesto.departamento_id.is_(None),
+                    )
+                if q.first():
+                    raise ValueError("Ya existe un puesto con ese nombre.")
+                p.nombre = data.nombre.strip()
+        if data.orden is not None:
+            p.orden = data.orden
+        if data.activo is not None:
+            p.activo = data.activo
+        db.commit()
+        db.refresh(p)
+        return p
+
+    @staticmethod
+    def delete_puesto(db: Session, puesto_id: int) -> bool:
+        p = db.query(models.Puesto).filter(models.Puesto.id == puesto_id).first()
+        if not p:
+            return False
+        if PersonalService._nombre_reservado(p.nombre):
+            raise ValueError("No se puede eliminar: Director, Gerente General y RH son puestos del sistema.")
+        count = db.query(models.Empleado).filter(models.Empleado.puesto_id == puesto_id).count()
+        if count > 0:
+            raise ValueError(f"No se puede eliminar: hay {count} empleado(s) con este puesto. Reasígnelos primero.")
+        db.delete(p)
+        db.commit()
+        return True
 
     # ========== ROLES ==========
     
@@ -292,6 +405,7 @@ class PersonalService:
             joinedload(models.Empleado.empresa),
             joinedload(models.Empleado.departamento_rel).joinedload(models.Departamento.empresa),
             joinedload(models.Empleado.puesto_rel),
+            joinedload(models.Empleado.horarios_asignados),
         ).filter(models.Empleado.id == empleado_id).first()
     
     @staticmethod
@@ -314,23 +428,46 @@ class PersonalService:
     
     @staticmethod
     def get_empleados(
-        db: Session, 
-        skip: int = 0, 
+        db: Session,
+        skip: int = 0,
         limit: int = 100,
         estado: Optional[str] = None,
         rol_id: Optional[int] = None,
         jefe_id: Optional[int] = None,
         departamento_id: Optional[int] = None,
-        search: Optional[str] = None
+        search: Optional[str] = None,
+        exento_incidencias: Optional[bool] = None,
     ) -> List[models.Empleado]:
-        """Listar empleados con filtros"""
+        """Listar empleados con filtros. exento_incidencias filtra usuarios especiales."""
+        from sqlalchemy import or_
+
+        # IDs de roles de administrador/superuser (solo excluir cuando no filtramos por exento)
+        admin_rol_ids = []
+        if exento_incidencias is None:
+            admin_rol_ids = [
+                r.id for r in db.query(models.Rol.id).filter(
+                    models.Rol.nombre.in_(("Administrador", "Superuser"))
+                ).all()
+            ]
+
         query = db.query(models.Empleado).options(
             joinedload(models.Empleado.empresa),
             joinedload(models.Empleado.departamento_rel),
             joinedload(models.Empleado.puesto_rel),
             joinedload(models.Empleado.jefe),
+            joinedload(models.Empleado.horarios_asignados),
         )
-        
+
+        if exento_incidencias is not None:
+            query = query.filter(models.Empleado.exento_incidencias == exento_incidencias)
+        elif admin_rol_ids:
+            query = query.filter(
+                or_(
+                    models.Empleado.rol_id.is_(None),
+                    models.Empleado.rol_id.notin_(admin_rol_ids)
+                )
+            )
+
         if estado:
             query = query.filter(models.Empleado.estado == estado)
         if rol_id:
@@ -357,15 +494,37 @@ class PersonalService:
         db_empleado = db.query(models.Empleado).filter(models.Empleado.id == empleado_id).first()
         if not db_empleado:
             return None
-        
+
         update_data = empleado.dict(exclude_unset=True)
         if "password" in update_data:
             password = update_data.pop("password")
             if password and str(password).strip():
                 db_empleado.password_hash = get_password_hash(password)
+
+        # horario_id y horario_sabado_id se manejan aparte
+        horario_id_was_sent = "horario_id" in update_data
+        horario_sabado_was_sent = "horario_sabado_id" in update_data
+        horario_id = update_data.pop("horario_id", None) if horario_id_was_sent else None
+        horario_sabado_id = update_data.pop("horario_sabado_id", None) if horario_sabado_was_sent else None
+
         for field, value in update_data.items():
-            setattr(db_empleado, field, value)
-        
+            if hasattr(db_empleado, field):
+                setattr(db_empleado, field, value)
+
+        from app.modules.asistencia.service import AsistenciaService
+
+        if horario_id_was_sent:
+            try:
+                if horario_id is not None:
+                    AsistenciaService.assign_horario_empleado(db, empleado_id, horario_id)
+                else:
+                    AsistenciaService.remove_horario_empleado(db, empleado_id)
+            except Exception:
+                pass
+
+        if horario_sabado_was_sent:
+            db_empleado.horario_sabado_id = horario_sabado_id
+
         db.commit()
         db.refresh(db_empleado)
         return db_empleado
@@ -414,12 +573,28 @@ class PersonalService:
 
     @staticmethod
     def get_es_gerente_general(db: Session, empleado_id: int) -> bool:
-        """True si el empleado tiene rol Gerente General (aprueba vacaciones solo de gerentes/supervisores)."""
-        emp = db.query(models.Empleado).filter(models.Empleado.id == empleado_id).first()
-        if not emp or not emp.rol_id:
+        """True si el empleado tiene rol o puesto Gerente General (aprueba vacaciones solo de gerentes/supervisores)."""
+        emp = db.query(models.Empleado).options(joinedload(models.Empleado.puesto_rel)).filter(models.Empleado.id == empleado_id).first()
+        if not emp:
             return False
-        rol = db.query(models.Rol).filter(models.Rol.id == emp.rol_id).first()
-        return rol is not None and rol.nombre in PersonalService.GERENTE_GENERAL_ROL_NAMES
+        if emp.rol_id:
+            rol = db.query(models.Rol).filter(models.Rol.id == emp.rol_id).first()
+            if rol and rol.nombre in PersonalService.GERENTE_GENERAL_ROL_NAMES:
+                return True
+        if emp.puesto_rel and (emp.puesto_rel.nombre or "").strip().lower() == "gerente general":
+            return True
+        return False
+
+    @staticmethod
+    def get_es_director(db: Session, empleado_id: int) -> bool:
+        """True si el empleado tiene puesto Director (aprueba vacaciones solo de gerentes/supervisores)."""
+        emp = db.query(models.Empleado).options(joinedload(models.Empleado.puesto_rel)).filter(models.Empleado.id == empleado_id).first()
+        return emp is not None and emp.puesto_rel is not None and (emp.puesto_rel.nombre or "").strip().lower() == "director"
+
+    @staticmethod
+    def get_es_gerente_o_director(db: Session, empleado_id: int) -> bool:
+        """True si puede aprobar solo vacaciones de gerentes/supervisores (Director o Gerente General)."""
+        return PersonalService.get_es_gerente_general(db, empleado_id) or PersonalService.get_es_director(db, empleado_id)
 
     @staticmethod
     def get_ids_aprobadores_area(db: Session, departamento_id: Optional[int]) -> List[int]:

@@ -2,14 +2,16 @@ import { useState } from 'react';
 import { PersonalPage } from '../personal/PersonalPage';
 import { VacacionesPage } from '../vacaciones/VacacionesPage';
 import { IncapacidadesPage } from './IncapacidadesPage';
+import { PrestamosPage } from './PrestamosPage';
 import { ReportesAsistenciaPage } from './ReportesAsistenciaPage';
 
-type Tab = 'personal' | 'vacaciones' | 'incapacidades' | 'reportes';
+type Tab = 'personal' | 'vacaciones' | 'incapacidades' | 'prestamos' | 'reportes';
 
 const tabs: { key: Tab; label: string }[] = [
   { key: 'personal', label: 'Empleados' },
   { key: 'vacaciones', label: 'Solicitudes de Vacaciones' },
   { key: 'incapacidades', label: 'Incapacidades' },
+  { key: 'prestamos', label: 'Préstamos' },
   { key: 'reportes', label: 'Reportes de Asistencia' },
 ];
 
@@ -50,6 +52,7 @@ export const RHPage = () => {
       {activeTab === 'personal' && <PersonalPage />}
       {activeTab === 'vacaciones' && <VacacionesPage />}
       {activeTab === 'incapacidades' && <IncapacidadesPage />}
+      {activeTab === 'prestamos' && <PrestamosPage />}
       {activeTab === 'reportes' && <ReportesAsistenciaPage />}
     </div>
   );

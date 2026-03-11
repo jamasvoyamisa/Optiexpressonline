@@ -11,10 +11,11 @@ export default defineConfig({
   },
   server: {
     port: 3000,
+    host: '0.0.0.0',  // Accesible desde la red interna
     strictPort: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:9081',
+        target: 'http://127.0.0.1:9081',
         changeOrigin: true,
       },
     },

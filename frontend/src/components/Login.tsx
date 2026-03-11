@@ -1,11 +1,12 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Navigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import type { AuthMe } from '../hooks/useAuth';
 
 
 const getDefaultRoute = (me: AuthMe | null): string => {
-  if (me?.is_superuser) return '/rh';
+  if (me?.puede_ver_dashboard) return '/dashboard';
   if (me?.puede_ver_mi_area) return '/mi-area';
   return '/mis-asistencias';
 };
@@ -15,8 +16,27 @@ export const Login = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const { login } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { login, isAuthenticated, authMe, loading: authLoading } = useAuth();
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const reason = sessionStorage.getItem('logout_reason');
+    if (reason === 'inactivity') {
+      sessionStorage.removeItem('logout_reason');
+      setError('Sesión cerrada por inactividad. Por favor inicia sesión de nuevo.');
+      return;
+    }
+    if (searchParams.get('session_expired') === '1') {
+      setError('Tu sesión ha expirado. Por favor inicia sesión de nuevo.');
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, setSearchParams]);
+
+  // Si ya está autenticado, redirigir a la página principal
+  if (!authLoading && isAuthenticated && authMe) {
+    return <Navigate to={getDefaultRoute(authMe)} replace />;
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -26,12 +46,22 @@ export const Login = () => {
     try {
       const authMe = await login(username, password);
       if (authMe !== null) {
-        navigate(getDefaultRoute(authMe));
+        const route = getDefaultRoute(authMe);
+        // Defer navigate para que el estado de auth se actualice antes de renderizar la ruta
+        setTimeout(() => navigate(route, { replace: true }), 0);
       } else {
         setError('Credenciales incorrectas');
       }
-    } catch (err) {
-      setError('Error al iniciar sesión');
+    } catch (err: unknown) {
+      const ax = err as { response?: { data?: { detail?: string } }; message?: string };
+      const msg = ax?.response?.data?.detail;
+      if (typeof msg === 'string') {
+        setError(msg);
+      } else if (ax?.response) {
+        setError('Error del servidor. Revisa la consola.');
+      } else {
+        setError('No se pudo conectar al servidor. Verifica que el backend esté en ejecución (puerto 9081).');
+      }
     } finally {
       setLoading(false);
     }

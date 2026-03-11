@@ -74,6 +74,11 @@ const inputStyle: React.CSSProperties = {
   fontSize: '0.88rem', outline: 'none', width: '100%', boxSizing: 'border-box',
 };
 
+const filterControlStyle: React.CSSProperties = {
+  ...inputStyle,
+  height: 36,
+};
+
 const today = new Date().toISOString().slice(0, 10);
 
 const emptyForm = {
@@ -276,15 +281,15 @@ export const IncapacidadesPage = () => {
           placeholder="Buscar empleado, No. o folio IMSS..."
           value={busqueda}
           onChange={e => setBusqueda(e.target.value)}
-          style={{ ...inputStyle, width: '220px', flex: '1 1 180px' }}
+          style={{ ...filterControlStyle, width: 300, flex: '0 0 300px' }}
         />
-        <select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)} style={{ ...inputStyle, width: 'auto' }}>
+        <select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)} style={{ ...filterControlStyle, width: 'auto' }}>
           <option value="">Todos los estados</option>
           <option value="activa">Activa</option>
           <option value="finalizada">Finalizada</option>
           <option value="cancelada">Cancelada</option>
         </select>
-        <select value={filtroTipo} onChange={e => setFiltroTipo(e.target.value)} style={{ ...inputStyle, width: 'auto' }}>
+        <select value={filtroTipo} onChange={e => setFiltroTipo(e.target.value)} style={{ ...filterControlStyle, width: 'auto' }}>
           <option value="">Todos los tipos</option>
           {Object.entries(TIPO_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>

@@ -14,7 +14,7 @@ class EmpresaBase(BaseModel):
 
 
 class EmpresaCreate(EmpresaBase):
-    pass
+    checadas_remotas: bool = False
 
 
 class EmpresaUpdate(BaseModel):
@@ -23,11 +23,13 @@ class EmpresaUpdate(BaseModel):
     direccion: Optional[str] = None
     telefono: Optional[str] = None
     activo: Optional[bool] = None
+    checadas_remotas: Optional[bool] = None
 
 
 class EmpresaResponse(EmpresaBase):
     id: int
     activo: bool
+    checadas_remotas: bool = False
     rango_inicio: Optional[int] = None
     rango_fin: Optional[int] = None
     created_at: datetime
@@ -102,10 +104,28 @@ class PuestoResponse(BaseModel):
     nombre: str
     orden: int
     activo: bool
+    empresa_id: Optional[int] = None
+    departamento_id: Optional[int] = None
+    empresa_nombre: Optional[str] = None
+    departamento_nombre: Optional[str] = None
     created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
+
+
+class PuestoCreate(BaseModel):
+    empresa_id: int
+    departamento_id: int
+    nombre: str
+    orden: int = 0
+    activo: bool = True
+
+
+class PuestoUpdate(BaseModel):
+    nombre: Optional[str] = None
+    orden: Optional[int] = None
+    activo: Optional[bool] = None
 
 
 # ---- Schemas para Empleado ----
@@ -121,6 +141,7 @@ class EmpleadoBase(BaseModel):
     empresa_id: Optional[int] = None
     departamento_id: Optional[int] = None
     puesto_id: Optional[int] = None
+    exento_incidencias: Optional[bool] = False
     curp: Optional[str] = None
     rfc: Optional[str] = None
     nss: Optional[str] = None
@@ -167,8 +188,10 @@ class EmpleadoUpdate(BaseModel):
     telefono_emergencia: Optional[str] = None
     rol_id: Optional[int] = None
     jefe_id: Optional[int] = None
+    horario_id: Optional[int] = None        # Horario L-V a asignar
     horario_sabado_id: Optional[int] = None  # None = no labora sábados; enviar explícitamente para cambiar
     estado: Optional[EstadoEmpleado] = None
+    exento_incidencias: Optional[bool] = None  # Usuario especial: no genera incidencias automáticas
     fecha_ingreso: Optional[datetime] = None
     fecha_baja: Optional[datetime] = None
     password: Optional[str] = None
@@ -194,6 +217,8 @@ class EmpleadoResponse(EmpleadoBase):
     estado: EstadoEmpleado
     pin_checador: Optional[str] = None
     fecha_baja: Optional[datetime] = None
+    horario_id: Optional[int] = None      # Horario L-V activo (empleado_horario)
+    horario_sabado_id: Optional[int] = None  # Horario sábado (None = no labora sábados)
     created_at: datetime
     updated_at: Optional[datetime] = None
     rol: Optional[RolResponse] = None

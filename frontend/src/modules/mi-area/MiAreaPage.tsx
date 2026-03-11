@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
+import { parseTimestampForMexico } from '../../utils/date';
 
-type TipoIncidencia = 'retardo' | 'falta' | 'horas_extra' | 'salida_anticipada';
+type TipoIncidencia = 'retardo' | 'falta' | 'completa' | 'horas_extra' | 'salida_anticipada' | 'incompleta';
 type TipoChecada = 'entrada' | 'salida' | 'salida_comer' | 'regreso_comer';
 
 interface Incidencia {
@@ -70,7 +71,9 @@ interface AuthMe {
 const tipoLabels: Record<string, string> = {
   retardo: 'Retardo',
   falta: 'Falta',
-  horas_extra: 'Horas extra',
+  incompleta: 'Incompleta',
+  completa: 'Completa',
+  horas_extra: 'Completa', // backend legacy, mostrado como Completa
   salida_anticipada: 'Salida anticipada',
   entrada: 'Entrada',
   salida: 'Salida',
@@ -78,7 +81,19 @@ const tipoLabels: Record<string, string> = {
   regreso_comer: 'Regreso de comer',
 };
 
-type TabKey = 'personal' | 'asistencia' | 'vacaciones';
+/** Colores corporativos para badges de tipo de incidencia */
+const tipoIncidenciasColores: Record<string, { backgroundColor: string; color: string }> = {
+  completa: { backgroundColor: '#d1fae5', color: '#047857' },       // Verde #10B981 - Éxito
+  horas_extra: { backgroundColor: '#d1fae5', color: '#047857' },     // legacy → Completa
+  retardo: { backgroundColor: '#fef3c7', color: '#92400e' },         // Ámbar #F59E0B - Advertencia
+  salida_anticipada: { backgroundColor: '#fef9c3', color: '#b45309' }, // Amarillo #FBBF24 - Atención parcial
+  incompleta: { backgroundColor: '#e5e7eb', color: '#374151' },     // Azul gris #6B7280 - Neutral
+  falta: { backgroundColor: '#fee2e2', color: '#b91c1c' },           // Rojo #EF4444 - Crítico
+};
+
+type TabKey = 'personal' | 'asistencia' | 'incidencias' | 'vacaciones';
+
+const ITEMS_PER_PAGE = 15;
 
 const tabStyle = (active: boolean): React.CSSProperties => ({
   padding: '12px 24px',
@@ -140,16 +155,20 @@ export const MiAreaPage = () => {
   // Personal
   const [personal, setPersonal] = useState<EmpleadoArea[]>([]);
   const [loadingPersonal, setLoadingPersonal] = useState(false);
+  const [busquedaPersonal, setBusquedaPersonal] = useState('');
 
   // Asistencia / Checadas (por quincena: 1 = días 1-15, 2 = 16-fin de mes)
   const [checadas, setChecadas] = useState<Checada[]>([]);
   const [loadingChecadas, setLoadingChecadas] = useState(false);
   const [quincena, setQuincena] = useState<{ year: number; month: number; num: 1 | 2 }>(() => getQuincenaActual());
+  const [pagChecadas, setPagChecadas] = useState(1);
 
   // Incidencias
   const [incidencias, setIncidencias] = useState<Incidencia[]>([]);
+  const [pagIncidencias, setPagIncidencias] = useState(1);
   const [loadingIncidencias, setLoadingIncidencias] = useState(false);
   const [filtroJustificada, setFiltroJustificada] = useState<'todas' | 'pendientes' | 'justificadas'>('pendientes');
+  const [busquedaIncidencias, setBusquedaIncidencias] = useState('');
   const [modalIncidencia, setModalIncidencia] = useState<Incidencia | null>(null);
   const [justificarComentarios, setJustificarComentarios] = useState('');
   const [justificada, setJustificada] = useState(true);
@@ -236,10 +255,11 @@ export const MiAreaPage = () => {
       .finally(() => setLoadingChecadas(false));
   };
 
-  // Incidencias
+  // Incidencias (por quincena, misma que asistencia)
   const loadIncidencias = () => {
     setLoadingIncidencias(true);
-    api.get<Incidencia[]>('/asistencia/incidencias/mi-area')
+    const { inicio, fin } = getQuincenaRango(quincena.year, quincena.month, quincena.num);
+    api.get<Incidencia[]>('/asistencia/incidencias/mi-area', { params: { fecha_inicio: inicio, fecha_fin: fin } })
       .then(res => setIncidencias(Array.isArray(res.data) ? res.data : []))
       .catch(() => setIncidencias([]))
       .finally(() => setLoadingIncidencias(false));
@@ -266,7 +286,8 @@ export const MiAreaPage = () => {
   useEffect(() => {
     if (!puedeVerMiArea) return;
     if (activeTab === 'personal') loadPersonal();
-    if (activeTab === 'asistencia') { loadChecadas(); loadIncidencias(); }
+    if (activeTab === 'asistencia') loadChecadas();
+    if (activeTab === 'incidencias') loadIncidencias();
     if (activeTab === 'vacaciones') loadSolicitudesVacaciones();
   }, [puedeVerMiArea, activeTab]);
 
@@ -276,13 +297,27 @@ export const MiAreaPage = () => {
 
   useEffect(() => {
     if (activeTab === 'asistencia' && puedeVerMiArea) loadChecadas();
+    if (activeTab === 'incidencias' && puedeVerMiArea) loadIncidencias();
   }, [quincena.year, quincena.month, quincena.num]);
+
+  useEffect(() => { setPagChecadas(1); }, [quincena.year, quincena.month, quincena.num]);
+  useEffect(() => { setPagIncidencias(1); }, [filtroJustificada, quincena.year, quincena.month, quincena.num, busquedaIncidencias]);
 
   const filteredInc = incidencias.filter(inc => {
     if (filtroJustificada === 'pendientes') return !inc.justificada;
     if (filtroJustificada === 'justificadas') return inc.justificada;
     return true;
   });
+
+  const filteredIncBusqueda = (authMe?.is_superuser && busquedaIncidencias.trim())
+    ? filteredInc.filter(inc => {
+        const q = busquedaIncidencias.trim().toLowerCase();
+        const nombre = (inc.empleado_nombre || empleadosMap[inc.empleado_id] || '').toLowerCase();
+        const tipo = (tipoLabels[inc.tipo] || inc.tipo).toLowerCase();
+        const desc = (inc.descripcion || '').toLowerCase();
+        return nombre.includes(q) || tipo.includes(q) || desc.includes(q);
+      })
+    : filteredInc;
 
   const saveJustificacion = () => {
     if (!modalIncidencia) return;
@@ -327,17 +362,25 @@ export const MiAreaPage = () => {
       {/* Pestañas */}
       <div style={{ display: 'flex', borderBottom: '2px solid #e5e7eb', marginBottom: '20px' }}>
         <button style={tabStyle(activeTab === 'personal')} onClick={() => setActiveTab('personal')}>Personal del área</button>
-        <button style={tabStyle(activeTab === 'asistencia')} onClick={() => setActiveTab('asistencia')}>Asistencia e incidencias</button>
+        <button style={tabStyle(activeTab === 'asistencia')} onClick={() => setActiveTab('asistencia')}>Asistencia</button>
+        <button style={tabStyle(activeTab === 'incidencias')} onClick={() => setActiveTab('incidencias')}>Incidencias</button>
         <button style={tabStyle(activeTab === 'vacaciones')} onClick={() => setActiveTab('vacaciones')}>Vacaciones</button>
       </div>
 
       {/* ─── TAB: PERSONAL ─── */}
       {activeTab === 'personal' && (
         <>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '12px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: '12px', flexWrap: 'wrap' }}>
+            <input
+              type="search"
+              placeholder="Buscar por nombre, número, email..."
+              value={busquedaPersonal}
+              onChange={e => setBusquedaPersonal(e.target.value)}
+              style={{ padding: '8px 12px', border: '1px solid #ddd', borderRadius: '6px', fontSize: '0.9rem', minWidth: '320px', width: '100%', maxWidth: '480px', outline: 'none' }}
+            />
             <button
               onClick={loadPersonal} disabled={loadingPersonal}
-              style={{ padding: '8px 16px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
+              style={{ padding: '8px 16px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.9rem' }}
             >
               {loadingPersonal ? 'Cargando...' : 'Actualizar'}
             </button>
@@ -348,7 +391,24 @@ export const MiAreaPage = () => {
             <p style={{ color: '#666', padding: '24px', backgroundColor: '#f8f9fa', borderRadius: '8px' }}>
               {authMe?.is_superuser ? 'No hay empleados registrados.' : 'No hay empleados en tu área o no tienes departamentos asignados.'}
             </p>
-          ) : (
+          ) : (() => {
+            const q = busquedaPersonal.trim().toLowerCase();
+            const personalFiltrado = q
+              ? personal.filter(emp => {
+                  const nombreCompleto = `${emp.nombre} ${emp.apellido_paterno || ''} ${emp.apellido_materno || ''}`.toLowerCase();
+                  const num = (emp.numero_empleado || '').toLowerCase();
+                  const email = (emp.email || '').toLowerCase();
+                  const tel = (emp.telefono || '').toLowerCase();
+                  const puesto = (emp.puesto?.nombre || '').toLowerCase();
+                  const depto = (emp.departamento?.nombre || '').toLowerCase();
+                  return nombreCompleto.includes(q) || num.includes(q) || email.includes(q) || tel.includes(q) || puesto.includes(q) || depto.includes(q);
+                })
+              : personal;
+            return personalFiltrado.length === 0 && busquedaPersonal.trim() ? (
+              <p style={{ color: '#666', padding: '24px', backgroundColor: '#f8f9fa', borderRadius: '8px', fontSize: '0.9rem' }}>
+                No se encontraron empleados para &quot;{busquedaPersonal.trim()}&quot;.
+              </p>
+            ) : (
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
                 <thead>
@@ -363,7 +423,7 @@ export const MiAreaPage = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {personal.map(emp => (
+                  {personalFiltrado.map(emp => (
                     <tr key={emp.id} style={{ transition: 'background 0.1s' }} onMouseEnter={e => (e.currentTarget.style.background = '#f8f9fa')} onMouseLeave={e => (e.currentTarget.style.background = '')}>
                       <td style={{ ...td, fontWeight: 600, color: '#374151' }}>{emp.numero_empleado}</td>
                       <td style={td}>{`${emp.nombre} ${emp.apellido_paterno || ''} ${emp.apellido_materno || ''}`.trim()}</td>
@@ -395,55 +455,65 @@ export const MiAreaPage = () => {
                   ))}
                 </tbody>
               </table>
-              <p style={{ marginTop: '8px', color: '#888', fontSize: '0.82rem' }}>{personal.length} empleado{personal.length !== 1 ? 's' : ''}</p>
+              <p style={{ marginTop: '8px', color: '#888', fontSize: '0.82rem' }}>
+                {personalFiltrado.length} empleado{personalFiltrado.length !== 1 ? 's' : ''}
+                {busquedaPersonal.trim() && personalFiltrado.length !== personal.length && ` (de ${personal.length} total)`}
+              </p>
             </div>
-          )}
+            );
+          })()}
         </>
       )}
 
-      {/* ─── TAB: ASISTENCIA E INCIDENCIAS ─── */}
+      {/* ─── TAB: ASISTENCIA ─── */}
       {activeTab === 'asistencia' && (
         <>
-          {/* Checadas del personal del área (por quincena) */}
-          <div style={{ marginBottom: '28px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px', flexWrap: 'wrap' }}>
-              <h2 style={{ margin: 0, fontSize: '1rem', fontWeight: 700 }}>Checadas del personal del área</h2>
-              <span style={{ color: '#666', fontSize: '0.875rem', fontWeight: 500 }}>
-                {formatQuincenaLabel(quincena.year, quincena.month, quincena.num)}
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  if (quincena.num === 1) {
-                    setQuincena({ year: quincena.year, month: quincena.month - 1, num: 2 });
-                  } else {
-                    setQuincena({ ...quincena, num: 1 });
-                  }
-                }}
-                style={{ padding: '7px 12px', backgroundColor: '#e5e7eb', color: '#374151', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.9rem' }}
-              >
-                ← Anterior
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  if (quincena.num === 2) {
-                    setQuincena({ year: quincena.year, month: quincena.month + 1, num: 1 });
-                  } else {
-                    setQuincena({ ...quincena, num: 2 });
-                  }
-                }}
-                style={{ padding: '7px 12px', backgroundColor: '#e5e7eb', color: '#374151', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.9rem' }}
-              >
-                Siguiente →
-              </button>
-              <button
-                onClick={loadChecadas}
-                disabled={loadingChecadas}
-                style={{ padding: '7px 14px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.9rem' }}
-              >
-                {loadingChecadas ? 'Cargando...' : 'Actualizar'}
-              </button>
+          <div>
+            <h2 style={{ margin: '0 0 12px 0', fontSize: '1rem', fontWeight: 700 }}>Checadas del personal del área</h2>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center', gap: '16px', marginBottom: '8px' }}>
+              <div />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (quincena.num === 1) {
+                      setQuincena({ year: quincena.year, month: quincena.month - 1, num: 2 });
+                    } else {
+                      setQuincena({ ...quincena, num: 1 });
+                    }
+                  }}
+                  style={{ padding: '8px 14px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1, fontWeight: 600, boxShadow: '0 1px 3px rgba(14,165,233,0.4)' }}
+                  title="Quincena anterior"
+                >
+                  ←
+                </button>
+                <span style={{ color: '#374151', fontSize: '0.9rem', fontWeight: 600, minWidth: '200px', textAlign: 'center' }}>
+                  {formatQuincenaLabel(quincena.year, quincena.month, quincena.num)}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (quincena.num === 2) {
+                      setQuincena({ year: quincena.year, month: quincena.month + 1, num: 1 });
+                    } else {
+                      setQuincena({ ...quincena, num: 2 });
+                    }
+                  }}
+                  style={{ padding: '8px 14px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1, fontWeight: 600, boxShadow: '0 1px 3px rgba(14,165,233,0.4)' }}
+                  title="Quincena siguiente"
+                >
+                  →
+                </button>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <button
+                  onClick={loadChecadas}
+                  disabled={loadingChecadas}
+                  style={{ padding: '7px 14px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.9rem' }}
+                >
+                  {loadingChecadas ? 'Cargando...' : 'Actualizar'}
+                </button>
+              </div>
             </div>
             <p style={{ margin: '0 0 12px 0', color: '#666', fontSize: '0.85rem' }}>
               Entradas y salidas del personal de tu área en esta quincena (días 1-15 o 16-fin de mes).
@@ -472,16 +542,17 @@ export const MiAreaPage = () => {
                 salidaComerTs?: number;
                 regresoComerTs?: number;
                 esTiempoExtra: boolean;
-                incidenciaTipo?: string;
-                incidenciaJustificada?: boolean;
+                incidenciasDelDia: { tipo: string; justificada: boolean }[];
+                numChecadas: number;
               };
               const calcTotal = (row: DayRow): string => {
                 const primera = row.primeraChecada;
                 const ultima = row.ultimaChecada;
                 if (primera == null || ultima == null || ultima <= primera) return '--';
                 let totalMs = ultima - primera;
-                if (row.salidaComerTs != null && row.regresoComerTs != null && row.regresoComerTs > row.salidaComerTs)
+                if (row.salidaComerTs != null && row.regresoComerTs != null && row.regresoComerTs > row.salidaComerTs) {
                   totalMs -= (row.regresoComerTs - row.salidaComerTs);
+                }
                 const mins = Math.floor(totalMs / 60000);
                 if (mins < 0) return '--';
                 const h = Math.floor(mins / 60);
@@ -490,9 +561,9 @@ export const MiAreaPage = () => {
               };
 
               const map = new Map<string, DayRow>();
+              const tipo = (t: string) => String(t || '').toLowerCase();
               checadas.forEach(c => {
-                const ts = c.timestamp.endsWith('Z') || c.timestamp.includes('+') ? c.timestamp : c.timestamp + 'Z';
-                const d = new Date(ts);
+                const d = parseTimestampForMexico(c.timestamp);
                 const fechaSort = d.toISOString().slice(0, 10);
                 const fechaStr = d.toLocaleDateString('es-MX', { weekday: 'short', day: '2-digit', month: 'short' });
                 const key = `${c.empleado_id}_${fechaSort}`;
@@ -504,29 +575,41 @@ export const MiAreaPage = () => {
                     empleado_id: c.empleado_id,
                     fecha: fechaStr,
                     fechaSort,
+                    incidenciasDelDia: [],
+                    numChecadas: 0,
                     esTiempoExtra: !!c.es_tiempo_extra,
                   });
                 }
                 const row = map.get(key)!;
+                row.numChecadas++;
                 const t = d.getTime();
-                if (row.primeraChecada == null) row.primeraChecada = t;
-                else row.primeraChecada = Math.min(row.primeraChecada, t);
-                if (row.ultimaChecada == null) row.ultimaChecada = t;
-                else row.ultimaChecada = Math.max(row.ultimaChecada, t);
+                const tip = tipo(c.tipo);
+                if (row.primeraChecada == null || t < row.primeraChecada) row.primeraChecada = t;
+                if (row.ultimaChecada == null || t > row.ultimaChecada) row.ultimaChecada = t;
                 const hora = d.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
-                if (c.tipo === 'entrada' && !row.entrada) row.entrada = hora;
-                else if (c.tipo === 'salida_comer') { if (!row.salida_comer) { row.salida_comer = hora; row.salidaComerTs = t; } }
-                else if (c.tipo === 'regreso_comer') { if (!row.regreso_comer) { row.regreso_comer = hora; row.regresoComerTs = t; } }
-                else if (c.tipo === 'salida' && !row.salida) row.salida = hora;
+                if (tip === 'entrada' && !row.entrada) row.entrada = hora;
+                else if (tip === 'salida_comer') { if (!row.salida_comer) { row.salida_comer = hora; row.salidaComerTs = t; } }
+                else if (tip === 'regreso_comer') { if (!row.regreso_comer) { row.regreso_comer = hora; row.regresoComerTs = t; } }
+                else if (tip === 'salida' && !row.salida) row.salida = hora;
               });
               const dayRows = Array.from(map.values());
               dayRows.forEach(row => {
-                const inc = incidencias.find(i => i.empleado_id === row.empleado_id && String(i.fecha).slice(0, 10) === row.fechaSort);
-                if (inc) { row.incidenciaTipo = inc.tipo; row.incidenciaJustificada = inc.justificada; }
+                let incs = incidencias
+                  .filter(i => i.empleado_id === row.empleado_id && String(i.fecha).slice(0, 10) === row.fechaSort)
+                  .map(i => ({ tipo: i.tipo, justificada: i.justificada }));
+                if (row.numChecadas > 0) incs = incs.filter(i => i.tipo !== 'falta');
+                row.incidenciasDelDia = incs;
               });
               dayRows.sort((a, b) => b.fechaSort.localeCompare(a.fechaSort) || a.empleadoNombre.localeCompare(b.empleadoNombre));
 
-              const incBg: Record<string, string> = { retardo: '#fef3c7', salida_anticipada: '#fee2e2', falta: '#fce7f3', horas_extra: '#e0f2fe' };
+              const totalPagChecadas = Math.max(1, Math.ceil(dayRows.length / ITEMS_PER_PAGE));
+              const startChecadas = (pagChecadas - 1) * ITEMS_PER_PAGE;
+              const dayRowsPag = dayRows.slice(startChecadas, startChecadas + ITEMS_PER_PAGE);
+
+              const incBg: Record<string, string> = {
+                completa: '#d1fae5', horas_extra: '#d1fae5',
+                retardo: '#fef3c7', salida_anticipada: '#fef9c3', incompleta: '#e5e7eb', falta: '#fee2e2',
+              };
 
               return (
               <div style={{ overflowX: 'auto' }}>
@@ -545,11 +628,11 @@ export const MiAreaPage = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {dayRows.map(row => (
+                    {dayRowsPag.map(row => (
                       <tr key={row.key}
                         style={{
                           borderBottom: '1px solid #eee',
-                          backgroundColor: row.incidenciaTipo && !row.incidenciaJustificada ? (incBg[row.incidenciaTipo] ?? '#fff7ed') + '88' : row.esTiempoExtra ? '#fff8e1' : undefined,
+                          backgroundColor: row.incidenciasDelDia.some(i => !i.justificada) ? ((incBg[row.incidenciasDelDia.find(i => !i.justificada)!.tipo] ?? '#fff7ed') + '88') : row.esTiempoExtra ? '#fff8e1' : undefined,
                         }}
                         onMouseEnter={e => (e.currentTarget.style.filter = 'brightness(0.98)')}
                         onMouseLeave={e => (e.currentTarget.style.filter = '')}
@@ -565,16 +648,23 @@ export const MiAreaPage = () => {
                         <td style={{ ...td, textAlign: 'center', fontWeight: 600, color: row.regreso_comer ? '#004085' : '#ccc' }}>{row.regreso_comer || '--:--'}</td>
                         <td style={{ ...td, textAlign: 'center', fontWeight: 600, color: row.salida ? '#721c24' : '#ccc' }}>{row.salida || '--:--'}</td>
                         <td style={td}>
-                          {row.incidenciaTipo ? (
-                            <span style={{
-                              padding: '2px 8px', borderRadius: '12px', fontSize: '0.78rem', fontWeight: 600,
-                              backgroundColor: incBg[row.incidenciaTipo] ?? '#f3f4f6',
-                              color: '#374151',
-                              textDecoration: row.incidenciaJustificada ? 'line-through' : 'none',
-                              opacity: row.incidenciaJustificada ? 0.6 : 1,
-                            }}>
-                              {tipoLabels[row.incidenciaTipo] || row.incidenciaTipo}
-                              {row.incidenciaJustificada && ' ✓'}
+                          {row.incidenciasDelDia.length > 0 ? (
+                            <span style={{ display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
+                              {row.incidenciasDelDia.map((inc, idx) => (
+                                <span
+                                  key={idx}
+                                  style={{
+                                    padding: '2px 8px', borderRadius: '12px', fontSize: '0.78rem', fontWeight: 600,
+                                    backgroundColor: incBg[inc.tipo] ?? '#f3f4f6',
+                                    color: '#374151',
+                                    textDecoration: inc.justificada ? 'line-through' : 'none',
+                                    opacity: inc.justificada ? 0.6 : 1,
+                                  }}
+                                >
+                                  {tipoLabels[inc.tipo] || inc.tipo}
+                                  {inc.justificada && ' ✓'}
+                                </span>
+                              ))}
                             </span>
                           ) : <span style={{ color: '#d1d5db' }}>—</span>}
                         </td>
@@ -583,36 +673,111 @@ export const MiAreaPage = () => {
                     ))}
                   </tbody>
                 </table>
-                <p style={{ marginTop: '6px', color: '#888', fontSize: '0.82rem' }}>{dayRows.length} día{dayRows.length !== 1 ? 's' : ''} · {checadas.length} checada{checadas.length !== 1 ? 's' : ''} del personal del área</p>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginTop: '8px', flexWrap: 'wrap' }}>
+                  <p style={{ margin: 0, color: '#888', fontSize: '0.82rem' }}>{dayRows.length} día{dayRows.length !== 1 ? 's' : ''} · {checadas.length} checada{checadas.length !== 1 ? 's' : ''} del personal del área</p>
+                  {totalPagChecadas > 1 && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <button
+                        type="button"
+                        onClick={() => setPagChecadas(p => Math.max(1, p - 1))}
+                        disabled={pagChecadas <= 1}
+                        style={{ padding: '6px 12px', backgroundColor: pagChecadas <= 1 ? '#e5e7eb' : '#0ea5e9', color: pagChecadas <= 1 ? '#9ca3af' : 'white', border: 'none', borderRadius: '6px', cursor: pagChecadas <= 1 ? 'not-allowed' : 'pointer', fontSize: '0.85rem' }}
+                      >
+                        ← Anterior
+                      </button>
+                      <span style={{ fontSize: '0.85rem', color: '#555', fontWeight: 500 }}>Página {pagChecadas} de {totalPagChecadas}</span>
+                      <button
+                        type="button"
+                        onClick={() => setPagChecadas(p => Math.min(totalPagChecadas, p + 1))}
+                        disabled={pagChecadas >= totalPagChecadas}
+                        style={{ padding: '6px 12px', backgroundColor: pagChecadas >= totalPagChecadas ? '#e5e7eb' : '#0ea5e9', color: pagChecadas >= totalPagChecadas ? '#9ca3af' : 'white', border: 'none', borderRadius: '6px', cursor: pagChecadas >= totalPagChecadas ? 'not-allowed' : 'pointer', fontSize: '0.85rem' }}
+                      >
+                        Siguiente →
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             ); })()}
           </div>
+        </>
+      )}
 
-          {/* Incidencias del personal del área */}
+      {/* ─── TAB: INCIDENCIAS ─── */}
+      {activeTab === 'incidencias' && (
+        <>
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px', flexWrap: 'wrap' }}>
-              <h2 style={{ margin: 0, fontSize: '1rem', fontWeight: 700 }}>Incidencias del personal del área</h2>
-              <select
-                value={filtroJustificada}
-                onChange={e => setFiltroJustificada(e.target.value as 'todas' | 'pendientes' | 'justificadas')}
-                style={{ padding: '7px 10px', border: '1px solid #ddd', borderRadius: '6px', fontSize: '0.9rem' }}
-              >
-                <option value="pendientes">Pendientes de justificar</option>
-                <option value="justificadas">Justificadas</option>
-                <option value="todas">Todas</option>
-              </select>
-              <button
-                onClick={loadIncidencias} disabled={loadingIncidencias}
-                style={{ padding: '7px 14px', backgroundColor: '#0d9488', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.9rem' }}
-              >
-                {loadingIncidencias ? 'Cargando...' : 'Actualizar'}
-              </button>
+            <h2 style={{ margin: '0 0 12px 0', fontSize: '1rem', fontWeight: 700 }}>Incidencias del personal del área</h2>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center', gap: '16px', marginBottom: '8px' }}>
+              <div />
+              <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (quincena.num === 1) {
+                      setQuincena({ year: quincena.year, month: quincena.month - 1, num: 2 });
+                    } else {
+                      setQuincena({ ...quincena, num: 1 });
+                    }
+                  }}
+                  style={{ padding: '8px 14px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1, fontWeight: 600, boxShadow: '0 1px 3px rgba(14,165,233,0.4)' }}
+                  title="Quincena anterior"
+                >
+                  ←
+                </button>
+                <span style={{ color: '#374151', fontSize: '0.9rem', fontWeight: 600, minWidth: '200px', textAlign: 'center' }}>
+                  {formatQuincenaLabel(quincena.year, quincena.month, quincena.num)}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (quincena.num === 2) {
+                      setQuincena({ year: quincena.year, month: quincena.month + 1, num: 1 });
+                    } else {
+                      setQuincena({ ...quincena, num: 2 });
+                    }
+                  }}
+                  style={{ padding: '8px 14px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '1.1rem', lineHeight: 1, fontWeight: 600, boxShadow: '0 1px 3px rgba(14,165,233,0.4)' }}
+                  title="Quincena siguiente"
+                >
+                  →
+                </button>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', justifyContent: 'flex-end' }}>
+                {authMe?.is_superuser && (
+                  <input
+                    type="search"
+                    placeholder="Buscar por empleado, tipo, descripción..."
+                    value={busquedaIncidencias}
+                    onChange={e => setBusquedaIncidencias(e.target.value)}
+                    style={{ padding: '8px 12px', border: '1px solid #ddd', borderRadius: '6px', fontSize: '0.9rem', height: '36px', boxSizing: 'border-box', minWidth: '240px', outline: 'none' }}
+                  />
+                )}
+                <select
+                  value={filtroJustificada}
+                  onChange={e => setFiltroJustificada(e.target.value as 'todas' | 'pendientes' | 'justificadas')}
+                  style={{ padding: '8px 12px', border: '1px solid #ddd', borderRadius: '6px', fontSize: '0.9rem', height: '36px', boxSizing: 'border-box' }}
+                >
+                  <option value="pendientes">Pendientes de justificar</option>
+                  <option value="justificadas">Justificadas</option>
+                  <option value="todas">Todas</option>
+                </select>
+                <button
+                  onClick={loadIncidencias} disabled={loadingIncidencias}
+                  style={{ padding: '7px 14px', height: '36px', boxSizing: 'border-box', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.9rem' }}
+                >
+                  {loadingIncidencias ? 'Cargando...' : 'Actualizar'}
+                </button>
+              </div>
             </div>
+            <p style={{ margin: '0 0 12px 0', color: '#666', fontSize: '0.85rem' }}>
+              Incidencias del personal de tu área en esta quincena (días 1-15 o 16-fin de mes).
+            </p>
             {loadingIncidencias ? (
               <p style={{ color: '#666' }}>Cargando incidencias del personal del área...</p>
-            ) : filteredInc.length === 0 ? (
+            ) : filteredIncBusqueda.length === 0 ? (
               <p style={{ color: '#666', padding: '16px', backgroundColor: '#f8f9fa', borderRadius: '8px', fontSize: '0.9rem' }}>
-                No hay incidencias del personal del área {filtroJustificada === 'pendientes' ? 'pendientes' : filtroJustificada === 'justificadas' ? 'justificadas' : ''}.
+                {busquedaIncidencias.trim() ? `No se encontraron incidencias para "${busquedaIncidencias.trim()}".` : `No hay incidencias del personal del área ${filtroJustificada === 'pendientes' ? 'pendientes' : filtroJustificada === 'justificadas' ? 'justificadas' : ''}.`}
               </p>
             ) : (
               <div style={{ overflowX: 'auto' }}>
@@ -628,12 +793,18 @@ export const MiAreaPage = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredInc.map(inc => (
+                    {(() => {
+                      const startInc = (pagIncidencias - 1) * ITEMS_PER_PAGE;
+                      const incPag = filteredIncBusqueda.slice(startInc, startInc + ITEMS_PER_PAGE);
+                      return incPag.map(inc => (
                       <tr key={inc.id} onMouseEnter={e => (e.currentTarget.style.background = '#f8f9fa')} onMouseLeave={e => (e.currentTarget.style.background = '')}>
                         <td style={{ ...td, fontWeight: 500 }}>{inc.empleado_nombre || empleadosMap[inc.empleado_id] || `#${inc.empleado_id}`}</td>
                         <td style={td}>{new Date(inc.fecha).toLocaleDateString('es-MX', { dateStyle: 'short' })}</td>
                         <td style={td}>
-                          <span style={{ padding: '2px 8px', borderRadius: '12px', fontSize: '0.8rem', fontWeight: 600, backgroundColor: '#fef3c7', color: '#92400e' }}>
+                          <span style={{
+                            padding: '2px 8px', borderRadius: '12px', fontSize: '0.8rem', fontWeight: 600,
+                            ...(tipoIncidenciasColores[inc.tipo] ?? { backgroundColor: '#f3f4f6', color: '#374151' }),
+                          }}>
                             {tipoLabels[inc.tipo] || inc.tipo}
                           </span>
                         </td>
@@ -652,9 +823,34 @@ export const MiAreaPage = () => {
                           </button>
                         </td>
                       </tr>
-                    ))}
+                    ));
+                    })()}
                   </tbody>
                 </table>
+                {filteredIncBusqueda.length > ITEMS_PER_PAGE && (() => {
+                  const totalPagInc = Math.max(1, Math.ceil(filteredIncBusqueda.length / ITEMS_PER_PAGE));
+                  return (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px', marginTop: '8px' }}>
+                      <button
+                        type="button"
+                        onClick={() => setPagIncidencias(p => Math.max(1, p - 1))}
+                        disabled={pagIncidencias <= 1}
+                        style={{ padding: '6px 12px', backgroundColor: pagIncidencias <= 1 ? '#e5e7eb' : '#0ea5e9', color: pagIncidencias <= 1 ? '#9ca3af' : 'white', border: 'none', borderRadius: '6px', cursor: pagIncidencias <= 1 ? 'not-allowed' : 'pointer', fontSize: '0.85rem' }}
+                      >
+                        ← Anterior
+                      </button>
+                      <span style={{ fontSize: '0.85rem', color: '#555', fontWeight: 500 }}>Página {pagIncidencias} de {totalPagInc}</span>
+                      <button
+                        type="button"
+                        onClick={() => setPagIncidencias(p => Math.min(totalPagInc, p + 1))}
+                        disabled={pagIncidencias >= totalPagInc}
+                        style={{ padding: '6px 12px', backgroundColor: pagIncidencias >= totalPagInc ? '#e5e7eb' : '#0ea5e9', color: pagIncidencias >= totalPagInc ? '#9ca3af' : 'white', border: 'none', borderRadius: '6px', cursor: pagIncidencias >= totalPagInc ? 'not-allowed' : 'pointer', fontSize: '0.85rem' }}
+                      >
+                        Siguiente →
+                      </button>
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </div>
@@ -668,7 +864,7 @@ export const MiAreaPage = () => {
             <select
               value={filtroEstadoVacaciones}
               onChange={e => setFiltroEstadoVacaciones(e.target.value)}
-              style={{ padding: '8px 12px', border: '1px solid #ddd', borderRadius: '6px' }}
+              style={{ padding: '8px 12px', border: '1px solid #ddd', borderRadius: '6px', fontSize: '0.9rem', height: '36px', boxSizing: 'border-box' }}
             >
               <option value="pendientes">Pendientes de mi aprobación</option>
               <option value="todas">Todas</option>
@@ -677,7 +873,7 @@ export const MiAreaPage = () => {
             </select>
             <button
               onClick={loadSolicitudesVacaciones} disabled={loadingVacaciones}
-              style={{ padding: '8px 16px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
+              style={{ padding: '8px 16px', height: '36px', boxSizing: 'border-box', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.9rem' }}
             >
               {loadingVacaciones ? 'Cargando...' : 'Actualizar'}
             </button>

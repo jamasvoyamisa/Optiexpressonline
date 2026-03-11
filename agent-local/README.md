@@ -1,6 +1,13 @@
-# Agente Local - Sincronización DHI-ASI1212F-D
+# Agente Local - Sincronización ZKTeco
 
-Agente local para sincronizar el dispositivo biométrico DHI-ASI1212F-D con el sistema en la nube.
+> **Nota**: El agente está organizado en carpetas por plataforma. Usa la carpeta correspondiente:
+> - **Windows**: `../agent-windows/` (install.bat, run.bat)
+> - **Linux**: `../agent-linux/`
+> - **macOS**: `../agent-mac/`
+>
+> Ver [AGENTE.md](../AGENTE.md) para más información.
+
+Agente local para sincronizar dispositivos biométricos ZKTeco con el sistema en la nube.
 
 ## Requisitos
 
@@ -50,29 +57,20 @@ cp config.yaml.example config.yaml
 python main.py
 ```
 
-### Ejecutar como servicio (Linux)
+### Ejecutar como servicio (Ubuntu Server)
 
-1. Crear archivo de servicio systemd `/etc/systemd/system/optiexpress-agent.service`:
+**Recomendado**: Usa el instalador para Ubuntu Server:
 
-```ini
-[Unit]
-Description=Optiexpress Agent Local
-After=network.target
-
-[Service]
-Type=simple
-User=tu_usuario
-WorkingDirectory=/ruta/al/agent-local
-ExecStart=/usr/bin/python3 /ruta/al/agent-local/main.py
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
+```bash
+./install-ubuntu.sh --service
 ```
 
-2. Habilitar y iniciar el servicio:
+Ver [UBUNTU_SERVER.md](UBUNTU_SERVER.md) para la guía completa.
+
+**Manual**: Crear archivo `/etc/systemd/system/optiexpress-agent.service` con el contenido de `optiexpress-agent.service` (reemplazando `AGENT_DIR` por tu ruta), luego:
+
 ```bash
+sudo systemctl daemon-reload
 sudo systemctl enable optiexpress-agent
 sudo systemctl start optiexpress-agent
 ```

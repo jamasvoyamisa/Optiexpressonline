@@ -81,10 +81,22 @@ async def login(
     departamentos = db.query(Departamento).filter(Departamento.jefe_id == empleado.id).all()
     is_jefe = len(departamentos) > 0
     is_superuser = False
+    is_rh = False
+    is_gerente_general = False
+    is_director = False
     if empleado.rol_id:
         rol = db.query(Rol).filter(Rol.id == empleado.rol_id).first()
-        if rol and rol.nombre in ("Administrador", "Superuser"):
-            is_superuser = True
+        if rol:
+            if rol.nombre in ("Administrador", "Superuser"):
+                is_superuser = True
+            if rol.nombre in ("RH", "Recursos Humanos", "Recursos humanos", "rh"):
+                is_rh = True
+            if rol.nombre in ("Gerente General", "Gerente general"):
+                is_gerente_general = True
+    if empleado.puesto_rel and (empleado.puesto_rel.nombre or "").strip().lower() == "director":
+        is_director = True
+    if empleado.puesto_rel and (empleado.puesto_rel.nombre or "").strip().lower() == "gerente general":
+        is_gerente_general = True
     depto_ids_admin = PersonalService.get_departamento_ids_que_administro(db, empleado.id)
     puede_ver_mi_area = len(depto_ids_admin) > 0
     if not puede_ver_mi_area and empleado.puesto_rel:
@@ -97,6 +109,7 @@ async def login(
     if depto_ids_admin:
         deptos = db.query(Departamento).filter(Departamento.id.in_(depto_ids_admin)).all()
         departamentos_que_administro = [{"id": d.id, "nombre": d.nombre} for d in deptos]
+    puede_ver_dashboard = is_superuser or is_rh or is_gerente_general or is_director
     me_payload = {
         "id": empleado.id,
         "numero_empleado": empleado.numero_empleado,
@@ -107,6 +120,10 @@ async def login(
         "rol_id": empleado.rol_id,
         "is_jefe": is_jefe,
         "is_superuser": is_superuser,
+        "is_rh": is_rh,
+        "is_gerente_general": is_gerente_general,
+        "is_director": is_director,
+        "puede_ver_dashboard": puede_ver_dashboard,
         "puede_ver_mi_area": puede_ver_mi_area,
         "departamento_ids": [d.id for d in departamentos],
         "departamentos": [{"id": d.id, "nombre": d.nombre} for d in departamentos],
@@ -149,14 +166,22 @@ async def get_me(
     is_jefe = len(departamentos) > 0
     departamento_ids = [d.id for d in departamentos]
     is_superuser = False
+    is_rh = False
     is_gerente_general = False
+    is_director = False
     if empleado.rol_id:
         rol = db.query(Rol).filter(Rol.id == empleado.rol_id).first()
         if rol:
             if rol.nombre in ("Administrador", "Superuser"):
                 is_superuser = True
+            if rol.nombre in ("RH", "Recursos Humanos", "Recursos humanos", "rh"):
+                is_rh = True
             if rol.nombre in ("Gerente General", "Gerente general"):
                 is_gerente_general = True
+    if empleado.puesto_rel and (empleado.puesto_rel.nombre or "").strip().lower() == "director":
+        is_director = True
+    if empleado.puesto_rel and (empleado.puesto_rel.nombre or "").strip().lower() == "gerente general":
+        is_gerente_general = True
     depto_ids_admin = PersonalService.get_departamento_ids_que_administro(db, empleado_id)
     puede_ver_mi_area = len(depto_ids_admin) > 0
     if not puede_ver_mi_area and empleado.puesto_rel:
@@ -171,6 +196,7 @@ async def get_me(
     if depto_ids_admin:
         deptos = db.query(Departamento).filter(Departamento.id.in_(depto_ids_admin)).all()
         departamentos_que_administro = [{"id": d.id, "nombre": d.nombre} for d in deptos]
+    puede_ver_dashboard = is_superuser or is_rh or is_gerente_general or is_director
     return {
         "id": empleado.id,
         "numero_empleado": empleado.numero_empleado,
@@ -181,7 +207,10 @@ async def get_me(
         "rol_id": empleado.rol_id,
         "is_jefe": is_jefe,
         "is_superuser": is_superuser,
+        "is_rh": is_rh,
         "is_gerente_general": is_gerente_general,
+        "is_director": is_director,
+        "puede_ver_dashboard": puede_ver_dashboard,
         "puede_ver_mi_area": puede_ver_mi_area,
         "departamento_ids": departamento_ids,
         "departamentos": [{"id": d.id, "nombre": d.nombre} for d in departamentos],

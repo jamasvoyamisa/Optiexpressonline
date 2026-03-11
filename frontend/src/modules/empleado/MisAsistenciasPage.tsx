@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { parseTimestampForMexico } from '../../utils/date';
 import api from '../../services/api';
 import type { AsistenciaResponse } from '../../types/api';
 
@@ -56,8 +57,7 @@ const td = { padding: '10px 13px', borderBottom: '1px solid #f0f0f0', fontSize: 
 function buildDayRows(checadas: AsistenciaResponse[]): DayRow[] {
   const map = new Map<string, DayRow>();
   checadas.forEach((c) => {
-    const ts = c.timestamp.endsWith('Z') || c.timestamp.includes('+') ? c.timestamp : c.timestamp + 'Z';
-    const d = new Date(ts);
+    const d = parseTimestampForMexico(c.timestamp);
     const fechaSort = d.toISOString().slice(0, 10);
     const fechaStr = d.toLocaleDateString('es-MX', { weekday: 'short', day: '2-digit', month: 'short' });
     if (!map.has(fechaSort)) {

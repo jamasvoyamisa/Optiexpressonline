@@ -1,4 +1,7 @@
 import { ReactNode, useState, useEffect } from 'react';
+
+const formatFechaHora = () =>
+  new Date().toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' });
 import { Link, useLocation, useNavigate, Navigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { NotificationBell } from './NotificationBell';
@@ -12,14 +15,18 @@ interface LayoutProps {
 const empleadoNavItems = [
   { to: '/mis-asistencias', label: 'Mis asistencias' },
   { to: '/mis-vacaciones', label: 'Vacaciones' },
+  { to: '/mis-prestamos', label: 'Mis préstamos' },
   { to: '/mis-datos', label: 'Mis datos' },
 ];
+
+// Dashboard: Administrador, Director, Gerente General, RH
+const dashboardNavItem = { to: '/dashboard', label: 'Dashboard' };
 
 // Solo para superuser/admin
 const superAdminNavItems = [
   { to: '/rh', label: 'Recursos Humanos' },
   { to: '/asistencia', label: 'Asistencia' },
-  { to: '/mi-area', label: 'Asistencia y solicitudes' },
+  { to: '/mi-area', label: 'Incidencias y solicitudes' },
 ];
 
 const superAdminItems = [
@@ -29,13 +36,24 @@ const superAdminItems = [
 // Para gerentes/supervisores/jefes de área (no superuser): solo Mi Área
 const miAreaNavItem = { to: '/mi-area', label: 'Mi Área' };
 
+// Admin, Director, Gerente General: aprobar solicitudes de vacaciones
+const solicitudesVacacionesNavItem = { to: '/solicitudes-vacaciones', label: 'Solicitudes a aprobar' };
+
 export const Layout = ({ children }: LayoutProps) => {
   const { isAuthenticated, authMe, loading, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [dispositivos, setDispositivos] = useState<Dispositivo[]>([]);
+  const [fechaHora, setFechaHora] = useState(formatFechaHora);
   const isSuperuser = authMe?.is_superuser ?? false;
+
+  useEffect(() => {
+    const t = setInterval(() => setFechaHora(formatFechaHora()), 1000);
+    return () => clearInterval(t);
+  }, []);
   const puedeVerMiArea = authMe?.puede_ver_mi_area ?? false;
+  const puedeVerDashboard = (authMe?.puede_ver_dashboard ?? false) || (authMe?.puede_ver_mi_area ?? false);
+  const puedeVerSolicitudesVacaciones = isSuperuser || (authMe?.is_director === true) || (authMe?.is_gerente_general === true);
   // Solo el superuser/admin ve todo el panel de administración
   const showFullAdmin = isSuperuser;
   // Gerentes, supervisores y jefes de área (no superuser) solo ven "Mi Área"
@@ -99,9 +117,21 @@ export const Layout = ({ children }: LayoutProps) => {
         overflowY: 'auto',
         boxShadow: '4px 0 12px rgba(0,0,0,0.22)',
       }}>
-        <h2 style={{ marginBottom: '30px' }}>Grupo Cristal</h2>
+        <Link to="/" style={{ display: 'block', marginBottom: '24px', textDecoration: 'none' }}>
+          <img
+            src="/GPO-Cristal-bco.png"
+            alt="Grupo Cristal"
+            style={{ width: '100%', maxWidth: '160px', height: 'auto', objectFit: 'contain', display: 'block' }}
+          />
+        </Link>
 
         <nav style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1 }}>
+          {puedeVerDashboard && (
+            <Link key={dashboardNavItem.to} to={dashboardNavItem.to} style={linkStyle(dashboardNavItem.to)}>{dashboardNavItem.label}</Link>
+          )}
+          {puedeVerSolicitudesVacaciones && (
+            <Link key={solicitudesVacacionesNavItem.to} to={solicitudesVacacionesNavItem.to} style={linkStyle(solicitudesVacacionesNavItem.to)}>{solicitudesVacacionesNavItem.label}</Link>
+          )}
           {showFullAdmin
             ? superAdminNavItems.map(item => (
                 <Link key={item.to} to={item.to} style={linkStyle(item.to)}>{item.label}</Link>
@@ -122,6 +152,9 @@ export const Layout = ({ children }: LayoutProps) => {
             <Link key={item.to} to={item.to} style={linkStyle(item.to)}>{item.label}</Link>
           ))}
         </div>
+        <div style={{ marginTop: 'auto', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.2)', fontSize: '0.7rem', color: 'rgba(255,255,255,0.5)' }}>
+          v1.0.0
+        </div>
       </aside>
 
       {/* Columna derecha: header + contenido */}
@@ -138,6 +171,9 @@ export const Layout = ({ children }: LayoutProps) => {
           gap: '12px',
           boxShadow: '0 4px 10px rgba(0,0,0,0.18)',
         }}>
+          <span style={{ color: 'rgba(255,255,255,0.85)', fontSize: '0.85rem', fontWeight: 700 }}>
+            {fechaHora}
+          </span>
           {/* Campana de notificaciones */}
           {isAuthenticated && <NotificationBell dispositivos={showFullAdmin ? dispositivos : []} />}
 

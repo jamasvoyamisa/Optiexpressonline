@@ -8,11 +8,11 @@ export const HomeRedirect = () => {
   if (loading) return <div style={{ padding: '24px', textAlign: 'center' }}>Cargando...</div>;
   if (!isAuthenticated) return <Navigate to="/login" replace />;
 
-  // Superadmin / admin → panel de administración
-  if (authMe?.is_superuser) return <Navigate to="/rh" replace />;
+  // Administrador, Director, Gerente General, RH → Dashboard
+  if (authMe?.puede_ver_dashboard) return <Navigate to="/dashboard" replace />;
 
-  // Gerente o supervisor → Mi Área
-  if (authMe?.puede_ver_mi_area) return <Navigate to="/mi-area" replace />;
+  // Gerente o supervisor → Dashboard (con datos de su área)
+  if (authMe?.puede_ver_mi_area) return <Navigate to="/dashboard" replace />;
 
   // Empleado normal → sus asistencias
   return <Navigate to="/mis-asistencias" replace />;

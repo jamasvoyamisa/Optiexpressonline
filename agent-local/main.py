@@ -181,14 +181,17 @@ class DeviceHandler:
             device_users = self.zkteco.get_users()
             if not device_users:
                 return
+            pin_to_numero = self.cloud.get_pin_to_numero()
             uploaded = 0
             for u in device_users:
-                numero = str(u.get("user_id", "")).strip()
-                if not numero:
+                pin = str(u.get("user_id", "")).strip()
+                if not pin:
                     continue
+                # El dispositivo guarda user_id=pin (1,2,3); necesitamos numero_empleado (124) para el backend
+                numero = pin_to_numero.get(pin, pin)
                 if self.cloud.get_employee_templates(numero):
                     continue
-                templates = self.zkteco.get_user_templates(user_id=numero)
+                templates = self.zkteco.get_user_templates(user_id=pin)
                 if not templates:
                     continue
                 for tpl in templates:
@@ -207,13 +210,14 @@ class DeviceHandler:
             for pd in pending:
                 delete_id = pd["id"]
                 numero = str(pd["numero_empleado"]).strip()
-                logger.info(f"[{self.name}] Eliminando usuario {numero} del dispositivo...")
-                ok = self.zkteco.delete_user(user_id=numero)
+                uid = str(pd.get("pin_checador") or numero).strip()
+                logger.info(f"[{self.name}] Eliminando usuario {uid} (empleado {numero}) del dispositivo...")
+                ok = self.zkteco.delete_user(user_id=uid)
                 if ok:
                     self.cloud.mark_delete_done(delete_id)
-                    logger.info(f"[{self.name}] Usuario {numero} eliminado OK")
+                    logger.info(f"[{self.name}] Usuario {uid} eliminado OK")
                 else:
-                    logger.warning(f"[{self.name}] No se pudo eliminar usuario {numero}")
+                    logger.warning(f"[{self.name}] No se pudo eliminar usuario {uid}")
         except Exception as e:
             logger.error(f"[{self.name}] Error sync_pending_deletes: {e}")
 
@@ -222,7 +226,6 @@ class DeviceHandler:
             pending = self.cloud.get_pending_templates()
             if not pending:
                 return
-            # Agrupar por numero_empleado para crear usuario una vez y marcar replicate al final
             from collections import defaultdict
             by_numero = defaultdict(list)
             for tpl in pending:
@@ -233,23 +236,19 @@ class DeviceHandler:
                 user_id = (templates[0].get("user_id") or templates[0].get("numero_empleado") or numero)
                 nombre = (templates[0].get("nombre") or user_id)[:24]
                 create_user_first = templates[0].get("create_user_first", False)
-                pending_replicate = templates[0].get("pending_replicate", False)
                 if create_user_first:
                     if not self.zkteco.set_user(user_id=str(user_id), name=nombre):
-                        logger.warning(f"[{self.name}] No se pudo crear usuario {user_id} antes de replicar huella")
+                        logger.warning(f"[{self.name}] No se pudo crear usuario {user_id} antes de subir huella")
                         continue
-                    logger.info(f"[{self.name}] Usuario creado para replicar: {user_id}")
+                    logger.info(f"[{self.name}] Usuario creado: {user_id}")
                 for tpl in templates:
                     uid = tpl.get("user_id") or tpl.get("numero_empleado")
                     finger = tpl["finger_index"]
                     ok = self.zkteco.upload_template(str(uid), finger, tpl["template_data"])
                     if ok:
-                        logger.info(f"[{self.name}] Huella replicada: {uid} dedo={finger}")
+                        logger.info(f"[{self.name}] Huella subida: {uid} dedo={finger}")
                     else:
-                        logger.warning(f"[{self.name}] Fallo replicar huella: {uid}")
-                if pending_replicate:
-                    self.cloud.mark_replicate_done(numero)
-                    logger.info(f"[{self.name}] Replicacion marcada como hecha: {numero}")
+                        logger.warning(f"[{self.name}] Fallo subir huella: {uid}")
         except Exception as e:
             logger.error(f"[{self.name}] Error sync_pending_templates: {e}")
 

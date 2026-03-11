@@ -5,6 +5,7 @@ import logging
 from app.core.database import get_db
 from app.core.config import settings
 from app.core.security import get_current_user
+from app.core.deps import get_current_empleado_with_rol
 from . import schemas, service, models
 
 logger = logging.getLogger(__name__)
@@ -120,13 +121,67 @@ def delete_departamento(depto_id: int, db: Session = Depends(get_db)):
 
 # ========== RUTAS DE PUESTOS ==========
 
+def _puesto_to_response(p):
+    return schemas.PuestoResponse(**service.PersonalService._puesto_to_response(p))
+
+
 @router.get("/puestos", response_model=List[schemas.PuestoResponse])
 def get_puestos(
-    activo: Optional[bool] = True,
+    activo: Optional[bool] = Query(None, description="true=activos, false=inactivos, omitir=todos"),
+    empresa_id: Optional[int] = Query(None, description="Filtrar por empresa"),
+    departamento_id: Optional[int] = Query(None, description="Filtrar por departamento"),
     db: Session = Depends(get_db)
 ):
-    """Lista de puestos en orden jerárquico (para flujos y formularios)."""
-    return service.PersonalService.get_puestos(db, activo=activo)
+    """Lista de puestos por empresa y departamento. Director, Gerente General y RH son globales (sin empresa/depto)."""
+    puestos = service.PersonalService.get_puestos(db, activo=activo, empresa_id=empresa_id, departamento_id=departamento_id)
+    return [_puesto_to_response(p) for p in puestos]
+
+
+@router.post("/puestos", response_model=schemas.PuestoResponse, status_code=status.HTTP_201_CREATED)
+def create_puesto(data: schemas.PuestoCreate, db: Session = Depends(get_db)):
+    """Crear puesto por empresa y departamento. No se pueden crear: Director, Gerente General, RH."""
+    try:
+        p = service.PersonalService.create_puesto(db, data)
+        p = service.PersonalService.get_puesto(db, p.id)
+        return _puesto_to_response(p)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/puestos/{puesto_id}", response_model=schemas.PuestoResponse)
+def update_puesto(
+    puesto_id: int,
+    data: schemas.PuestoUpdate,
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db)
+):
+    """Actualizar puesto. Director, Gerente General y RH solo los edita el Administrador."""
+    p = service.PersonalService.get_puesto(db, puesto_id)
+    if not p:
+        raise HTTPException(status_code=404, detail="Puesto no encontrado")
+    if service.PersonalService._nombre_reservado(p.nombre) and not current_extra.get("is_superuser"):
+        raise HTTPException(
+            status_code=403,
+            detail="Solo el Administrador puede editar los puestos Director, Gerente General y RH."
+        )
+    try:
+        updated = service.PersonalService.update_puesto(db, puesto_id, data)
+        if not updated:
+            raise HTTPException(status_code=404, detail="Puesto no encontrado")
+        updated = service.PersonalService.get_puesto(db, puesto_id)
+        return _puesto_to_response(updated)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/puestos/{puesto_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_puesto(puesto_id: int, db: Session = Depends(get_db)):
+    """Eliminar puesto. No se puede eliminar Director/Gerente General/RH ni puestos con empleados asignados."""
+    try:
+        if not service.PersonalService.delete_puesto(db, puesto_id):
+            raise HTTPException(status_code=404, detail="Puesto no encontrado")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # ========== RUTAS DE ROLES ==========
@@ -224,8 +279,21 @@ def suggest_username(nombre: str, apellido_paterno: str, exclude_id: int = None,
 
 
 @router.post("/empleados", response_model=schemas.EmpleadoResponse, status_code=status.HTTP_201_CREATED)
-def create_empleado(empleado: schemas.EmpleadoCreate, db: Session = Depends(get_db)):
+def create_empleado(
+    empleado: schemas.EmpleadoCreate,
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db)
+):
     """Crear nuevo empleado y usuario del sistema. Datos personales y laborales son obligatorios."""
+    # Solo Administrador puede asignar puestos Director, Gerente General, RH
+    if empleado.puesto_id:
+        puesto = service.PersonalService.get_puesto(db, empleado.puesto_id)
+        if puesto and service.PersonalService._nombre_reservado(puesto.nombre):
+            if not current_extra.get("is_superuser"):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Solo el Administrador puede asignar los puestos Director, Gerente General y RH."
+                )
     # Validar datos personales obligatorios
     if not (empleado.numero_empleado and empleado.numero_empleado.strip()):
         raise HTTPException(status_code=400, detail="Número de empleado es obligatorio")
@@ -311,18 +379,20 @@ def get_empleados(
     jefe_id: Optional[int] = None,
     departamento_id: Optional[int] = None,
     search: Optional[str] = None,
+    exento_incidencias: Optional[bool] = None,
     db: Session = Depends(get_db)
 ):
-    """Listar empleados con filtros"""
+    """Listar empleados con filtros. exento_incidencias=true lista solo usuarios especiales."""
     return service.PersonalService.get_empleados(
-        db, 
-        skip=skip, 
+        db,
+        skip=skip,
         limit=limit,
         estado=estado,
         rol_id=rol_id,
         jefe_id=jefe_id,
         departamento_id=departamento_id,
-        search=search
+        search=search,
+        exento_incidencias=exento_incidencias,
     )
 
 
@@ -355,8 +425,22 @@ def get_empleado(empleado_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/empleados/{empleado_id}", response_model=schemas.EmpleadoResponse)
-def update_empleado(empleado_id: int, empleado: schemas.EmpleadoUpdate, db: Session = Depends(get_db)):
+def update_empleado(
+    empleado_id: int,
+    empleado: schemas.EmpleadoUpdate,
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db)
+):
     """Actualizar empleado"""
+    # Solo Administrador puede asignar puestos Director, Gerente General, RH
+    if empleado.puesto_id is not None:
+        puesto = service.PersonalService.get_puesto(db, empleado.puesto_id)
+        if puesto and service.PersonalService._nombre_reservado(puesto.nombre):
+            if not current_extra.get("is_superuser"):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Solo el Administrador puede asignar los puestos Director, Gerente General y RH."
+                )
     db_empleado = service.PersonalService.update_empleado(db, empleado_id, empleado)
     if not db_empleado:
         raise HTTPException(

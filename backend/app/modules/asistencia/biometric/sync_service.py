@@ -5,6 +5,7 @@ import logging
 from app.modules.asistencia import models, schemas
 from app.modules.personal import models as personal_models
 from app.modules.asistencia.biometric.agent_auth import verify_api_key
+from app.core.timezone_utils import to_mexico, to_utc, mexico_date_to_utc_range
 
 logger = logging.getLogger(__name__)
 
@@ -25,21 +26,22 @@ class SyncService:
 
     @staticmethod
     def _determinar_tipo(db: Session, empleado_id: int, timestamp: datetime) -> tuple:
-        """Auto-asigna tipo segun cuantas checadas tiene el empleado ese dia.
+        """Auto-asigna tipo segun cuantas checadas tiene el empleado ese dia (en hora México).
         Lunes a viernes: entrada, salida_comer, regreso_comer, salida (4 checadas).
         Sabado/Domingo: entrada, salida (2 checadas).
         Returns (TipoChecada, es_tiempo_extra)
         """
-        dia_inicio = timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
-        dia_fin = dia_inicio + timedelta(days=1)
+        ts_mex = to_mexico(timestamp) or timestamp
+        dia_mex = ts_mex.date() if hasattr(ts_mex, "date") else timestamp.date()
+        dia_inicio_utc, dia_fin_utc = mexico_date_to_utc_range(dia_mex)
 
         checadas_hoy = db.query(models.Asistencia).filter(
             models.Asistencia.empleado_id == empleado_id,
-            models.Asistencia.timestamp >= dia_inicio,
-            models.Asistencia.timestamp < dia_fin,
+            models.Asistencia.timestamp >= dia_inicio_utc,
+            models.Asistencia.timestamp < dia_fin_utc,
         ).count()
 
-        dia_semana = timestamp.weekday()
+        dia_semana = ts_mex.weekday() if hasattr(ts_mex, "weekday") else timestamp.weekday()
         es_domingo = dia_semana == 6
         es_fin_semana = dia_semana >= 5
 
@@ -62,8 +64,13 @@ class SyncService:
         Detecta y crea incidencias automáticas basadas en el horario del empleado.
         Solo valida ENTRADA (retardo) y SALIDA (salida anticipada).
         La comida es libre (SALIDA_COMER y REGRESO_COMER no se validan).
+        Usuarios con exento_incidencias no generan incidencias.
         """
         from sqlalchemy.orm import joinedload
+
+        emp = db.query(personal_models.Empleado).filter(personal_models.Empleado.id == empleado_id).first()
+        if emp and getattr(emp, "exento_incidencias", False):
+            return
 
         # Obtener horario activo del empleado
         eh = (
@@ -79,7 +86,8 @@ class SyncService:
             return
 
         horario = eh.horario
-        ts = asistencia.timestamp
+        ts_utc = asistencia.timestamp
+        ts = to_mexico(ts_utc) or ts_utc  # hora local México para comparar con horario
         tipo_checada = asistencia.tipo
         tolerancia = horario.tolerancia_minutos or 0
 
@@ -113,14 +121,14 @@ class SyncService:
         if not incidencia_tipo:
             return
 
-        # Evitar duplicados para el mismo tipo en el mismo día
-        dia_inicio = ts.replace(hour=0, minute=0, second=0, microsecond=0)
-        dia_fin = dia_inicio + timedelta(days=1)
+        # Evitar duplicados para el mismo tipo en el mismo día (día en México)
+        dia_mex = ts.date()
+        dia_inicio_utc, dia_fin_utc = mexico_date_to_utc_range(dia_mex)
         existente = db.query(models.Incidencia).filter(
             models.Incidencia.empleado_id == empleado_id,
             models.Incidencia.tipo == incidencia_tipo,
-            models.Incidencia.fecha >= dia_inicio,
-            models.Incidencia.fecha < dia_fin,
+            models.Incidencia.fecha >= dia_inicio_utc,
+            models.Incidencia.fecha < dia_fin_utc,
             models.Incidencia.origen == "automatico",
         ).first()
         if existente:
@@ -129,7 +137,7 @@ class SyncService:
         inc = models.Incidencia(
             empleado_id=empleado_id,
             asistencia_id=asistencia.id,
-            fecha=ts,
+            fecha=dia_inicio_utc,
             tipo=incidencia_tipo,
             descripcion=descripcion,
             justificada=False,
@@ -165,9 +173,11 @@ class SyncService:
             raise ValueError(f"PIN {user_id} no registrado. Solo se aceptan checadas de empleados dados de alta.")
 
         try:
-            timestamp = datetime.fromisoformat(sync_data.timestamp.replace('Z', '+00:00'))
+            raw = datetime.fromisoformat(sync_data.timestamp.replace('Z', '+00:00'))
+            # Guardar siempre en UTC (si el agente envía sin Z, se asume hora local México)
+            timestamp = to_utc(raw)
         except Exception:
-            timestamp = datetime.utcnow()
+            timestamp = datetime.now(timezone.utc)
 
         existente = db.query(models.Asistencia).filter(
             models.Asistencia.empleado_id == empleado.id,

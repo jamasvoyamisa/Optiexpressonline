@@ -1,11 +1,12 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
-from typing import List, Optional
+from typing import List, Optional, Union
 from datetime import datetime, timedelta, date
 import calendar
 from . import models, schemas
 from .biometric.sync_service import SyncService
 from app.modules.personal import models as personal_models
+from app.modules.personal import service as personal_service
 
 
 # ──────────────────────────────────────────────
@@ -125,12 +126,23 @@ class AsistenciaService:
         dispositivo = db.query(models.Dispositivo).filter(models.Dispositivo.id == device_id).first()
         if not dispositivo:
             raise ValueError("Dispositivo no encontrado")
+        # Desvincular incidencias que referencian asistencias de este dispositivo
+        db.query(models.Incidencia).filter(
+            models.Incidencia.asistencia_id.in_(
+                db.query(models.Asistencia.id).filter(models.Asistencia.dispositivo_id == device_id)
+            )
+        ).update({models.Incidencia.asistencia_id: None}, synchronize_session=False)
         db.query(models.Asistencia).filter(models.Asistencia.dispositivo_id == device_id).delete()
         db.query(models.UsuarioPendienteDispositivo).filter(
             models.UsuarioPendienteDispositivo.dispositivo_id == device_id
         ).delete()
         db.query(models.PendingEnroll).filter(models.PendingEnroll.dispositivo_id == device_id).delete()
+        db.query(models.PendingDelete).filter(models.PendingDelete.dispositivo_id == device_id).delete()
         db.query(models.Agente).filter(models.Agente.dispositivo_id == device_id).delete()
+        # fingerprint_templates.source_device_id: poner NULL para no perder templates
+        db.query(models.FingerprintTemplate).filter(
+            models.FingerprintTemplate.source_device_id == device_id
+        ).update({models.FingerprintTemplate.source_device_id: None})
         db.delete(dispositivo)
         db.commit()
         return True
@@ -145,7 +157,7 @@ class AsistenciaService:
         if not dispositivo:
             return {"success": False, "message": "Dispositivo no encontrado"}
         if not dispositivo.serial_number:
-            return {"success": False, "message": "El dispositivo no tiene número de serie (SN). Regístralo para usar ADMS."}
+            return {"success": False, "message": "El dispositivo no tiene número de serie (SN). Regístralo para probar conexión."}
         if not dispositivo.activo:
             return {"success": False, "message": "El dispositivo está inactivo."}
 
@@ -222,7 +234,7 @@ class AsistenciaService:
 
     @staticmethod
     def enqueue_user(db: Session, device_id: int, data: schemas.EnqueueUserRequest) -> models.UsuarioPendienteDispositivo:
-        """Agregar usuario a la cola para alta remota (agente o ADMS).
+        """Agregar usuario a la cola para alta remota (agente local).
         Tambien crea el empleado en el sistema si no existe, para que sus checadas se registren."""
         dispositivo = db.query(models.Dispositivo).filter(models.Dispositivo.id == device_id).first()
         if not dispositivo:
@@ -255,6 +267,21 @@ class AsistenciaService:
             db.add(empleado)
             db.commit()
             db.refresh(empleado)
+            # Asignar pin_checador (empleado sin empresa: usar id; con empresa: usar rango)
+            if not empleado.pin_checador:
+                if empleado.empresa_id:
+                    try:
+                        pin = personal_service.PersonalService._next_pin_checador(db, empleado.empresa_id)
+                        empleado.pin_checador = pin
+                        db.commit()
+                        db.refresh(empleado)
+                    except Exception:
+                        empleado.pin_checador = str(empleado.id)
+                        db.commit()
+                else:
+                    empleado.pin_checador = str(empleado.id)
+                    db.commit()
+                    db.refresh(empleado)
         elif empleado.apellido_paterno == "(No registrado)":
             partes = nombre_completo.split(" ", 2)
             empleado.nombre = partes[0] if partes else nombre_completo
@@ -276,13 +303,35 @@ class AsistenciaService:
 
     @staticmethod
     def get_pending_users(db: Session, device_id: Optional[int] = None, include_sent: bool = False) -> list:
-        """Obtener usuarios pendientes (y opcionalmente enviados) de enviar al dispositivo"""
+        """Obtener usuarios pendientes (y opcionalmente enviados) de enviar al dispositivo.
+        Asegura que pin_checador esté siempre poblado (nunca enviar numero_empleado al dispositivo)."""
         query = db.query(models.UsuarioPendienteDispositivo)
         if not include_sent:
             query = query.filter(models.UsuarioPendienteDispositivo.enviado == False)
         if device_id:
             query = query.filter(models.UsuarioPendienteDispositivo.dispositivo_id == device_id)
-        return query.order_by(models.UsuarioPendienteDispositivo.created_at).all()
+        pendientes = query.order_by(models.UsuarioPendienteDispositivo.created_at).all()
+        # Corregir pendientes con pin_checador null: asignar desde empleado/empresa
+        for p in pendientes:
+            if not p.pin_checador or not str(p.pin_checador).strip():
+                emp = db.query(personal_models.Empleado).filter(
+                    personal_models.Empleado.numero_empleado == p.numero_empleado
+                ).first()
+                if emp:
+                    pin = emp.pin_checador
+                    if not pin and emp.empresa_id:
+                        try:
+                            pin = personal_service.PersonalService._next_pin_checador(db, emp.empresa_id)
+                            emp.pin_checador = pin
+                        except Exception:
+                            pin = str(emp.id)
+                            emp.pin_checador = pin
+                    elif not pin:
+                        pin = str(emp.id)
+                        emp.pin_checador = pin
+                    p.pin_checador = pin
+                    db.commit()
+        return pendientes
 
     @staticmethod
     def mark_users_sent(db: Session, ids: list, dispositivo_id: int) -> int:
@@ -316,7 +365,21 @@ class AsistenciaService:
         if not empleado:
             raise ValueError(f"Empleado {numero} no encontrado en el sistema")
 
-        pin = empleado.pin_checador or numero
+        # Asegurar pin_checador: usar rango de empresa si aplica, nunca numero_empleado en el dispositivo
+        pin = empleado.pin_checador
+        if not pin and empleado.empresa_id:
+            try:
+                pin = personal_service.PersonalService._next_pin_checador(db, empleado.empresa_id)
+                empleado.pin_checador = pin
+                db.commit()
+            except Exception:
+                pin = str(empleado.id)
+                empleado.pin_checador = pin
+                db.commit()
+        elif not pin:
+            pin = str(empleado.id)
+            empleado.pin_checador = pin
+            db.commit()
 
         enviado = db.query(models.UsuarioPendienteDispositivo).filter(
             models.UsuarioPendienteDispositivo.dispositivo_id == device_id,
@@ -676,8 +739,8 @@ class AsistenciaService:
         else:
             fecha = (datetime.utcnow() - timedelta(days=1)).date()
 
-        dia_inicio = datetime(fecha.year, fecha.month, fecha.day, 0, 0, 0)
-        dia_fin = dia_inicio + timedelta(days=1)
+        from app.core.timezone_utils import mexico_date_to_utc_range, to_mexico
+        dia_inicio_utc, dia_fin_utc = mexico_date_to_utc_range(fecha)
 
         dia_semana = fecha.weekday()  # 0=lunes … 6=domingo
 
@@ -709,6 +772,12 @@ class AsistenciaService:
             if incapacidad_service.empleado_tiene_incapacidad_activa(db, emp_id, fecha)
         }
 
+        # Usuarios especiales (exento_incidencias): no generan incidencias automáticas
+        exentos = {
+            eid for eid, emp in empleados_map.items()
+            if getattr(emp, "exento_incidencias", False)
+        }
+
         for asig in asignaciones:
             horario = asig.horario
             if not horario or not horario.activo:
@@ -716,6 +785,10 @@ class AsistenciaService:
 
             # Si el empleado tiene incapacidad activa ese día → no generar incidencia
             if asig.empleado_id in con_incapacidad:
+                continue
+
+            # Usuario especial (exento de incidencias) → no generar
+            if asig.empleado_id in exentos:
                 continue
 
             # dias_semana usa 1=lunes…7=domingo; weekday() devuelve 0=lun…6=dom
@@ -748,19 +821,19 @@ class AsistenciaService:
             # Sábado: solo 2 checadas requeridas (entrada + salida, sin comida)
             checadas_requeridas = 2 if dia_num == 6 else 4
 
-            # Contar checadas del empleado ese día
+            # Contar checadas del empleado ese día (rango en UTC para fecha en México)
             checadas = db.query(models.Asistencia).filter(
                 models.Asistencia.empleado_id == asig.empleado_id,
-                models.Asistencia.timestamp >= dia_inicio,
-                models.Asistencia.timestamp < dia_fin,
+                models.Asistencia.timestamp >= dia_inicio_utc,
+                models.Asistencia.timestamp < dia_fin_utc,
             ).count()
 
             if checadas >= checadas_requeridas:
                 # ── Verificar salida anticipada ──
                 salida_real = db.query(models.Asistencia).filter(
                     models.Asistencia.empleado_id == asig.empleado_id,
-                    models.Asistencia.timestamp >= dia_inicio,
-                    models.Asistencia.timestamp < dia_fin,
+                    models.Asistencia.timestamp >= dia_inicio_utc,
+                    models.Asistencia.timestamp < dia_fin_utc,
                     models.Asistencia.tipo == models.TipoChecada.SALIDA,
                 ).order_by(models.Asistencia.timestamp.desc()).first()
 
@@ -771,15 +844,16 @@ class AsistenciaService:
                         int(partes[0]), int(partes[1]), 0
                     )
                     tolerancia_sa = timedelta(minutes=tolerancia_efectiva)
-                    ts_salida = salida_real.timestamp.replace(tzinfo=None)
+                    ts_salida_mex = to_mexico(salida_real.timestamp) or salida_real.timestamp
+                    ts_salida = ts_salida_mex.replace(tzinfo=None) if ts_salida_mex.tzinfo else ts_salida_mex
 
                     if ts_salida < hora_sal_prog - tolerancia_sa:
                         minutos_antes = int((hora_sal_prog - ts_salida).total_seconds() / 60)
 
                         existe_sa = db.query(models.Incidencia).filter(
                             models.Incidencia.empleado_id == asig.empleado_id,
-                            models.Incidencia.fecha >= dia_inicio,
-                            models.Incidencia.fecha < dia_fin,
+                            models.Incidencia.fecha >= dia_inicio_utc,
+                            models.Incidencia.fecha < dia_fin_utc,
                             models.Incidencia.tipo == models.TipoIncidencia.SALIDA_ANTICIPADA,
                             models.Incidencia.origen == "automatico",
                         ).first()
@@ -788,7 +862,7 @@ class AsistenciaService:
                             db.add(models.Incidencia(
                                 empleado_id=asig.empleado_id,
                                 tipo=models.TipoIncidencia.SALIDA_ANTICIPADA,
-                                fecha=dia_inicio,
+                                fecha=dia_inicio_utc,
                                 descripcion=(
                                     f"Salida anticipada: registró salida a las "
                                     f"{ts_salida.strftime('%H:%M')} "
@@ -800,30 +874,37 @@ class AsistenciaService:
                             creadas += 1
                 continue
 
-            # Determinar descripción según checadas faltantes
+            # Determinar tipo y descripción según checadas
+            # FALTA = no se presentó (0 checadas)
+            # INCOMPLETA = asistió pero faltan checadas (1, 2 o 3 de 4)
             if dia_num == 6:
-                # Sábado: solo entrada y salida
+                # Sábado: solo entrada y salida (2 checadas)
                 if checadas == 0:
+                    tipo = models.TipoIncidencia.FALTA
                     descripcion = "No se presentó (sin checadas)"
                 else:  # 1
+                    tipo = models.TipoIncidencia.INCOMPLETA
                     descripcion = "Solo registró entrada. Falta checada de salida"
             else:
+                # L-V: 4 checadas requeridas
                 if checadas == 0:
+                    tipo = models.TipoIncidencia.FALTA
                     descripcion = "No se presentó (sin checadas)"
                 elif checadas == 1:
+                    tipo = models.TipoIncidencia.INCOMPLETA
                     descripcion = "Solo registró entrada. Faltan: salida a comer, regreso de comer y salida"
                 elif checadas == 2:
+                    tipo = models.TipoIncidencia.INCOMPLETA
                     descripcion = "Faltan: regreso de comer y salida"
                 else:  # 3
+                    tipo = models.TipoIncidencia.INCOMPLETA
                     descripcion = "Falta checada de salida"
-
-            tipo = models.TipoIncidencia.FALTA
 
             # Evitar duplicados
             existente = db.query(models.Incidencia).filter(
                 models.Incidencia.empleado_id == asig.empleado_id,
-                models.Incidencia.fecha >= dia_inicio,
-                models.Incidencia.fecha < dia_fin,
+                models.Incidencia.fecha >= dia_inicio_utc,
+                models.Incidencia.fecha < dia_fin_utc,
                 models.Incidencia.tipo == tipo,
                 models.Incidencia.origen == "automatico",
             ).first()
@@ -835,7 +916,7 @@ class AsistenciaService:
             inc = models.Incidencia(
                 empleado_id=asig.empleado_id,
                 tipo=tipo,
-                fecha=dia_inicio,
+                fecha=dia_inicio_utc,
                 descripcion=descripcion,
                 justificada=False,
                 origen="automatico",
@@ -886,15 +967,16 @@ class AsistenciaService:
     def update_incidencia(
         db: Session,
         incidencia_id: int,
-        data: "schemas.IncidenciaUpdate"
+        data: Union["schemas.IncidenciaUpdate", dict]
     ) -> Optional[models.Incidencia]:
-        """Actualizar incidencia (ej. justificada, comentarios)."""
+        """Actualizar incidencia (ej. justificada, comentarios, justificado_por_id)."""
         inc = db.query(models.Incidencia).filter(models.Incidencia.id == incidencia_id).first()
         if not inc:
             return None
-        update_data = data.dict(exclude_unset=True)
+        update_data = data.dict(exclude_unset=True) if hasattr(data, "dict") else data
         for k, v in update_data.items():
-            setattr(inc, k, v)
+            if hasattr(inc, k):
+                setattr(inc, k, v)
         db.commit()
         db.refresh(inc)
         return inc

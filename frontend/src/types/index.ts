@@ -13,6 +13,7 @@ export type {
   DepartamentoCreate,
   DepartamentoUpdate,
   PuestoResponse,
+  PuestoCreate,
 } from './api';
 
 export type Dispositivo = import('./api').DispositivoResponse;

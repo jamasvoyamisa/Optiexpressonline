@@ -10,6 +10,7 @@ from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone
 from app.core.database import get_db
+from app.core.timezone_utils import to_utc
 from app.modules.asistencia import models
 from app.modules.asistencia.biometric.agent_auth import verify_serial_number
 from app.modules.personal import models as personal_models
@@ -170,9 +171,11 @@ def _process_attlog(db: Session, raw_data: str, dispositivo: models.Dispositivo)
             user_id = str(parts[0]).strip()
             timestamp_str = parts[1].strip()[:19]
             try:
-                timestamp = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+                ts_naive = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
             except ValueError:
-                timestamp = datetime.strptime(timestamp_str, "%d-%m-%Y %H:%M:%S")
+                ts_naive = datetime.strptime(timestamp_str, "%d-%m-%Y %H:%M:%S")
+            # El dispositivo envía hora local (México); guardamos en UTC
+            timestamp = to_utc(ts_naive)
         except (ValueError, IndexError) as e:
             logger.warning(f"Error parseando ATTLOG: {line!r} - {e}")
             continue
@@ -207,7 +210,14 @@ def _process_attlog(db: Session, raw_data: str, dispositivo: models.Dispositivo)
             sincronizado=True
         )
         db.add(asistencia)
+        db.flush()  # Para obtener asistencia.id antes de _detectar_incidencia
         logger.info(f"Checada ADMS: user={user_id}, {tipo.value}, extra={es_tiempo_extra}, {timestamp}")
+
+        # Detectar incidencias automáticas (retardo, salida anticipada)
+        try:
+            SyncService._detectar_incidencia(db, asistencia, empleado.id)
+        except Exception as exc:
+            logger.warning(f"Error al detectar incidencia automática (ADMS): {exc}")
 
     db.commit()
 

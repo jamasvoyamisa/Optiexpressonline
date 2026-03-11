@@ -1,3 +1,4 @@
+from typing import Optional
 from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Enum, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -20,6 +21,7 @@ class Empresa(Base):
     direccion = Column(String(500), nullable=True)
     telefono = Column(String(20), nullable=True)
     activo = Column(Boolean, default=True)
+    checadas_remotas = Column(Boolean, default=False)  # Si True, empleados pueden checar por portal web
     rango_inicio = Column(Integer, nullable=True)
     rango_fin = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -58,16 +60,20 @@ class Departamento(Base):
 
 
 class Puesto(Base):
-    """Catálogo de puestos en orden jerárquico."""
+    """Catálogo de puestos por empresa y departamento. empresa_id/departamento_id null = puesto global (Director, Gerente General, RH)."""
     __tablename__ = "puestos"
 
     id = Column(Integer, primary_key=True, index=True)
+    empresa_id = Column(Integer, ForeignKey("empresas.id"), nullable=True)  # null = puesto global (Director, Gerente General, RH)
+    departamento_id = Column(Integer, ForeignKey("departamentos.id"), nullable=True)
     nombre = Column(String(150), nullable=False)
     orden = Column(Integer, nullable=False, default=0)
     activo = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
+    empresa = relationship("Empresa", backref="puestos")
+    departamento = relationship("Departamento", backref="puestos")
     empleados = relationship("Empleado", back_populates="puesto_rel")
 
 
@@ -111,6 +117,9 @@ class Empleado(Base):
     fecha_ingreso = Column(DateTime(timezone=True))
     fecha_baja = Column(DateTime(timezone=True), nullable=True)
 
+    # Usuario especial: no genera incidencias automáticas (faltas, retardos, salida anticipada, incompleta)
+    exento_incidencias = Column(Boolean, default=False, nullable=False)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -120,6 +129,14 @@ class Empleado(Base):
     rol = relationship("Rol", back_populates="empleados")
     jefe = relationship("Empleado", remote_side=[id], foreign_keys=[jefe_id], backref="subordinados")
     horario_sabado = relationship("Horario", foreign_keys=[horario_sabado_id])
+
+    @property
+    def horario_id(self) -> Optional[int]:
+        """ID del horario L-V activo (empleado_horario)."""
+        for eh in (self.horarios_asignados or []):
+            if eh.activo and eh.horario_id:
+                return eh.horario_id
+        return None
 
     @property
     def departamento(self):

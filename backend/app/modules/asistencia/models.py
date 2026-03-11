@@ -15,6 +15,7 @@ class TipoChecada(str, enum.Enum):
 class TipoIncidencia(str, enum.Enum):
     RETARDO = "retardo"
     FALTA = "falta"
+    INCOMPLETA = "incompleta"  # Asistió pero faltan checadas (ej: solo entrada, faltan salida_comer, regreso_comer, salida)
     HORAS_EXTRA = "horas_extra"
     SALIDA_ANTICIPADA = "salida_anticipada"
 
@@ -88,21 +89,6 @@ class PendingDelete(Base):
     procesado = Column(Boolean, default=False)
     procesado_at = Column(DateTime(timezone=True), nullable=True)
 
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    dispositivo = relationship("Dispositivo")
-
-
-class PendingReplicate(Base):
-    """Cola explícita: replicar huellas de este empleado a este dispositivo. El agente obtiene templates del backend y los sube."""
-    __tablename__ = "pending_replicate"
-    __table_args__ = (UniqueConstraint("dispositivo_id", "numero_empleado", name="uq_pending_replicate_device_num"),)
-
-    id = Column(Integer, primary_key=True, index=True)
-    dispositivo_id = Column(Integer, ForeignKey("dispositivos.id"), nullable=False)
-    numero_empleado = Column(String(50), nullable=False)
-    procesado = Column(Boolean, default=False)
-    procesado_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     dispositivo = relationship("Dispositivo")
@@ -230,6 +216,7 @@ class Incidencia(Base):
     descripcion = Column(Text)
     justificada = Column(Boolean, default=False)
     comentarios = Column(Text)
+    justificado_por_id = Column(Integer, ForeignKey("empleados.id"), nullable=True)  # empleado que justificó
     origen = Column(String(20), nullable=True, default="manual")  # "automatico" | "manual"
     
     # Timestamps
@@ -237,5 +224,6 @@ class Incidencia(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
     # Relaciones
-    empleado = relationship("Empleado", backref="incidencias")
+    empleado = relationship("Empleado", backref="incidencias", foreign_keys=[empleado_id])
+    justificado_por = relationship("Empleado", foreign_keys=[justificado_por_id])
     asistencia = relationship("Asistencia", back_populates="incidencias")

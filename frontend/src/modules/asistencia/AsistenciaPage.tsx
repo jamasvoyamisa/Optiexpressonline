@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import api from '../../services/api';
 import { Asistencia, Dispositivo, Empleado } from '../../types';
+import { parseTimestampForMexico } from '../../utils/date';
 
 interface AsistenciaConEmpleado extends Asistencia {
   empleado?: Empleado;
@@ -12,7 +13,10 @@ export const AsistenciaPage = () => {
   const [dispositivos, setDispositivos] = useState<Dispositivo[]>([]);
   const [empleados, setEmpleados] = useState<Empleado[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filtros, setFiltros] = useState({ empleado_id: '', dispositivo_id: '', fecha_inicio: '', fecha_fin: '' });
+  const hoy = new Date().toISOString().slice(0, 10);
+  const [filtros, setFiltros] = useState({ empleado_id: '', dispositivo_id: '', fecha_inicio: hoy, fecha_fin: hoy });
+  const filtrosRef = useRef(filtros);
+  filtrosRef.current = filtros;
 
   useEffect(() => {
     loadData();
@@ -21,9 +25,16 @@ export const AsistenciaPage = () => {
   }, []);
 
   const loadData = async () => {
+    const f = filtrosRef.current;
     try {
+      const params = new URLSearchParams();
+      params.set('limit', '500');
+      if (f.empleado_id) params.append('empleado_id', f.empleado_id);
+      if (f.dispositivo_id) params.append('dispositivo_id', f.dispositivo_id);
+      if (f.fecha_inicio) params.append('fecha_inicio', f.fecha_inicio + 'T00:00:00');
+      if (f.fecha_fin) params.append('fecha_fin', f.fecha_fin + 'T23:59:59');
       const [checadasRes, dispositivosRes, empleadosRes] = await Promise.all([
-        api.get('/asistencia/checadas?limit=100'),
+        api.get(`/asistencia/checadas?${params.toString()}`),
         api.get('/asistencia/devices'),
         api.get('/personal/empleados'),
       ]);
@@ -37,21 +48,9 @@ export const AsistenciaPage = () => {
     }
   };
 
-  const handleFiltros = async () => {
+  const handleFiltros = () => {
     setLoading(true);
-    try {
-      const params = new URLSearchParams();
-      if (filtros.empleado_id) params.append('empleado_id', filtros.empleado_id);
-      if (filtros.dispositivo_id) params.append('dispositivo_id', filtros.dispositivo_id);
-      if (filtros.fecha_inicio) params.append('fecha_inicio', filtros.fecha_inicio);
-      if (filtros.fecha_fin) params.append('fecha_fin', filtros.fecha_fin);
-      const response = await api.get(`/asistencia/checadas?${params.toString()}`);
-      setChecadas(response.data);
-    } catch (error) {
-      console.error('Error al filtrar:', error);
-    } finally {
-      setLoading(false);
-    }
+    loadData();
   };
 
   const getEmpleadoNombre = (checada: AsistenciaConEmpleado) => {
@@ -65,7 +64,7 @@ export const AsistenciaPage = () => {
     totalChecadas: checadas.length,
     empleadosHoy: new Set(checadas.filter(c => {
       const hoy = new Date().toLocaleDateString('es-MX');
-      return new Date(c.timestamp).toLocaleDateString('es-MX') === hoy;
+      return parseTimestampForMexico(c.timestamp).toLocaleDateString('es-MX') === hoy;
     }).map(c => c.empleado_id)).size,
     dispositivosActivos: dispositivos.filter(d => d.activo).length,
   };
@@ -113,7 +112,7 @@ export const AsistenciaPage = () => {
   const dayRows: DayRow[] = (() => {
     const map = new Map<string, DayRow>();
     for (const c of checadas) {
-      const d = new Date(c.timestamp);
+      const d = parseTimestampForMexico(c.timestamp);
       const fechaStr = d.toLocaleDateString('es-MX', { weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit' });
       const fechaSort = d.toISOString().slice(0, 10);
       const empNombre = getEmpleadoNombre(c);

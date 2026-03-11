@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, Request
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
+from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
 from datetime import datetime, timezone
 from app.core.database import get_db
@@ -51,13 +51,7 @@ def sync_attendance(
 
 
 # ========== DISPOSITIVOS ==========
-
-@router.get("/server-url")
-def get_server_url(request: Request):
-    """URL del servidor para configurar ADMS en el dispositivo. El dispositivo debe poder alcanzar esta URL."""
-    base = str(request.base_url).rstrip("/")
-    return {"url": base, "getrequest": f"{base}/iclock/getrequest"}
-
+# Nota: ADMS (conexión directa dispositivo→servidor) ya no se usa. Solo el agente local sincroniza.
 
 @router.post("/devices", response_model=schemas.DispositivoResponse, status_code=status.HTTP_201_CREATED)
 def create_dispositivo(dispositivo: schemas.DispositivoCreate, db: Session = Depends(get_db)):
@@ -84,25 +78,6 @@ def get_dispositivo(device_id: int, db: Session = Depends(get_db)):
             detail="Dispositivo no encontrado"
         )
     return dispositivo
-
-
-@router.post("/devices/{device_id}/force-getrequest")
-def force_getrequest(device_id: int, db: Session = Depends(get_db)):
-    """
-    Simula la llamada getrequest del dispositivo. Procesa usuarios pendientes y los marca como enviados.
-    Nota: El dispositivo físico NO recibe los datos; esto solo ejecuta la lógica en el servidor.
-    Útil para: probar, o cuando ya agregaste el usuario manualmente en el dispositivo.
-    """
-    dispositivo = service.AsistenciaService.get_dispositivo(db, device_id)
-    if not dispositivo:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dispositivo no encontrado")
-    if not dispositivo.serial_number:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El dispositivo debe tener SN")
-    # Ejecutar lógica de getrequest directamente (misma DB session).
-    # actualizar_conexion=False: NO tocar ultima_llamada/ultima_ip (no es el dispositivo real).
-    from .biometric.iclock_routes import _process_getrequest
-    body = _process_getrequest(db, dispositivo.serial_number.strip(), test=False, actualizar_conexion=False)
-    return {"response": body, "status": "ok"}
 
 
 @router.patch("/devices/{device_id}", response_model=schemas.DispositivoResponse)
@@ -196,88 +171,9 @@ def get_templates_for_employee(numero_empleado: str, db: Session = Depends(get_d
     return result
 
 
-@router.post("/replicate-fingerprint")
-def replicate_fingerprint(data: schemas.ReplicateRequest, db: Session = Depends(get_db)):
-    """Replica huella de un empleado a dispositivos seleccionados.
-    Las huellas ya están en el backend (subidas desde el dispositivo origen).
-    Se agrega a la cola PendingReplicate por dispositivo; el agente del dispositivo
-    destino obtiene los templates del backend y los sube (creando al usuario si no existe)."""
-    templates = db.query(models.FingerprintTemplate).filter(
-        models.FingerprintTemplate.numero_empleado == data.numero_empleado.strip()
-    ).all()
-    if not templates:
-        raise HTTPException(status_code=400, detail="No hay huella registrada para este empleado. Primero registre la huella en un dispositivo.")
-
-    from app.modules.personal import models as pm
-    numero = data.numero_empleado.strip()
-    results = []
-    for did in data.dispositivo_ids:
-        try:
-            # Cola explícita de replicación: el agente del dispositivo obtendrá los templates del backend
-            existing = db.query(models.PendingReplicate).filter(
-                models.PendingReplicate.dispositivo_id == did,
-                models.PendingReplicate.numero_empleado == numero,
-                models.PendingReplicate.procesado == False,
-            ).first()
-            if not existing:
-                pr = models.PendingReplicate(dispositivo_id=did, numero_empleado=numero)
-                db.add(pr)
-            # También encolar usuario por si el agente lo usa para set_user antes de templates
-            enqueue_data = schemas.EnqueueUserRequest(numero_empleado=numero, nombre=numero)
-            emp = db.query(pm.Empleado).filter(pm.Empleado.numero_empleado == numero).first()
-            if emp:
-                enqueue_data.nombre = f"{emp.nombre} {emp.apellido_paterno or ''}".strip()
-            existing_pending = db.query(models.UsuarioPendienteDispositivo).filter(
-                models.UsuarioPendienteDispositivo.dispositivo_id == did,
-                models.UsuarioPendienteDispositivo.numero_empleado == numero,
-            ).first()
-            if not existing_pending:
-                service.AsistenciaService.enqueue_user(db, did, enqueue_data)
-            db.commit()
-            results.append({"dispositivo_id": did, "ok": True})
-        except Exception as e:
-            db.rollback()
-            results.append({"dispositivo_id": did, "ok": False, "error": str(e)})
-
-    return {"results": results, "templates_count": len(templates)}
-
-
-@router.get("/devices/{device_id}/preview-getrequest")
-def preview_getrequest(device_id: int, base_url: Optional[str] = Query(None), db: Session = Depends(get_db)):
-    """
-    Vista previa y diagnóstico. Devuelve qué recibiría el dispositivo y la URL que debe llamar.
-    """
-    dispositivo = service.AsistenciaService.get_dispositivo(db, device_id)
-    if not dispositivo:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dispositivo no encontrado")
-    if not dispositivo.serial_number:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El dispositivo debe tener SN configurado")
-    pendientes = service.AsistenciaService.get_pending_users(db, device_id, include_sent=False)
-    lines = []
-    for p in pendientes:
-        pin = str(p.pin_checador).strip() if p.pin_checador else str(p.numero_empleado).strip()
-        name = (p.nombre or "").strip() or pin
-        userinfo = "\t".join([
-            f"PIN={pin}", f"Name={name}", "Pri=0", "Passwd=", "Card=", "Grp=1",
-            "TZ=0000000100000000", "Verify=0", "ViceCard=", "StartDatetime=0", "EndDatetime=0"
-        ])
-        lines.append(f"USERINFO\t{userinfo}")
-    body = "\r\n".join(lines) + "\r\nOK" if lines else "OK"
-    # URL que el dispositivo debe llamar (ej: http://192.168.1.100:9081/iclock/getrequest?SN=XXX)
-    sn = dispositivo.serial_number.strip()
-    url = f"{base_url or 'http://TU_SERVIDOR:9081'}/iclock/getrequest?SN={sn}"
-    return {
-        "preview": body,
-        "pending_count": len(pendientes),
-        "sn": sn,
-        "url_dispositivo": url,
-        "porque_no_envia": "El dispositivo debe llamar a la URL arriba. Si no se envía: 1) Verifica Server Address en el dispositivo = IP (ej: 192.168.2.55), Puerto = 9081  2) Verifica que el SN coincida exactamente  3) El dispositivo debe poder alcanzar el servidor."
-    }
-
-
 @router.post("/devices/{device_id}/pending-users/{pending_id}/retry")
 def retry_pending_user(device_id: int, pending_id: int, db: Session = Depends(get_db)):
-    """Reintentar envío: marca como no enviado para que el dispositivo lo reciba de nuevo en el próximo getrequest"""
+    """Reintentar envío: marca como no enviado para que el agente lo reenvíe en el próximo ciclo"""
     pendiente = db.query(models.UsuarioPendienteDispositivo).filter(
         models.UsuarioPendienteDispositivo.id == pending_id,
         models.UsuarioPendienteDispositivo.dispositivo_id == device_id
@@ -287,7 +183,7 @@ def retry_pending_user(device_id: int, pending_id: int, db: Session = Depends(ge
     pendiente.enviado = False
     pendiente.enviado_at = None
     db.commit()
-    return {"status": "ok", "message": "Se reenviará cuando el agente sincronice (o en el próximo getrequest)"}
+    return {"status": "ok", "message": "Se reenviará cuando el agente sincronice"}
 
 
 @router.get("/devices/{device_id}/pending-users", response_model=List[schemas.UsuarioPendienteResponse])
@@ -339,6 +235,30 @@ def _get_device_from_api_key(x_api_key: str = Header(..., alias="X-API-Key"), db
     dispositivo.ultima_sync_agente = datetime.now(timezone.utc)
     db.commit()
     return dispositivo
+
+
+@router.get("/agent/pin-to-numero")
+def agent_get_pin_to_numero(
+    dispositivo: models.Dispositivo = Depends(_get_device_from_api_key),
+    db: Session = Depends(get_db)
+):
+    """Mapeo pin_checador -> numero_empleado para que el agente suba templates con numero_empleado correcto.
+    El dispositivo guarda user_id=pin (1,2,3); al subir al backend necesitamos numero_empleado (124)."""
+    from app.modules.personal import models as pm
+    empleados = db.query(pm.Empleado).filter(
+        pm.Empleado.pin_checador.isnot(None),
+        pm.Empleado.pin_checador != ""
+    ).all()
+    mapping = {str(e.pin_checador).strip(): str(e.numero_empleado).strip() for e in empleados if e.pin_checador}
+    # Incluir también usuarios pendientes de este dispositivo (por si aún no están en empleados con pin)
+    pendientes = db.query(models.UsuarioPendienteDispositivo).filter(
+        models.UsuarioPendienteDispositivo.dispositivo_id == dispositivo.id,
+        models.UsuarioPendienteDispositivo.pin_checador.isnot(None),
+    ).all()
+    for p in pendientes:
+        if p.pin_checador and p.numero_empleado:
+            mapping[str(p.pin_checador).strip()] = str(p.numero_empleado).strip()
+    return mapping
 
 
 @router.get("/agent/diagnostic")
@@ -430,42 +350,7 @@ def agent_get_pending_templates(
     dispositivo: models.Dispositivo = Depends(_get_device_from_api_key),
     db: Session = Depends(get_db)
 ):
-    """Obtiene templates pendientes de replicar a ESTE dispositivo.
-    Prioridad 1: cola PendingReplicate (replicar huella desde backend). Incluye create_user_first
-    para que el agente cree al usuario en el dispositivo si no existe y luego suba la huella.
-    Prioridad 2: usuarios ya enviados a este dispositivo con template de otro dispositivo."""
-    from app.modules.personal import models as pm
-    result = []
-
-    # 1) Cola explícita de replicación: templates del backend para este dispositivo
-    pending_rep = db.query(models.PendingReplicate).filter(
-        models.PendingReplicate.dispositivo_id == dispositivo.id,
-        models.PendingReplicate.procesado == False,
-    ).all()
-    numeros_replicate = [(pr.numero_empleado or "").strip() for pr in pending_rep]
-    if numeros_replicate:
-        templates_replicate = db.query(models.FingerprintTemplate).filter(
-            models.FingerprintTemplate.numero_empleado.in_(numeros_replicate),
-        ).all()
-        for t in templates_replicate:
-            numero = (t.numero_empleado or "").strip()
-            emp = db.query(pm.Empleado).filter(pm.Empleado.numero_empleado == numero).first()
-            user_id = (emp.pin_checador or emp.numero_empleado or numero).strip() if emp else numero
-            nombre = (f"{emp.nombre} {emp.apellido_paterno or ''}".strip() if emp else numero)[:24]
-            result.append({
-                "numero_empleado": numero,
-                "user_id": user_id,
-                "finger_index": t.finger_index,
-                "template_data": t.template_data,
-                "create_user_first": True,
-                "nombre": nombre,
-                "pending_replicate": True,
-            })
-
-    if result:
-        return result
-
-    # 2) Fallback: usuarios ya enviados a este dispositivo con template de otro dispositivo
+    """Usuarios ya enviados a este dispositivo con template de otro dispositivo (sin cola de replicación)."""
     sent_users = db.query(models.UsuarioPendienteDispositivo).filter(
         models.UsuarioPendienteDispositivo.dispositivo_id == dispositivo.id,
         models.UsuarioPendienteDispositivo.enviado == True,
@@ -494,40 +379,24 @@ def agent_get_pending_templates(
     ]
 
 
-@router.post("/agent/pending-replicate/mark-done")
-def agent_mark_replicate_done(
-    data: schemas.MarkReplicateDoneRequest,
-    dispositivo: models.Dispositivo = Depends(_get_device_from_api_key),
-    db: Session = Depends(get_db)
-):
-    """Marca como procesada la replicación de huella de este empleado a este dispositivo (llamado por el agente tras subir los templates)."""
-    numero = (data.numero_empleado or "").strip()
-    if not numero:
-        raise HTTPException(status_code=400, detail="numero_empleado requerido")
-    pr = db.query(models.PendingReplicate).filter(
-        models.PendingReplicate.dispositivo_id == dispositivo.id,
-        models.PendingReplicate.numero_empleado == numero,
-        models.PendingReplicate.procesado == False,
-    ).first()
-    if not pr:
-        return {"ok": True, "message": "Ya estaba marcado o no existía"}
-    pr.procesado = True
-    pr.procesado_at = datetime.now(timezone.utc)
-    db.commit()
-    return {"ok": True}
-
-
 @router.get("/agent/pending-deletes")
 def agent_get_pending_deletes(
     dispositivo: models.Dispositivo = Depends(_get_device_from_api_key),
     db: Session = Depends(get_db)
 ):
-    """Obtiene usuarios pendientes de eliminar de este dispositivo"""
+    """Obtiene usuarios pendientes de eliminar. Incluye pin_checador para que el agente elimine por ID del dispositivo."""
     pending = db.query(models.PendingDelete).filter(
         models.PendingDelete.dispositivo_id == dispositivo.id,
         models.PendingDelete.procesado == False,
     ).all()
-    return [{"id": p.id, "numero_empleado": p.numero_empleado} for p in pending]
+    result = []
+    for p in pending:
+        emp = db.query(personal_models.Empleado).filter(
+            personal_models.Empleado.numero_empleado == p.numero_empleado
+        ).first()
+        pin = emp.pin_checador if emp else p.numero_empleado
+        result.append({"id": p.id, "numero_empleado": p.numero_empleado, "pin_checador": pin or p.numero_empleado})
+    return result
 
 
 @router.post("/agent/pending-deletes/{delete_id}/mark-done")
@@ -549,6 +418,202 @@ def agent_mark_delete_done(
     pd.procesado_at = datetime.utcnow()
     db.commit()
     return {"ok": True}
+
+
+# ========== DASHBOARD ==========
+
+@router.get("/dashboard")
+def get_dashboard_stats(
+    departamento_ids: Optional[str] = Query(None, description="IDs de departamentos separados por coma para filtrar por área (solo para vista general)"),
+    tipo_grafica: Optional[str] = Query("global", description="Tipo de gráfica de asistencia: global, empresa, area"),
+    db: Session = Depends(get_db),
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+):
+    """
+    Datos del dashboard. Admin/Director/Gerente General/RH ven todo; pueden filtrar por área con departamento_ids.
+    Gerentes y supervisores ven solo datos de su área.
+    """
+    puede_ver = current_extra.get("puede_ver_dashboard") or current_extra.get("puede_ver_mi_area")
+    if not puede_ver:
+        raise HTTPException(status_code=403, detail="No tienes permiso para ver el dashboard")
+    from datetime import date, timedelta
+    from app.core.timezone_utils import mexico_date_to_utc_range
+    from app.modules.personal import models as pm
+
+    depto_ids = current_extra.get("departamento_ids_que_administro") or []
+    tiene_vista_general = current_extra.get("puede_ver_dashboard")
+    filtro_manual_ids = []
+    if departamento_ids and tiene_vista_general:
+        try:
+            filtro_manual_ids = [int(x.strip()) for x in departamento_ids.split(",") if x.strip()]
+        except ValueError:
+            filtro_manual_ids = []
+    if filtro_manual_ids:
+        depto_ids = filtro_manual_ids
+        solo_mi_area = True
+    else:
+        solo_mi_area = current_extra.get("puede_ver_mi_area") and not tiene_vista_general and depto_ids
+
+    hoy = date.today()
+    inicio_mes = hoy.replace(day=1)
+    fin_mes = inicio_mes + timedelta(days=32)
+    fin_mes = fin_mes.replace(day=1) - timedelta(days=1)
+
+    # Base query empleados
+    q_empleados = db.query(pm.Empleado)
+    if solo_mi_area:
+        q_empleados = q_empleados.filter(pm.Empleado.departamento_id.in_(depto_ids))
+
+    total_empleados = q_empleados.count()
+    empleados_activos = q_empleados.filter(pm.Empleado.estado == pm.EstadoEmpleado.ACTIVO).count()
+    empleados_inactivos = q_empleados.filter(pm.Empleado.estado == pm.EstadoEmpleado.INACTIVO).count()
+    empleados_baja = q_empleados.filter(pm.Empleado.estado == pm.EstadoEmpleado.BAJA).count()
+
+    # Empresas y departamentos (para mi área: solo los de su ámbito)
+    if solo_mi_area:
+        total_departamentos = db.query(pm.Departamento).filter(
+            pm.Departamento.activo == True,
+            pm.Departamento.id.in_(depto_ids),
+        ).count()
+        deptos_area = db.query(pm.Departamento).filter(pm.Departamento.id.in_(depto_ids)).all()
+        empresa_ids = list({d.empresa_id for d in deptos_area if d.empresa_id})
+        total_empresas = db.query(pm.Empresa).filter(
+            pm.Empresa.activo == True,
+            pm.Empresa.id.in_(empresa_ids),
+        ).count() if empresa_ids else 0
+    else:
+        total_empresas = db.query(pm.Empresa).filter(pm.Empresa.activo == True).count()
+        total_departamentos = db.query(pm.Departamento).filter(pm.Departamento.activo == True).count()
+
+    # Empleados del área para filtrar checadas e incidencias
+    empleado_ids_area = None
+    if solo_mi_area:
+        empleado_ids_area = [e.id for e in db.query(pm.Empleado.id).filter(pm.Empleado.departamento_id.in_(depto_ids)).all()]
+
+    dt_inicio, _ = mexico_date_to_utc_range(inicio_mes)
+    _, dt_fin = mexico_date_to_utc_range(fin_mes + timedelta(days=1))
+
+    q_checadas = db.query(models.Asistencia).filter(
+        models.Asistencia.timestamp >= dt_inicio,
+        models.Asistencia.timestamp < dt_fin,
+    )
+    if empleado_ids_area is not None:
+        q_checadas = q_checadas.filter(models.Asistencia.empleado_id.in_(empleado_ids_area))
+    checadas_mes = q_checadas.count()
+
+    q_incidencias = db.query(models.Incidencia).filter(
+        models.Incidencia.fecha >= dt_inicio,
+        models.Incidencia.fecha < dt_fin,
+    )
+    if empleado_ids_area is not None:
+        q_incidencias = q_incidencias.filter(models.Incidencia.empleado_id.in_(empleado_ids_area))
+    incidencias_mes = q_incidencias.count()
+
+    # Checadas por mes (últimos 12 meses)
+    checadas_por_mes: list[dict] = []
+    d = inicio_mes
+    for _ in range(12):
+        mes_fin = d + timedelta(days=32)
+        mes_fin = mes_fin.replace(day=1) - timedelta(days=1)
+        di, _ = mexico_date_to_utc_range(d)
+        _, df = mexico_date_to_utc_range(mes_fin + timedelta(days=1))
+        q = db.query(models.Asistencia).filter(
+            models.Asistencia.timestamp >= di,
+            models.Asistencia.timestamp < df,
+        )
+        if empleado_ids_area is not None:
+            q = q.filter(models.Asistencia.empleado_id.in_(empleado_ids_area))
+        count = q.count()
+        checadas_por_mes.append({
+            "mes": d.strftime("%Y-%m"),
+            "label": d.strftime("%b %Y"),
+            "checadas": count,
+        })
+        d = (d.replace(day=1) - timedelta(days=1)).replace(day=1)
+
+    checadas_por_mes.reverse()
+
+    # Gráfica de asistencia vs personal (hoy)
+    hoy_inicio, _ = mexico_date_to_utc_range(hoy)
+    _, hoy_fin = mexico_date_to_utc_range(hoy + timedelta(days=1))
+    empleados_con_checada_hoy = set(
+        r[0] for r in db.query(models.Asistencia.empleado_id).filter(
+            models.Asistencia.timestamp >= hoy_inicio,
+            models.Asistencia.timestamp < hoy_fin,
+        ).distinct().all()
+    )
+    if empleado_ids_area is not None:
+        empleados_con_checada_hoy &= set(empleado_ids_area)
+
+    asistencia_grafica: dict = {}
+    tipo_g = (tipo_grafica or "global").lower()
+
+    if tipo_g == "global":
+        if empleado_ids_area is not None:
+            activos_ids = {e.id for e in db.query(pm.Empleado.id).filter(
+                pm.Empleado.departamento_id.in_(depto_ids),
+                pm.Empleado.estado == pm.EstadoEmpleado.ACTIVO,
+            ).all()}
+        else:
+            activos_ids = {e.id for e in db.query(pm.Empleado.id).filter(
+                pm.Empleado.estado == pm.EstadoEmpleado.ACTIVO,
+            ).all()}
+        personal_activos = len(activos_ids)
+        con_asistencia = len(empleados_con_checada_hoy & activos_ids)
+        asistencia_grafica = {
+            "tipo": "global",
+            "items": [{"label": "Personal", "personal": personal_activos, "con_asistencia": con_asistencia}],
+        }
+    elif tipo_g == "empresa":
+        empresas = db.query(pm.Empresa).filter(pm.Empresa.activo == True).order_by(pm.Empresa.nombre).all()
+        if empleado_ids_area is not None:
+            deptos_area = db.query(pm.Departamento).filter(pm.Departamento.id.in_(depto_ids)).all()
+            empresa_ids_scope = {d.empresa_id for d in deptos_area if d.empresa_id}
+            empresas = [e for e in empresas if e.id in empresa_ids_scope]
+        items = []
+        for emp in empresas:
+            emp_ids = [e.id for e in db.query(pm.Empleado.id).filter(
+                pm.Empleado.empresa_id == emp.id,
+                pm.Empleado.estado == pm.EstadoEmpleado.ACTIVO,
+            ).all()]
+            if empleado_ids_area is not None:
+                emp_ids = [e for e in emp_ids if e in empleado_ids_area]
+            personal = len(emp_ids)
+            con_asistencia = len(empleados_con_checada_hoy & set(emp_ids))
+            items.append({"label": emp.nombre, "personal": personal, "con_asistencia": con_asistencia})
+        asistencia_grafica = {"tipo": "empresa", "items": items}
+    elif tipo_g == "area":
+        deptos = db.query(pm.Departamento).filter(pm.Departamento.activo == True).order_by(pm.Departamento.nombre).all()
+        if empleado_ids_area is not None:
+            deptos = [d for d in deptos if d.id in depto_ids]
+        items = []
+        for dept in deptos:
+            emp_ids = [e.id for e in db.query(pm.Empleado.id).filter(
+                pm.Empleado.departamento_id == dept.id,
+                pm.Empleado.estado == pm.EstadoEmpleado.ACTIVO,
+            ).all()]
+            personal = len(emp_ids)
+            con_asistencia = len(empleados_con_checada_hoy & set(emp_ids))
+            items.append({"label": dept.nombre, "personal": personal, "con_asistencia": con_asistencia})
+        asistencia_grafica = {"tipo": "area", "items": items}
+    else:
+        asistencia_grafica = {"tipo": "global", "items": []}
+
+    return {
+        "empleados": {
+            "total": total_empleados,
+            "activos": empleados_activos,
+            "inactivos": empleados_inactivos,
+            "baja": empleados_baja,
+        },
+        "empresas": total_empresas,
+        "departamentos": total_departamentos,
+        "checadas_mes_actual": checadas_mes,
+        "incidencias_mes_actual": incidencias_mes,
+        "checadas_por_mes": checadas_por_mes,
+        "solo_mi_area": solo_mi_area,
+        "asistencia_grafica": asistencia_grafica,
+    }
 
 
 # ========== ASISTENCIAS ==========
@@ -843,23 +908,53 @@ def update_incidencia(
     db: Session = Depends(get_db)
 ):
     """
-    Actualizar incidencia (justificada, comentarios). Pueden justificar: gerente del área (jefe del departamento),
-    supervisor en ese departamento, o superuser.
+    Actualizar incidencia (justificada, comentarios).
+    Gerente: puede justificar incidencias de empleados y supervisores de su área.
+    Supervisor: puede justificar solo incidencias de empleados (no de supervisores).
     """
     inc = service.AsistenciaService.get_incidencia(db, incidencia_id)
     if not inc:
         raise HTTPException(status_code=404, detail="Incidencia no encontrada")
     current_id = current_extra["user_id"]
     if not current_extra.get("is_superuser"):
-        empleado = db.query(personal_models.Empleado).filter(personal_models.Empleado.id == inc.empleado_id).first()
         from app.modules.personal import service as personal_service
+        empleado = db.query(personal_models.Empleado).options(
+            joinedload(personal_models.Empleado.puesto_rel)
+        ).filter(personal_models.Empleado.id == inc.empleado_id).first()
         aprobadores = personal_service.PersonalService.get_ids_aprobadores_area(db, empleado.departamento_id if empleado else None)
-        if current_id not in aprobadores:
+        depto_ids_admin = current_extra.get("departamento_ids_que_administro") or []
+        gg_puede_justificar_su_area = (
+            current_extra.get("is_gerente_general") is True
+            and empleado
+            and empleado.departamento_id
+            and empleado.departamento_id in depto_ids_admin
+        )
+        if current_id not in aprobadores and not gg_puede_justificar_su_area:
             raise HTTPException(
                 status_code=403,
                 detail="Solo el gerente o supervisor del área del empleado puede justificar esta incidencia"
             )
-    updated = service.AsistenciaService.update_incidencia(db, incidencia_id, body)
+        # Supervisor solo puede justificar empleados; gerente puede justificar empleados y supervisores
+        empleado_puesto = (empleado.puesto_rel.nombre or "").strip().lower() if (empleado and empleado.puesto_rel) else ""
+        empleado_es_supervisor = "supervisor" in empleado_puesto
+        empleado_es_gerente = "gerente" in empleado_puesto
+        current_emp = db.query(personal_models.Empleado).options(
+            joinedload(personal_models.Empleado.puesto_rel)
+        ).filter(personal_models.Empleado.id == current_id).first()
+        current_puesto = (current_emp.puesto_rel.nombre or "").strip().lower() if (current_emp and current_emp.puesto_rel) else ""
+        current_es_solo_supervisor = "supervisor" in current_puesto and "gerente" not in current_puesto
+        # Jefe de departamento se considera gerente para este fin
+        current_es_jefe = db.query(personal_models.Departamento).filter(personal_models.Departamento.jefe_id == current_id).count() > 0
+        current_es_gerente = "gerente" in current_puesto or current_es_jefe
+        if current_es_solo_supervisor and (empleado_es_supervisor or empleado_es_gerente):
+            raise HTTPException(
+                status_code=403,
+                detail="El supervisor solo puede justificar incidencias de empleados. Las de supervisores las justifica el gerente del área."
+            )
+    update_data = body.dict(exclude_unset=True)
+    if body.justificada:
+        update_data["justificado_por_id"] = current_id
+    updated = service.AsistenciaService.update_incidencia(db, incidencia_id, update_data)
     return updated
 
 
@@ -1156,40 +1251,45 @@ def reporte_resumen_asistencia(
 
     total_dias = dias_laborables(fi, ff)
 
-    # ── Checadas en el período ──
-    dt_inicio = dt.combine(fi, dt.min.time())
-    dt_fin = dt.combine(ff + timedelta(days=1), dt.min.time())
+    # ── Checadas en el período (rango UTC para días en México) ──
+    from app.core.timezone_utils import mexico_date_to_utc_range
+    dt_inicio_utc, _ = mexico_date_to_utc_range(fi)
+    _, dt_fin_utc = mexico_date_to_utc_range(ff + timedelta(days=1))
 
     checadas_rows = db.query(
         models.Asistencia.empleado_id,
-        sqlfunc.date(models.Asistencia.timestamp).label("dia"),
-        sqlfunc.count(models.Asistencia.id).label("n_checadas"),
+        models.Asistencia.timestamp,
     ).filter(
         models.Asistencia.empleado_id.in_(emp_ids),
-        models.Asistencia.timestamp >= dt_inicio,
-        models.Asistencia.timestamp < dt_fin,
-    ).group_by(
-        models.Asistencia.empleado_id,
-        sqlfunc.date(models.Asistencia.timestamp),
+        models.Asistencia.timestamp >= dt_inicio_utc,
+        models.Asistencia.timestamp < dt_fin_utc,
     ).all()
 
-    # Mapeo: emp_id → set de días con checadas
+    # Agrupar por empleado y día (en hora México)
+    from app.core.timezone_utils import to_mexico
     dias_con_checada: dict[int, set] = {e.id: set() for e in empleados}
     dias_completos: dict[int, int] = {e.id: 0 for e in empleados}  # ≥4 checadas
+    checadas_por_emp_dia: dict[tuple[int, str], int] = {}
     for row in checadas_rows:
-        dias_con_checada[row.empleado_id].add(str(row.dia))
-        if row.n_checadas >= 4:
-            dias_completos[row.empleado_id] += 1
+        ts_mex = to_mexico(row.timestamp) or row.timestamp
+        dia_str = ts_mex.strftime("%Y-%m-%d") if hasattr(ts_mex, "strftime") else str(row.timestamp.date())
+        dias_con_checada[row.empleado_id].add(dia_str)
+        key = (row.empleado_id, dia_str)
+        checadas_por_emp_dia[key] = checadas_por_emp_dia.get(key, 0) + 1
+    for (emp_id, dia_str), n in checadas_por_emp_dia.items():
+        if n >= 4:
+            dias_completos[emp_id] += 1
 
     # ── Incidencias en el período ──
     incidencias_rows = db.query(models.Incidencia).filter(
         models.Incidencia.empleado_id.in_(emp_ids),
-        models.Incidencia.fecha >= dt_inicio,
-        models.Incidencia.fecha < dt_fin,
+        models.Incidencia.fecha >= dt_inicio_utc,
+        models.Incidencia.fecha < dt_fin_utc,
     ).all()
 
     faltas: dict[int, int] = {e.id: 0 for e in empleados}
     faltas_justificadas: dict[int, int] = {e.id: 0 for e in empleados}
+    incompletas: dict[int, int] = {e.id: 0 for e in empleados}
     retardos: dict[int, int] = {e.id: 0 for e in empleados}
     salidas_anticipadas: dict[int, int] = {e.id: 0 for e in empleados}
 
@@ -1200,6 +1300,8 @@ def reporte_resumen_asistencia(
                 faltas_justificadas[eid] = faltas_justificadas.get(eid, 0) + 1
             else:
                 faltas[eid] = faltas.get(eid, 0) + 1
+        elif inc.tipo == models.TipoIncidencia.INCOMPLETA:
+            incompletas[eid] = incompletas.get(eid, 0) + 1
         elif inc.tipo == models.TipoIncidencia.RETARDO:
             retardos[eid] = retardos.get(eid, 0) + 1
         elif inc.tipo == models.TipoIncidencia.SALIDA_ANTICIPADA:
@@ -1241,6 +1343,7 @@ def reporte_resumen_asistencia(
         dias_asistio = len(dias_con_checada.get(emp.id, set()))
         f = faltas.get(emp.id, 0)
         fj = faltas_justificadas.get(emp.id, 0)
+        inc = incompletas.get(emp.id, 0)
         r = retardos.get(emp.id, 0)
         sa = salidas_anticipadas.get(emp.id, 0)
         di = dias_incapacidad.get(emp.id, 0)
@@ -1259,6 +1362,7 @@ def reporte_resumen_asistencia(
             "dias_completos": dc,
             "faltas": f,
             "faltas_justificadas": fj,
+            "incompletas": inc,
             "retardos": r,
             "salidas_anticipadas": sa,
             "dias_incapacidad": di,
@@ -1283,6 +1387,7 @@ def reporte_detalle_empleado(
     """
     from datetime import date, timedelta, datetime as dt
     from app.modules.incapacidades import models as inc_models
+    from app.core.timezone_utils import to_mexico, mexico_date_to_utc_range
 
     try:
         fi = date.fromisoformat(fecha_inicio)
@@ -1290,22 +1395,30 @@ def reporte_detalle_empleado(
     except ValueError:
         raise HTTPException(status_code=400, detail="Formato de fecha inválido")
 
-    dt_inicio = dt.combine(fi, dt.min.time())
-    dt_fin = dt.combine(ff + timedelta(days=1), dt.min.time())
+    # Rango en UTC para el período (días en calendario México)
+    dt_inicio_utc, _ = mexico_date_to_utc_range(fi)
+    ff_end_utc, _ = mexico_date_to_utc_range(ff + timedelta(days=1))
 
-    # Checadas
+    # Checadas en ese rango (por día en México)
     checadas = db.query(models.Asistencia).filter(
         models.Asistencia.empleado_id == empleado_id,
-        models.Asistencia.timestamp >= dt_inicio,
-        models.Asistencia.timestamp < dt_fin,
+        models.Asistencia.timestamp >= dt_inicio_utc,
+        models.Asistencia.timestamp < ff_end_utc,
     ).order_by(models.Asistencia.timestamp).all()
 
-    # Incidencias
+    # Incidencias (mismo rango UTC)
     incidencias = db.query(models.Incidencia).filter(
         models.Incidencia.empleado_id == empleado_id,
-        models.Incidencia.fecha >= dt_inicio,
-        models.Incidencia.fecha < dt_fin,
+        models.Incidencia.fecha >= dt_inicio_utc,
+        models.Incidencia.fecha < ff_end_utc,
     ).order_by(models.Incidencia.fecha).all()
+
+    # Obtener nombres de quienes justificaron (consulta explícita, evita problemas de relación entre módulos)
+    justificador_ids = {inc.justificado_por_id for inc in incidencias if inc.justificado_por_id}
+    justificadores_map = {}
+    if justificador_ids:
+        for e in db.query(personal_models.Empleado).filter(personal_models.Empleado.id.in_(justificador_ids)).all():
+            justificadores_map[e.id] = f"{e.nombre} {e.apellido_paterno or ''}".strip()
 
     # Incapacidades
     incapacidades = db.query(inc_models.Incapacidad).filter(
@@ -1324,23 +1437,28 @@ def reporte_detalle_empleado(
     ).all()
     festivos_map = {f.fecha: f.nombre for f in festivos_bd}
 
-    # Agrupar checadas por día
+    # Agrupar checadas por día (hora mostrada en México)
     checadas_por_dia: dict[str, list] = {}
     for c in checadas:
-        dia = c.timestamp.strftime("%Y-%m-%d")
+        ts_mex = to_mexico(c.timestamp) or c.timestamp
+        dia = ts_mex.strftime("%Y-%m-%d")
         checadas_por_dia.setdefault(dia, []).append({
-            "hora": c.timestamp.strftime("%H:%M"),
+            "hora": ts_mex.strftime("%H:%M"),
             "tipo": c.tipo.value if hasattr(c.tipo, "value") else str(c.tipo),
         })
 
-    # Agrupar incidencias por día
+    # Agrupar incidencias por día (fecha en México)
     incidencias_por_dia: dict[str, list] = {}
     for inc in incidencias:
-        dia = inc.fecha.strftime("%Y-%m-%d")
+        ts_mex = to_mexico(inc.fecha) or inc.fecha
+        dia = ts_mex.strftime("%Y-%m-%d")
+        justificado_por_nombre = justificadores_map.get(inc.justificado_por_id) if inc.justificado_por_id else None
         incidencias_por_dia.setdefault(dia, []).append({
             "tipo": inc.tipo.value if hasattr(inc.tipo, "value") else str(inc.tipo),
             "descripcion": inc.descripcion,
             "justificada": inc.justificada,
+            "comentarios": inc.comentarios,  # observaciones del que justificó
+            "justificado_por_nombre": justificado_por_nombre,
             "origen": inc.origen,
         })
 
