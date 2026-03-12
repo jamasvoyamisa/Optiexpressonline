@@ -1,13 +1,52 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session, joinedload
+from datetime import date
+from zoneinfo import ZoneInfo
 from app.core.database import get_db
 from app.core.security import verify_password, create_access_token, get_current_user
 from app.modules.personal.models import Empleado, Departamento, Rol
 from app.modules.personal.service import PersonalService
 from app.modules.auth.schemas import LoginRequest, TokenResponse, UserInfo
-
 from app.core.config import settings
+
+
+def _calcular_aniversario_empresa(fecha_ingreso) -> dict:
+    """
+    Calcula si hoy (hora México) es el aniversario laboral del empleado,
+    cuántos años cumple y cuántos días de vacaciones le corresponden por LFT.
+    """
+    from app.modules.vacaciones.service import _anios_antiguedad, _dias_vacaciones_lft_mexico
+
+    if not fecha_ingreso:
+        return {"es_aniversario_hoy": False, "anios_empresa": 0, "dias_vacaciones_aniversario": 0}
+
+    hoy_mx = date.today()
+    try:
+        hoy_mx = date.today().__class__.today()
+        import datetime as _dt
+        hoy_mx = _dt.datetime.now(ZoneInfo("America/Mexico_City")).date()
+    except Exception:
+        pass
+
+    ingreso = fecha_ingreso.date() if hasattr(fecha_ingreso, "date") else fecha_ingreso
+
+    # ¿Es hoy el aniversario? (mismo mes y día, pero en un año posterior)
+    es_aniversario = (
+        ingreso.month == hoy_mx.month
+        and ingreso.day == hoy_mx.day
+        and hoy_mx > ingreso
+    )
+
+    anios = _anios_antiguedad(fecha_ingreso, hoy_mx)
+    dias_vac = _dias_vacaciones_lft_mexico(anios) if anios >= 1 else 0
+
+    return {
+        "es_aniversario_hoy": es_aniversario,
+        "anios_empresa": anios,
+        "dias_vacaciones_aniversario": dias_vac,
+        "fecha_ingreso": ingreso.isoformat(),
+    }
 
 router = APIRouter(prefix=f"{settings.API_V1_PREFIX}/auth", tags=["autenticación"])
 
@@ -114,6 +153,7 @@ async def login(
         deptos = db.query(Departamento).filter(Departamento.id.in_(depto_ids_admin)).all()
         departamentos_que_administro = [{"id": d.id, "nombre": d.nombre} for d in deptos]
     puede_ver_dashboard = is_superuser or is_rh or is_gerente_general or is_director
+    aniv = _calcular_aniversario_empresa(empleado.fecha_ingreso)
     me_payload = {
         "id": empleado.id,
         "numero_empleado": empleado.numero_empleado,
@@ -122,6 +162,10 @@ async def login(
         "apellido_materno": empleado.apellido_materno,
         "email": empleado.email,
         "fecha_nacimiento": empleado.fecha_nacimiento.isoformat() if empleado.fecha_nacimiento else None,
+        "fecha_ingreso": aniv.get("fecha_ingreso"),
+        "es_aniversario_hoy": aniv["es_aniversario_hoy"],
+        "anios_empresa": aniv["anios_empresa"],
+        "dias_vacaciones_aniversario": aniv["dias_vacaciones_aniversario"],
         "rol_id": empleado.rol_id,
         "is_jefe": is_jefe,
         "is_superuser": is_superuser,
@@ -206,6 +250,7 @@ async def get_me(
         deptos = db.query(Departamento).filter(Departamento.id.in_(depto_ids_admin)).all()
         departamentos_que_administro = [{"id": d.id, "nombre": d.nombre} for d in deptos]
     puede_ver_dashboard = is_superuser or is_rh or is_gerente_general or is_director
+    aniv = _calcular_aniversario_empresa(empleado.fecha_ingreso)
     return {
         "id": empleado.id,
         "numero_empleado": empleado.numero_empleado,
@@ -215,6 +260,10 @@ async def get_me(
         "email": empleado.email,
         "rol_id": empleado.rol_id,
         "fecha_nacimiento": empleado.fecha_nacimiento.isoformat() if empleado.fecha_nacimiento else None,
+        "fecha_ingreso": aniv.get("fecha_ingreso"),
+        "es_aniversario_hoy": aniv["es_aniversario_hoy"],
+        "anios_empresa": aniv["anios_empresa"],
+        "dias_vacaciones_aniversario": aniv["dias_vacaciones_aniversario"],
         "is_jefe": is_jefe,
         "is_superuser": is_superuser,
         "is_rh": is_rh,

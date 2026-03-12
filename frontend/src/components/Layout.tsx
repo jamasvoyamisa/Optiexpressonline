@@ -52,6 +52,7 @@ export const Layout = ({ children }: LayoutProps) => {
   const [dispositivos, setDispositivos] = useState<Dispositivo[]>([]);
   const [fechaHora, setFechaHora] = useState(formatFechaHora);
   const [mostrarCumple, setMostrarCumple] = useState(false);
+  const [mostrarAniversario, setMostrarAniversario] = useState(false);
   const isSuperuser = authMe?.is_superuser ?? false;
 
   // Modal privado: detectar si el usuario logueado cumple años hoy (usando hora México)
@@ -71,6 +72,18 @@ export const Layout = ({ children }: LayoutProps) => {
     const t = setTimeout(() => setMostrarCumple(true), 1200);
     return () => clearTimeout(t);
   }, [authMe]);
+
+  // Modal aniversario laboral
+  useEffect(() => {
+    if (!authMe?.es_aniversario_hoy || !authMe?.anios_empresa) return;
+    const hoyMx = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
+    const llave = `aniversario_${authMe.id}_${hoyMx}`;
+    if (sessionStorage.getItem(llave)) return;
+    sessionStorage.setItem(llave, '1');
+    // Aparece después del popup de cumpleaños si coinciden ambos
+    const t = setTimeout(() => setMostrarAniversario(true), mostrarCumple ? 6000 : 1800);
+    return () => clearTimeout(t);
+  }, [authMe, mostrarCumple]);
 
   // Cerrar sidebar al cambiar de ruta en móvil
   useEffect(() => {
@@ -401,6 +414,130 @@ export const Layout = ({ children }: LayoutProps) => {
           >
             ¡Gracias! 🎈
           </button>
+        </div>
+      </div>
+    )}
+    {/* ── Modal aniversario laboral ── */}
+    {mostrarAniversario && authMe && (
+      <div
+        onClick={() => setMostrarAniversario(false)}
+        style={{
+          position: 'fixed', inset: 0, zIndex: 9999,
+          background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(6px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '16px',
+          animation: 'fadeInOverlay 0.3s ease',
+        }}
+      >
+        <div
+          onClick={e => e.stopPropagation()}
+          style={{
+            background: '#fff',
+            borderRadius: '22px',
+            maxWidth: '440px', width: '100%',
+            overflow: 'hidden',
+            boxShadow: '0 24px 60px rgba(0,0,0,0.35)',
+            animation: 'slideUpModal 0.38s cubic-bezier(0.34,1.56,0.64,1)',
+            position: 'relative',
+          }}
+        >
+          {/* Banner superior */}
+          <div style={{
+            background: 'linear-gradient(135deg, #1e3a5f 0%, #2563a8 60%, #1e88d4 100%)',
+            padding: '32px 28px 60px',
+            textAlign: 'center', position: 'relative', overflow: 'hidden',
+          }}>
+            {/* Círculos decorativos */}
+            <div style={{ position: 'absolute', top: -30, right: -30, width: 120, height: 120, borderRadius: '50%', background: 'rgba(255,255,255,0.07)' }} />
+            <div style={{ position: 'absolute', bottom: -20, left: -20, width: 90, height: 90, borderRadius: '50%', background: 'rgba(255,255,255,0.05)' }} />
+            <button
+              onClick={() => setMostrarAniversario(false)}
+              style={{
+                position: 'absolute', top: 12, right: 14,
+                background: 'rgba(255,255,255,0.15)', border: 'none',
+                color: '#fff', width: 28, height: 28, borderRadius: '50%',
+                cursor: 'pointer', fontSize: 13, zIndex: 1,
+              }}
+            >✕</button>
+            <div style={{ letterSpacing: '4px', textTransform: 'uppercase', color: 'rgba(255,255,255,0.7)', fontWeight: 700, marginBottom: 8, fontSize: '0.72rem' }}>
+              🏢 Óptica Express
+            </div>
+            <div style={{ fontSize: '3rem', marginBottom: 6 }}>🎊</div>
+            <h2 style={{ color: '#fff', fontSize: '1.3rem', fontWeight: 800, margin: 0, lineHeight: 1.3 }}>
+              ¡Feliz aniversario, {authMe.nombre}!
+            </h2>
+          </div>
+
+          {/* Medallón de años */}
+          <div style={{ display: 'flex', justifyContent: 'center', marginTop: -36, position: 'relative', zIndex: 1 }}>
+            <div style={{
+              width: 72, height: 72, borderRadius: '50%',
+              background: 'linear-gradient(135deg, #f59e0b, #d97706)',
+              border: '4px solid #fff',
+              boxShadow: '0 4px 16px rgba(245,158,11,0.4)',
+              display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <span style={{ fontSize: '1.4rem', fontWeight: 900, color: '#fff', lineHeight: 1 }}>
+                {authMe.anios_empresa}
+              </span>
+              <span style={{ fontSize: '0.6rem', color: 'rgba(255,255,255,0.9)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>
+                {authMe.anios_empresa === 1 ? 'año' : 'años'}
+              </span>
+            </div>
+          </div>
+
+          {/* Cuerpo */}
+          <div style={{ padding: '16px 26px 26px' }}>
+            <p style={{ textAlign: 'center', color: '#444', fontSize: '0.9rem', lineHeight: 1.6, marginBottom: 18 }}>
+              Hoy cumples <strong style={{ color: '#1e3a5f' }}>
+                {authMe.anios_empresa} {authMe.anios_empresa === 1 ? 'año' : 'años'}
+              </strong> con nosotros. ¡Gracias por tu dedicación y esfuerzo!
+            </p>
+
+            {/* Cuadro de vacaciones */}
+            {(authMe.dias_vacaciones_aniversario ?? 0) > 0 && (
+              <div style={{
+                background: 'linear-gradient(135deg, #f0f9ff, #e0f2fe)',
+                border: '1px solid #bae6fd',
+                borderRadius: 14, padding: '16px 18px', marginBottom: 20,
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{
+                    width: 44, height: 44, borderRadius: '50%',
+                    background: 'linear-gradient(135deg, #0369a1, #0ea5e9)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: '1.3rem', flexShrink: 0,
+                  }}>🏖️</div>
+                  <div>
+                    <div style={{ fontSize: '0.72rem', color: '#0369a1', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>
+                      Vacaciones correspondientes
+                    </div>
+                    <div style={{ fontSize: '1.5rem', fontWeight: 900, color: '#0c4a6e', lineHeight: 1.1 }}>
+                      {authMe.dias_vacaciones_aniversario} días
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: '#0369a1' }}>
+                      Conforme a la LFT México — Art. 76
+                    </div>
+                  </div>
+                </div>
+                <p style={{ margin: '10px 0 0', fontSize: '0.78rem', color: '#0369a1', lineHeight: 1.5 }}>
+                  Puedes solicitarlos en el módulo de <strong>Vacaciones</strong>. Tienes hasta 18 meses para disfrutarlos.
+                </p>
+              </div>
+            )}
+
+            <button
+              onClick={() => setMostrarAniversario(false)}
+              style={{
+                width: '100%',
+                background: 'linear-gradient(135deg, #1e3a5f, #2563a8)',
+                color: '#fff', border: 'none',
+                padding: '12px 0', borderRadius: 50, fontWeight: 700,
+                fontSize: '0.95rem', cursor: 'pointer',
+              }}
+            >
+              ¡Muchas gracias! 🎉
+            </button>
+          </div>
         </div>
       </div>
     )}

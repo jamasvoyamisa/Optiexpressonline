@@ -17,6 +17,11 @@ export interface AuthMe {
   is_rh?: boolean;
   is_gerente_general?: boolean;
   is_director?: boolean;
+  fecha_nacimiento?: string | null;
+  fecha_ingreso?: string | null;
+  es_aniversario_hoy?: boolean;
+  anios_empresa?: number;
+  dias_vacaciones_aniversario?: number;
   /** True si puede ver Dashboard (Administrador, Director, Gerente General, RH). */
   puede_ver_dashboard?: boolean;
   /** True si es gerente (área a cargo) o supervisor en su departamento; puede ver Mi Área (incidencias y solicitudes). */
@@ -109,11 +114,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     fetchAuthMe().then((me) => {
       if (!cancelled) {
         setAuthState({
-          isAuthenticated: true,
+          isAuthenticated: me !== null,
           user: me ? { id: me.id, nombre: me.nombre } : null,
           authMe: me,
           loading: false,
         });
+        // Si el token existe pero el servidor lo rechazó, limpiarlo
+        if (me === null) localStorage.removeItem('token');
       }
     }).finally(() => { clearTimeout(timeout); });
     return () => { cancelled = true; clearTimeout(timeout); };
