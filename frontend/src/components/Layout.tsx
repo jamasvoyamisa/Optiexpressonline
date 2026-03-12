@@ -51,7 +51,26 @@ export const Layout = ({ children }: LayoutProps) => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [dispositivos, setDispositivos] = useState<Dispositivo[]>([]);
   const [fechaHora, setFechaHora] = useState(formatFechaHora);
+  const [mostrarCumple, setMostrarCumple] = useState(false);
   const isSuperuser = authMe?.is_superuser ?? false;
+
+  // Modal privado: detectar si el usuario logueado cumple años hoy (usando hora México)
+  useEffect(() => {
+    if (!authMe?.fecha_nacimiento) return;
+    // Fecha de hoy en México
+    const hoyMx = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' }); // YYYY-MM-DD
+    const [, mesMx, diaMx] = hoyMx.split('-').map(Number);
+    // fecha_nacimiento viene como "YYYY-MM-DD", parseamos solo mes y día
+    const [, mesFn, diaFn] = authMe.fecha_nacimiento.slice(0, 10).split('-').map(Number);
+    const esCumple = mesFn === mesMx && diaFn === diaMx;
+    if (!esCumple) return;
+    const llave = `cumple_privado_${authMe.id}_${hoyMx}`;
+    if (sessionStorage.getItem(llave)) return;
+    sessionStorage.setItem(llave, '1');
+    // Pequeño delay para que no aparezca mientras carga la app
+    const t = setTimeout(() => setMostrarCumple(true), 1200);
+    return () => clearTimeout(t);
+  }, [authMe]);
 
   // Cerrar sidebar al cambiar de ruta en móvil
   useEffect(() => {
@@ -63,11 +82,13 @@ export const Layout = ({ children }: LayoutProps) => {
     return () => clearInterval(t);
   }, []);
 
+  const isRH = authMe?.is_rh ?? false;
   const puedeVerMiArea = authMe?.puede_ver_mi_area ?? false;
   const puedeVerDashboard = (authMe?.puede_ver_dashboard ?? false) || (authMe?.puede_ver_mi_area ?? false);
-  const puedeVerSolicitudesVacaciones = isSuperuser || (authMe?.is_director === true) || (authMe?.is_gerente_general === true);
+  const puedeVerSolicitudesVacaciones = isSuperuser || (authMe?.is_director === true) || (authMe?.is_gerente_general === true) || isRH;
   const showFullAdmin = isSuperuser;
-  const showMiAreaOnly = !showFullAdmin && puedeVerMiArea;
+  const showRH = isRH && !isSuperuser;
+  const showMiAreaOnly = !showFullAdmin && !showRH && puedeVerMiArea;
 
   useEffect(() => {
     if (!isAuthenticated || !showFullAdmin) return;
@@ -137,6 +158,13 @@ export const Layout = ({ children }: LayoutProps) => {
           ? superAdminNavItems.map(item => (
               <Link key={item.to} to={item.to} style={linkStyle(item.to)}>{item.label}</Link>
             ))
+          : showRH
+          ? [
+              ...empleadoNavItems.map(item => (
+                <Link key={item.to} to={item.to} style={linkStyle(item.to)}>{item.label}</Link>
+              )),
+              <Link key="/rh" to="/rh" style={linkStyle('/rh')}>Recursos Humanos</Link>,
+            ]
           : [
               ...empleadoNavItems.map(item => (
                 <Link key={item.to} to={item.to} style={linkStyle(item.to)}>{item.label}</Link>
@@ -160,6 +188,7 @@ export const Layout = ({ children }: LayoutProps) => {
   );
 
   return (
+    <>
     <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
 
       {/* ── Sidebar desktop ── */}
@@ -317,5 +346,64 @@ export const Layout = ({ children }: LayoutProps) => {
         </main>
       </div>
     </div>
+
+    {/* ── Modal privado de cumpleaños ── */}
+    {mostrarCumple && authMe && (
+      <div
+        onClick={() => setMostrarCumple(false)}
+        style={{
+          position: 'fixed', inset: 0, zIndex: 9999,
+          background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(5px)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          animation: 'fadeInOverlay 0.3s ease',
+        }}
+      >
+        <div
+          onClick={e => e.stopPropagation()}
+          style={{
+            background: 'linear-gradient(135deg, #0f2057 0%, #1a4a8a 50%, #0e7ab5 100%)',
+            border: '1px solid rgba(14,165,233,0.35)',
+            borderRadius: '20px',
+            padding: '40px 44px 36px',
+            maxWidth: '420px',
+            width: '90%',
+            textAlign: 'center',
+            boxShadow: '0 24px 64px rgba(0,0,0,0.6), 0 0 40px rgba(14,165,233,0.15)',
+            animation: 'slideUpModal 0.35s ease',
+            position: 'relative',
+          }}
+        >
+          <button
+            onClick={() => setMostrarCumple(false)}
+            style={{
+              position: 'absolute', top: '14px', right: '16px',
+              background: 'rgba(255,255,255,0.1)', border: 'none',
+              color: '#fff', width: '30px', height: '30px',
+              borderRadius: '50%', cursor: 'pointer', fontSize: '14px',
+            }}
+          >✕</button>
+          <div style={{ fontSize: '54px', marginBottom: '10px', display: 'block' }}>🎂</div>
+          <h2 style={{ color: '#fff', fontSize: '22px', fontWeight: 700, marginBottom: '8px' }}>
+            ¡Feliz cumpleaños, {authMe.nombre}!
+          </h2>
+          <p style={{ color: 'rgba(255,255,255,0.75)', fontSize: '15px', marginBottom: '28px', lineHeight: 1.6 }}>
+            Todo el equipo de <strong style={{ color: '#38bdf8' }}>Optiexpress</strong> te desea un excelente día.<br />
+            ¡Que lo disfrutes mucho! 🎉
+          </p>
+          <button
+            onClick={() => setMostrarCumple(false)}
+            style={{
+              background: 'linear-gradient(90deg, #0369a1, #0ea5e9)',
+              color: '#fff', border: 'none', borderRadius: '30px',
+              padding: '12px 40px', fontSize: '15px', fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            ¡Gracias! 🎈
+          </button>
+        </div>
+      </div>
+    )}
+    </>
   );
 };
