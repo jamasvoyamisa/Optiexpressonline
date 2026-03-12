@@ -113,8 +113,11 @@ class VacacionesService:
         ).first()
         if not empleado or not empleado.fecha_ingreso:
             return
-        fin_previo = date(año - 1, 12, 31)
-        anios_max = _anios_antiguedad(empleado.fecha_ingreso, fin_previo)
+        # Incluir aniversarios ya ocurridos en el año en curso (el derecho nace el día del aniversario, LFT)
+        anios_max = max(
+            _anios_antiguedad(empleado.fecha_ingreso, date(año - 1, 12, 31)),
+            _anios_antiguedad(empleado.fecha_ingreso, date.today()),
+        )
         if anios_max < 1:
             return
         for anios in range(1, anios_max + 1):
