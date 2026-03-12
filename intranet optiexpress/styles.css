@@ -789,7 +789,10 @@ body::-webkit-scrollbar-thumb:hover {
 
 /* ── Helper: lista de personas reutilizable ── */
 .cp-avatar-emoji { font-size: 1.5rem; flex-shrink: 0; }
-.cp-persona-info { display: flex; flex-direction: column; gap: 1px; }
+.cp-persona-info {
+    display: flex; flex-direction: column; gap: 1px;
+    flex: 1; min-width: 0; /* deja espacio para el botón Felicitar */
+}
 
 /* ── Animación de confeti pulsante ── */
 @keyframes cpBounce { from { transform: scale(1); } to { transform: scale(1.18) rotate(6deg); } }
@@ -977,6 +980,7 @@ body::-webkit-scrollbar-thumb:hover {
     border: none; border-radius: 20px;
     padding: 5px 12px; font-size: 0.72rem; font-weight: 700;
     cursor: pointer; white-space: nowrap; flex-shrink: 0;
+    margin-left: auto; /* siempre visible al final de la fila */
     transition: opacity 0.2s, transform 0.15s;
 }
 .cp-felicitar-btn:hover:not(:disabled) { opacity: 0.85; transform: scale(1.04); }
