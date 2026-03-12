@@ -93,10 +93,14 @@ async def login(
                 is_rh = True
             if rol.nombre in ("Gerente General", "Gerente general"):
                 is_gerente_general = True
-    if empleado.puesto_rel and (empleado.puesto_rel.nombre or "").strip().lower() == "director":
-        is_director = True
-    if empleado.puesto_rel and (empleado.puesto_rel.nombre or "").strip().lower() == "gerente general":
-        is_gerente_general = True
+    if empleado.puesto_rel:
+        puesto_lower = (empleado.puesto_rel.nombre or "").strip().lower()
+        if puesto_lower == "director":
+            is_director = True
+        if puesto_lower == "gerente general":
+            is_gerente_general = True
+        if puesto_lower in ("rh", "recursos humanos"):
+            is_rh = True
     depto_ids_admin = PersonalService.get_departamento_ids_que_administro(db, empleado.id)
     puede_ver_mi_area = len(depto_ids_admin) > 0
     if not puede_ver_mi_area and empleado.puesto_rel:
@@ -117,6 +121,7 @@ async def login(
         "apellido_paterno": empleado.apellido_paterno,
         "apellido_materno": empleado.apellido_materno,
         "email": empleado.email,
+        "fecha_nacimiento": empleado.fecha_nacimiento.isoformat() if empleado.fecha_nacimiento else None,
         "rol_id": empleado.rol_id,
         "is_jefe": is_jefe,
         "is_superuser": is_superuser,
@@ -178,10 +183,14 @@ async def get_me(
                 is_rh = True
             if rol.nombre in ("Gerente General", "Gerente general"):
                 is_gerente_general = True
-    if empleado.puesto_rel and (empleado.puesto_rel.nombre or "").strip().lower() == "director":
-        is_director = True
-    if empleado.puesto_rel and (empleado.puesto_rel.nombre or "").strip().lower() == "gerente general":
-        is_gerente_general = True
+    if empleado.puesto_rel:
+        puesto_lower = (empleado.puesto_rel.nombre or "").strip().lower()
+        if puesto_lower == "director":
+            is_director = True
+        if puesto_lower == "gerente general":
+            is_gerente_general = True
+        if puesto_lower in ("rh", "recursos humanos"):
+            is_rh = True
     depto_ids_admin = PersonalService.get_departamento_ids_que_administro(db, empleado_id)
     puede_ver_mi_area = len(depto_ids_admin) > 0
     if not puede_ver_mi_area and empleado.puesto_rel:
@@ -205,6 +214,7 @@ async def get_me(
         "apellido_materno": empleado.apellido_materno,
         "email": empleado.email,
         "rol_id": empleado.rol_id,
+        "fecha_nacimiento": empleado.fecha_nacimiento.isoformat() if empleado.fecha_nacimiento else None,
         "is_jefe": is_jefe,
         "is_superuser": is_superuser,
         "is_rh": is_rh,
