@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import api from '../../services/api';
 import { Asistencia, Dispositivo, Empleado } from '../../types';
-import { parseTimestampForMexico } from '../../utils/date';
+import { parseTimestampForMexico, toMexicoDateString } from '../../utils/date';
 
 interface AsistenciaConEmpleado extends Asistencia {
   empleado?: Empleado;
@@ -113,8 +113,8 @@ export const AsistenciaPage = () => {
     const map = new Map<string, DayRow>();
     for (const c of checadas) {
       const d = parseTimestampForMexico(c.timestamp);
-      const fechaStr = d.toLocaleDateString('es-MX', { weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit' });
-      const fechaSort = d.toISOString().slice(0, 10);
+      const fechaStr = d.toLocaleDateString('es-MX', { weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/Mexico_City' });
+      const fechaSort = toMexicoDateString(d);
       const empNombre = getEmpleadoNombre(c);
       const emp = empleados.find(e => e.id === c.empleado_id);
       const numeroEmp = emp?.numero_empleado ?? c.empleado_numero ?? '-';

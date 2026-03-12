@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
-import { parseTimestampForMexico } from '../../utils/date';
+import { parseTimestampForMexico, toMexicoDateString } from '../../utils/date';
 
 type TipoIncidencia = 'retardo' | 'falta' | 'completa' | 'horas_extra' | 'salida_anticipada' | 'incompleta';
 type TipoChecada = 'entrada' | 'salida' | 'salida_comer' | 'regreso_comer';
@@ -564,8 +564,8 @@ export const MiAreaPage = () => {
               const tipo = (t: string) => String(t || '').toLowerCase();
               checadas.forEach(c => {
                 const d = parseTimestampForMexico(c.timestamp);
-                const fechaSort = d.toISOString().slice(0, 10);
-                const fechaStr = d.toLocaleDateString('es-MX', { weekday: 'short', day: '2-digit', month: 'short' });
+                const fechaSort = toMexicoDateString(d);
+                const fechaStr = d.toLocaleDateString('es-MX', { weekday: 'short', day: '2-digit', month: 'short', timeZone: 'America/Mexico_City' });
                 const key = `${c.empleado_id}_${fechaSort}`;
                 if (!map.has(key)) {
                   map.set(key, {

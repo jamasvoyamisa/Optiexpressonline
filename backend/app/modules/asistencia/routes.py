@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from app.core.database import get_db
 from app.core.config import settings
 from app.core.security import get_current_user
@@ -9,6 +9,26 @@ from app.core.deps import get_current_empleado_with_rol
 from app.modules.personal import models as personal_models
 from . import schemas, service, models
 from .biometric.sync_service import SyncService
+
+
+def _parse_fecha_mexico_a_utc(fecha_str: str, es_fin: bool = False) -> Optional[datetime]:
+    """
+    Convierte un string de fecha/hora ingresado como hora México a UTC.
+    Si es_fin=True, extiende el rango hasta el final del día México (23:59:59 → +6h UTC).
+    El dispositivo y la BD guardan en UTC con offset México (UTC-6 CST / UTC-5 CDT).
+    Se usa UTC-6 como offset fijo (CST), que cubre la mayor parte del año en México.
+    """
+    try:
+        dt = datetime.fromisoformat(fecha_str)
+        # Si ya tiene timezone, dejarlo como está
+        if dt.tzinfo is not None:
+            return dt.replace(tzinfo=None)  # quitar tz, ya es UTC si viene del frontend
+        # Naive → asumir que es hora México (CST = UTC-6)
+        # Convertir a UTC sumando 6 horas
+        MEXICO_UTC_OFFSET = timedelta(hours=6)
+        return dt + MEXICO_UTC_OFFSET
+    except Exception:
+        return None
 
 router = APIRouter(prefix=f"{settings.API_V1_PREFIX}/asistencia", tags=["Asistencia"])
 
@@ -631,22 +651,10 @@ def get_checadas(
     fecha_fin: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
-    """Listar checadas con filtros"""
-    fecha_inicio_dt = None
-    fecha_fin_dt = None
-    
-    if fecha_inicio:
-        try:
-            fecha_inicio_dt = datetime.fromisoformat(fecha_inicio)
-        except:
-            pass
-    
-    if fecha_fin:
-        try:
-            fecha_fin_dt = datetime.fromisoformat(fecha_fin)
-        except:
-            pass
-    
+    """Listar checadas con filtros. Las fechas se interpretan como hora México (CST) y se convierten a UTC."""
+    fecha_inicio_dt = _parse_fecha_mexico_a_utc(fecha_inicio) if fecha_inicio else None
+    fecha_fin_dt = _parse_fecha_mexico_a_utc(fecha_fin) if fecha_fin else None
+
     return service.AsistenciaService.get_asistencias(
         db,
         skip=skip,
@@ -667,25 +675,9 @@ def get_mis_checadas(
     current: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Checadas del empleado actual (portal del empleado). Requiere autenticación."""
-    fecha_inicio_dt = None
-    fecha_fin_dt = None
-    if fecha_inicio:
-        try:
-            d = datetime.fromisoformat(fecha_inicio.replace("Z", "+00:00"))
-            if d.tzinfo is None:
-                d = d.replace(tzinfo=timezone.utc)
-            fecha_inicio_dt = d
-        except Exception:
-            pass
-    if fecha_fin:
-        try:
-            d = datetime.fromisoformat(fecha_fin.replace("Z", "+00:00"))
-            if d.tzinfo is None:
-                d = d.replace(tzinfo=timezone.utc)
-            fecha_fin_dt = d
-        except Exception:
-            pass
+    """Checadas del empleado actual (portal del empleado). Las fechas se interpretan como hora México."""
+    fecha_inicio_dt = _parse_fecha_mexico_a_utc(fecha_inicio) if fecha_inicio else None
+    fecha_fin_dt = _parse_fecha_mexico_a_utc(fecha_fin) if fecha_fin else None
     empleado_id = int(current["user_id"])
     return service.AsistenciaService.get_asistencias(
         db,
@@ -808,18 +800,8 @@ def get_checadas_mi_area(
         if not empleado_ids:
             return []
 
-    fecha_inicio_dt = None
-    fecha_fin_dt = None
-    if fecha_inicio:
-        try:
-            fecha_inicio_dt = datetime.fromisoformat(fecha_inicio)
-        except Exception:
-            pass
-    if fecha_fin:
-        try:
-            fecha_fin_dt = datetime.fromisoformat(fecha_fin)
-        except Exception:
-            pass
+    fecha_inicio_dt = _parse_fecha_mexico_a_utc(fecha_inicio) if fecha_inicio else None
+    fecha_fin_dt = _parse_fecha_mexico_a_utc(fecha_fin) if fecha_fin else None
 
     if empleado_ids is None:
         return service.AsistenciaService.get_asistencias(

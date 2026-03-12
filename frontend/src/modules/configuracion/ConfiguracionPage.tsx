@@ -173,7 +173,7 @@ export const ConfiguracionPage = () => {
       const [devRes, emprsRes, empRes, horRes] = await Promise.allSettled([
         api.get('/asistencia/devices'),
         api.get('/personal/empresas?limit=500'),
-        api.get('/personal/empleados?limit=2000'),
+        api.get('/personal/empleados?limit=1000'),
         api.get('/asistencia/horarios'),
       ]);
       if (devRes.status === 'fulfilled') setDispositivos(devRes.value?.data ?? []);
@@ -416,7 +416,7 @@ export const ConfiguracionPage = () => {
         <div>
           <h1 style={{ margin: 0 }}>Configuracion</h1>
           <p style={{ margin: '4px 0 0', color: '#888', fontSize: '0.9rem' }}>
-            {configTab === 'dispositivos' ? 'Dispositivos Biometricos' : configTab === 'empresas' ? 'Empresas' : configTab === 'usuarios_especiales' ? 'Usuarios que no generan incidencias' : 'Horarios de trabajo'}
+            {configTab === 'dispositivos' ? 'Dispositivos Biometricos' : configTab === 'empresas' ? 'Empresas' : configTab === 'usuarios_especiales' ? 'Usuarios Especiales' : 'Horarios de Trabajo'}
           </p>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
@@ -966,7 +966,7 @@ export const ConfiguracionPage = () => {
         <div>
           <div style={{ padding: '16px', backgroundColor: '#f0f9ff', borderRadius: '8px', marginBottom: '20px', border: '1px solid #bae6fd' }}>
             <p style={{ margin: 0, fontSize: '0.9rem', color: '#0369a1' }}>
-              <strong>Usuarios especiales</strong> no generan incidencias automáticas (faltas, retardos, salida anticipada, incompleta). Útil para directivos, visitas o personal con horarios flexibles.
+              <strong>Usuarios Especiales</strong> no generan incidencias automáticas (faltas, retardos, salida anticipada, incompleta). Útil para directivos, visitas o personal con horarios flexibles.
             </p>
           </div>
           {loadingUsuariosEspeciales ? (
