@@ -106,9 +106,36 @@ async function verificarCumpleaneros() {
     }
 }
 
+// ── Enviar felicitación al empleado (notificación en la app) ─────────────────
+async function _enviarFelicitacion(btn, empleadoId) {
+    if (btn.dataset.enviada) return;
+    btn.disabled = true;
+    btn.textContent = 'Enviando...';
+    try {
+        const res = await fetch(`${BACKEND_URL}/api/v1/landing/felicitar-cumpleanero`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ empleado_id: empleadoId }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+            btn.dataset.enviada = '1';
+            btn.textContent = data.ya_enviada ? '✓ Ya felicitado' : '✓ ¡Enviado!';
+            btn.style.opacity = '0.7';
+            btn.style.cursor = 'default';
+        } else {
+            btn.textContent = '¡Felicitar! 🎉';
+            btn.disabled = false;
+        }
+    } catch {
+        btn.textContent = '¡Felicitar! 🎉';
+        btn.disabled = false;
+    }
+}
+
 // ── Constructores de los 5 diseños ──────────────────────────────────────────
 
-function _buildPersonasHtml(personas, claseItem, claseNombre, clasePuesto, claseDepto) {
+function _buildPersonasHtml(personas, claseItem, claseNombre, clasePuesto, claseDepto, claseBtn) {
     return personas.map(p => `
         <div class="${claseItem}">
             <span class="cp-avatar-emoji">🎂</span>
@@ -117,6 +144,7 @@ function _buildPersonasHtml(personas, claseItem, claseNombre, clasePuesto, clase
                 ${p.puesto  ? `<span class="${clasePuesto}">${p.puesto}</span>`  : ''}
                 ${p.departamento ? `<span class="${claseDepto}">${p.departamento}</span>` : ''}
             </div>
+            <button class="cp-felicitar-btn ${claseBtn}" data-id="${p.id}">¡Felicitar! 🎉</button>
         </div>`).join('');
 }
 
@@ -130,10 +158,10 @@ const _diseños = [
         <div class="cp-d1-emoji">🎂</div>
         <h2 class="cp-d1-titulo">¡${personas.length > 1 ? 'Hoy cumplen años!' : 'Hoy es su cumpleaños!'}</h2>
         <div class="cp-d1-personas">
-            ${_buildPersonasHtml(personas, 'cp-d1-item', 'cp-d1-nombre', 'cp-d1-puesto', 'cp-d1-depto')}
+            ${_buildPersonasHtml(personas, 'cp-d1-item', 'cp-d1-nombre', 'cp-d1-puesto', 'cp-d1-depto', 'cp-felicitar-d1')}
         </div>
         <p class="cp-d1-sub">¡Felicidades de todo el equipo Optiexpress!</p>
-        <button class="cp-d1-btn cp-btn-cerrar">¡Felicidades! 🎉</button>
+        <button class="cp-d1-btn cp-btn-cerrar">Cerrar</button>
     </div>`,
 
     // ── Diseño 2: Elegante Minimalista ───────────────────────────────────────
@@ -144,7 +172,7 @@ const _diseños = [
         <div class="cp-d2-eyebrow">Cumpleaños del día</div>
         <h2 class="cp-d2-titulo">${personas.length > 1 ? 'Hoy celebramos a' : 'Hoy celebramos a'}</h2>
         <div class="cp-d2-personas">
-            ${_buildPersonasHtml(personas, 'cp-d2-item', 'cp-d2-nombre', 'cp-d2-puesto', 'cp-d2-depto')}
+            ${_buildPersonasHtml(personas, 'cp-d2-item', 'cp-d2-nombre', 'cp-d2-puesto', 'cp-d2-depto', 'cp-felicitar-d2')}
         </div>
         <button class="cp-d2-btn cp-btn-cerrar">Cerrar</button>
     </div>`,
@@ -160,10 +188,10 @@ const _diseños = [
         <div class="cp-d3-avatar">🎂</div>
         <div class="cp-d3-body">
             <div class="cp-d3-personas">
-                ${_buildPersonasHtml(personas, 'cp-d3-item', 'cp-d3-nombre', 'cp-d3-puesto', 'cp-d3-depto')}
+                ${_buildPersonasHtml(personas, 'cp-d3-item', 'cp-d3-nombre', 'cp-d3-puesto', 'cp-d3-depto', 'cp-felicitar-d3')}
             </div>
             <p class="cp-d3-mensaje">¡Únete para desearles un día increíble!</p>
-            <button class="cp-d3-btn cp-btn-cerrar">¡Muchas felicidades! 🎁</button>
+            <button class="cp-d3-btn cp-btn-cerrar">Cerrar 🎁</button>
         </div>
     </div>`,
 
@@ -175,9 +203,9 @@ const _diseños = [
         <div class="cp-d4-emoji">🎂</div>
         <div class="cp-d4-eyebrow">${personas.length > 1 ? 'Cumpleaños hoy' : 'Cumpleaños hoy'}</div>
         <div class="cp-d4-personas">
-            ${_buildPersonasHtml(personas, 'cp-d4-item', 'cp-d4-nombre', 'cp-d4-puesto', 'cp-d4-depto')}
+            ${_buildPersonasHtml(personas, 'cp-d4-item', 'cp-d4-nombre', 'cp-d4-puesto', 'cp-d4-depto', 'cp-felicitar-d4')}
         </div>
-        <button class="cp-d4-btn cp-btn-cerrar">¡Feliz cumpleaños!</button>
+        <button class="cp-d4-btn cp-btn-cerrar">Cerrar</button>
     </div>`,
 
     // ── Diseño 5: Corporativo Soft ────────────────────────────────────────────
@@ -193,12 +221,11 @@ const _diseños = [
         </div>
         <div class="cp-d5-body">
             <div class="cp-d5-personas">
-                ${_buildPersonasHtml(personas, 'cp-d5-item', 'cp-d5-nombre', 'cp-d5-puesto', 'cp-d5-depto')}
+                ${_buildPersonasHtml(personas, 'cp-d5-item', 'cp-d5-nombre', 'cp-d5-puesto', 'cp-d5-depto', 'cp-felicitar-d5')}
             </div>
             <p class="cp-d5-mensaje">Es un buen momento para desearles un excelente día. 🎉</p>
             <div class="cp-d5-btns">
                 <button class="cp-d5-btn-sec cp-btn-cerrar">Cerrar</button>
-                <button class="cp-d5-btn-pri cp-btn-cerrar">¡Felicidades!</button>
             </div>
         </div>
     </div>`,
@@ -222,6 +249,15 @@ function mostrarPopupCumpleanosPublico(personas) {
     const cerrar = () => overlay.classList.remove('activo');
     overlay.querySelectorAll('.cp-btn-cerrar, .cp-cerrar').forEach(btn => btn.addEventListener('click', cerrar));
     overlay.addEventListener('click', (e) => { if (e.target === overlay) cerrar(); });
+
+    // Botones de felicitar
+    overlay.querySelectorAll('.cp-felicitar-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const empleadoId = parseInt(btn.dataset.id);
+            _enviarFelicitacion(btn, empleadoId);
+        });
+    });
 
     setTimeout(() => overlay.classList.add('activo'), 300);
 }

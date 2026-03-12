@@ -972,6 +972,23 @@ body::-webkit-scrollbar-thumb:hover {
 .cp-d5-btn-pri:hover { opacity: 0.9; }
 .cp-d5-btn-sec:hover { background: #e5e8ec; }
 
+/* ── Botón Felicitar (compartido) ── */
+.cp-felicitar-btn {
+    border: none; border-radius: 20px;
+    padding: 5px 12px; font-size: 0.72rem; font-weight: 700;
+    cursor: pointer; white-space: nowrap; flex-shrink: 0;
+    transition: opacity 0.2s, transform 0.15s;
+}
+.cp-felicitar-btn:hover:not(:disabled) { opacity: 0.85; transform: scale(1.04); }
+.cp-felicitar-btn:disabled { cursor: default; }
+
+/* Variantes por diseño */
+.cp-felicitar-d1 { background: rgba(255,255,255,0.2); color: #fff; border: 1px solid rgba(255,255,255,0.4); }
+.cp-felicitar-d2 { background: #c8a84b; color: #fff; }
+.cp-felicitar-d3 { background: linear-gradient(135deg, #f093fb, #f5576c); color: #fff; }
+.cp-felicitar-d4 { background: transparent; color: #00ff88; border: 1px solid #00ff88; }
+.cp-felicitar-d5 { background: #1e3c72; color: #fff; }
+
 /* Responsive */
 @media (max-width: 768px) {
     .carousel-wrapper {

@@ -23,6 +23,11 @@ const TIPO_COLOR: Record<string, string> = {
   solicitud_aprobada: '#10b981',
   solicitud_rechazada: '#ef4444',
   solicitud_pendiente_rh: '#8b5cf6',
+  cumpleanos_felicitacion: '#f43f8e',
+};
+
+const TIPO_ICONO: Record<string, string> = {
+  cumpleanos_felicitacion: '🎂',
 };
 
 const MS_1_DIA = 24 * 60 * 60 * 1000;
@@ -316,14 +321,20 @@ export const NotificationBell = ({ dispositivos = [] }: Props) => {
                   onMouseLeave={e => { (e.currentTarget as HTMLDivElement).style.backgroundColor = n.leida ? 'white' : '#f0f9ff'; }}
                 >
                   {/* Indicador de tipo */}
-                  <div style={{
-                    width: '10px',
-                    height: '10px',
-                    borderRadius: '50%',
-                    backgroundColor: TIPO_COLOR[n.tipo] ?? '#6b7280',
-                    flexShrink: 0,
-                    marginTop: '6px',
-                  }} />
+                  {TIPO_ICONO[n.tipo] ? (
+                    <span style={{ fontSize: '1.1rem', flexShrink: 0, lineHeight: 1, marginTop: '2px' }}>
+                      {TIPO_ICONO[n.tipo]}
+                    </span>
+                  ) : (
+                    <div style={{
+                      width: '10px',
+                      height: '10px',
+                      borderRadius: '50%',
+                      backgroundColor: TIPO_COLOR[n.tipo] ?? '#6b7280',
+                      flexShrink: 0,
+                      marginTop: '6px',
+                    }} />
+                  )}
 
                   {/* Contenido */}
                   <div style={{ flex: 1, minWidth: 0 }}>
