@@ -39,6 +39,7 @@ class SolicitudPrestamo(Base):
     __tablename__ = "solicitudes_prestamos"
 
     id = Column(Integer, primary_key=True, index=True)
+    numero_solicitud = Column(String(20), unique=True, nullable=True, index=True)
     empleado_id = Column(Integer, ForeignKey("empleados.id"), nullable=False, index=True)
     monto = Column(Numeric(12, 2), nullable=False)
     plazo_meses = Column(Integer, nullable=False)

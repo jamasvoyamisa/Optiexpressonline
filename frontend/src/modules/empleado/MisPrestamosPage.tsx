@@ -5,6 +5,7 @@ import { useIsMobile } from '../../hooks/useIsMobile';
 
 interface SolicitudPrestamo {
   id: number;
+  numero_solicitud?: string | null;
   empleado_id: number;
   monto: string;
   plazo_meses: number;
@@ -49,6 +50,29 @@ const formatMonto = (v: string | number) => {
   const n = typeof v === 'string' ? parseFloat(v) : v;
   if (isNaN(n)) return '—';
   return new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(n);
+};
+
+/** Parsea una fecha ISO que puede venir sin zona horaria, tratándola como UTC. */
+const parseUTC = (raw: string): Date => {
+  // Si ya trae zona horaria (Z o +/-HH:mm) la dejamos como está
+  if (raw.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(raw)) return new Date(raw);
+  // Sin zona → el backend envía UTC; forzamos Z para que JS no la interprete como local
+  return new Date(raw + 'Z');
+};
+
+/** Calcula el saldo restante del préstamo asumiendo descuentos quincenales (cada 15 días).
+ *  Retorna null si el préstamo no está en estado 'aprobada' o falta fecha. */
+const calcularSaldoRestante = (sol: SolicitudPrestamo): number | null => {
+  if (sol.estado !== 'aprobada') return null;
+  if (!sol.fecha_aprobacion) return null;
+  const monto = parseFloat(sol.monto);
+  const descQuincenal = parseFloat(sol.descuento_quincenal ?? '0');
+  if (isNaN(monto) || isNaN(descQuincenal) || descQuincenal <= 0) return null;
+  const msTranscurridos = Date.now() - parseUTC(sol.fecha_aprobacion).getTime();
+  // Si la fecha quedó en el futuro (diferencia negativa) no se ha pagado nada aún
+  if (msTranscurridos < 0) return monto;
+  const quincenasTranscurridas = Math.floor(msTranscurridos / (15 * 24 * 60 * 60 * 1000));
+  return Math.max(0, monto - quincenasTranscurridas * descQuincenal);
 };
 
 const emptyForm = { monto: '', plazo_meses: '12', motivo: '' };
@@ -159,12 +183,30 @@ export const MisPrestamosPage = () => {
             const estadoStyle = ESTADO_STYLE[sol.estado] ?? ESTADO_STYLE.pendiente;
             return (
               <div key={sol.id} style={{ backgroundColor: 'white', borderRadius: '10px', border: '1px solid #e5e7eb', padding: '16px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+                <div style={{ marginBottom: '8px' }}>
+                  <span style={{ fontFamily: 'monospace', fontSize: '0.75rem', backgroundColor: '#f1f5f9', color: '#334155', padding: '2px 8px', borderRadius: 4, fontWeight: 600 }}>
+                    {sol.numero_solicitud ?? `#${sol.id}`}
+                  </span>
+                </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' }}>
                   <div>
                     <div style={{ fontWeight: 700, fontSize: '1.15rem', color: '#1e3a5f' }}>{formatMonto(sol.monto)}</div>
                     <div style={{ fontSize: '0.82rem', color: '#6b7280', marginTop: '2px' }}>
                       {sol.plazo_meses} meses · {sol.descuento_quincenal ? formatMonto(sol.descuento_quincenal) + '/q' : ''}
                     </div>
+                    {(() => {
+                      const saldo = calcularSaldoRestante(sol);
+                      if (saldo === null) return null;
+                      const pct = Math.round((saldo / parseFloat(sol.monto)) * 100);
+                      const color = pct > 60 ? '#dc2626' : pct > 25 ? '#d97706' : '#16a34a';
+                      return (
+                        <div style={{ marginTop: '4px', fontSize: '0.82rem' }}>
+                          <span style={{ color: '#6b7280' }}>Saldo: </span>
+                          <span style={{ fontWeight: 700, color }}>{formatMonto(saldo)}</span>
+                          <span style={{ color: '#9ca3af', marginLeft: 4 }}>({pct}%)</span>
+                        </div>
+                      );
+                    })()}
                   </div>
                   <span style={{ backgroundColor: estadoStyle.bg, color: estadoStyle.color, borderRadius: 5, padding: '4px 10px', fontSize: '0.78rem', fontWeight: 600 }}>
                     {ESTADO_LABEL[sol.estado] ?? sol.estado}
@@ -197,9 +239,11 @@ export const MisPrestamosPage = () => {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
-                <th style={th}>Monto</th>
+                <th style={th}>No. solicitud</th>
+                <th style={{ ...th, textAlign: 'right' }}>Monto</th>
                 <th style={{ ...th, textAlign: 'center' }}>Plazo</th>
-                <th style={{ ...th, textAlign: 'right' }}>Descuento/q</th>
+                <th style={{ ...th, textAlign: 'right' }}>Desc. quincenal</th>
+                <th style={{ ...th, textAlign: 'right' }}>Saldo restante</th>
                 <th style={th}>Motivo</th>
                 <th style={{ ...th, textAlign: 'center' }}>Estado</th>
                 <th style={th}>Fecha</th>
@@ -211,9 +255,30 @@ export const MisPrestamosPage = () => {
                 const estadoStyle = ESTADO_STYLE[sol.estado] ?? ESTADO_STYLE.pendiente;
                 return (
                   <tr key={sol.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
-                    <td style={{ ...td, fontWeight: 600 }}>{formatMonto(sol.monto)}</td>
+                    <td style={td}>
+                      <span style={{ fontFamily: 'monospace', fontSize: '0.8rem', backgroundColor: '#f1f5f9', color: '#334155', padding: '2px 7px', borderRadius: 4, fontWeight: 600 }}>
+                        {sol.numero_solicitud ?? `#${sol.id}`}
+                      </span>
+                    </td>
+                    <td style={{ ...td, fontWeight: 600, textAlign: 'right' }}>{formatMonto(sol.monto)}</td>
                     <td style={{ ...td, textAlign: 'center' }}>{sol.plazo_meses} meses</td>
-                    <td style={{ ...td, textAlign: 'right', color: '#0369a1' }}>{sol.descuento_quincenal ? formatMonto(sol.descuento_quincenal) : '—'}</td>
+                    <td style={{ ...td, textAlign: 'right', color: '#0369a1' }}>
+                      {sol.descuento_quincenal ? formatMonto(sol.descuento_quincenal) : '—'}
+                    </td>
+                    <td style={{ ...td, textAlign: 'right' }}>
+                      {(() => {
+                        const saldo = calcularSaldoRestante(sol);
+                        if (saldo === null) return <span style={{ color: '#9ca3af', fontSize: '0.82rem' }}>—</span>;
+                        const pct = Math.round((saldo / parseFloat(sol.monto)) * 100);
+                        const color = pct > 60 ? '#dc2626' : pct > 25 ? '#d97706' : '#16a34a';
+                        return (
+                          <div>
+                            <div style={{ fontWeight: 700, color }}>{formatMonto(saldo)}</div>
+                            <div style={{ fontSize: '0.72rem', color: '#9ca3af' }}>{pct}% restante</div>
+                          </div>
+                        );
+                      })()}
+                    </td>
                     <td style={td}>{sol.motivo || '—'}</td>
                     <td style={{ ...td, textAlign: 'center' }}>
                       <span style={{ backgroundColor: estadoStyle.bg, color: estadoStyle.color, borderRadius: 5, padding: '3px 9px', fontSize: '0.78rem', fontWeight: 600 }}>
@@ -268,7 +333,8 @@ export const MisPrestamosPage = () => {
                 const quincenas = plazo * 2;
                 return desc != null && (
                   <div style={{ padding: '10px 12px', backgroundColor: '#f0f9ff', borderRadius: 8, fontSize: '0.88rem', color: '#0369a1' }}>
-                    <strong>Descuento quincenal:</strong> {formatMonto(desc)} (calculado automáticamente a {quincenas} quincenas)
+                    <strong>Descuento quincenal:</strong> {formatMonto(desc)}
+                    <span style={{ color: '#64748b', marginLeft: 6 }}>({quincenas} quincenas)</span>
                   </div>
                 );
               })()}

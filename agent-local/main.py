@@ -202,6 +202,52 @@ class DeviceHandler:
         except Exception as e:
             logger.error(f"[{self.name}] Error sync_device_templates: {e}")
 
+    def sync_pending_replicate(self):
+        """Replica huellas almacenadas en el backend hacia este dispositivo."""
+        try:
+            pending = self.cloud.get_pending_replicate()
+            if not pending:
+                return
+
+            # Agrupar por id de replicacion (puede haber varios dedos por empleado)
+            from collections import defaultdict
+            by_id = defaultdict(list)
+            for item in pending:
+                by_id[item["id"]].append(item)
+
+            for replicate_id, items in by_id.items():
+                uid = str(items[0]["user_id"]).strip()
+                nombre = (items[0].get("nombre") or uid)[:24]
+                logger.info(f"[{self.name}] REPLICATE id={replicate_id} empleado={items[0]['numero_empleado']} uid={uid} dedos={len(items)}")
+
+                device_users = self.zkteco.get_users()
+                if not any(str(u.get("user_id", "")) == uid for u in device_users):
+                    logger.info(f"[{self.name}] Usuario {uid} no existe en dispositivo, creando...")
+                    if not self.zkteco.set_user(user_id=uid, name=nombre):
+                        logger.error(f"[{self.name}] No se pudo crear usuario {uid} para replicar huella")
+                        self.cloud.mark_replicate_done(replicate_id, success=False)
+                        continue
+
+                ok_count = 0
+                for item in items:
+                    finger = item["finger_index"]
+                    tpl_data = item["template_data"]
+                    ok = self.zkteco.upload_template(uid, finger, tpl_data)
+                    if ok:
+                        ok_count += 1
+                        logger.info(f"[{self.name}] Huella replicada: uid={uid} dedo={finger}")
+                    else:
+                        logger.warning(f"[{self.name}] Fallo replicar huella: uid={uid} dedo={finger}")
+
+                success = ok_count > 0
+                self.cloud.mark_replicate_done(replicate_id, success=success)
+                if success:
+                    logger.info(f"[{self.name}] Replicacion {replicate_id}: {ok_count}/{len(items)} huellas OK")
+                else:
+                    logger.warning(f"[{self.name}] Replicacion {replicate_id} fallida completamente")
+        except Exception as e:
+            logger.error(f"[{self.name}] Error sync_pending_replicate: {e}")
+
     def sync_pending_deletes(self):
         try:
             pending = self.cloud.get_pending_deletes()
@@ -372,6 +418,7 @@ class Agent:
                         if has_cloud:
                             h.sync_pending_users()
                             h.sync_pending_enroll()
+                            h.sync_pending_replicate()
                             h.sync_pending_templates()
                             h.sync_pending_deletes()
 

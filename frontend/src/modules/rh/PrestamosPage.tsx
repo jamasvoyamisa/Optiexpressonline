@@ -13,6 +13,7 @@ interface Empleado {
 
 interface SolicitudPrestamo {
   id: number;
+  numero_solicitud?: string | null;
   empleado_id: number;
   monto: string;
   plazo_meses: number;
@@ -119,18 +120,22 @@ export const PrestamosPage = () => {
   const [loadingEmps, setLoadingEmps] = useState(false);
 
   const [busqueda, setBusqueda] = useState('');
-  const [filtroEstado, setFiltroEstado] = useState('pendiente');
+  const [filtroEstado, setFiltroEstado] = useState('');
+  const [loadError, setLoadError] = useState('');
 
   const cargar = useCallback(async () => {
     setLoading(true);
+    setLoadError('');
     try {
       const params = new URLSearchParams();
       if (isRH) params.set('limit', '500');
       else params.set('empleado_id', String(authMe?.id ?? ''));
-      const res = await api.get<SolicitudPrestamo[]>(`prestamos?${params}`);
+      const res = await api.get<SolicitudPrestamo[]>(`/prestamos?${params}`);
       setSolicitudes(Array.isArray(res.data) ? res.data : []);
-    } catch {
+    } catch (e: any) {
       setSolicitudes([]);
+      const msg = e?.response?.data?.detail || e?.message || 'Error al cargar préstamos';
+      setLoadError(String(msg));
     } finally {
       setLoading(false);
     }
@@ -206,7 +211,7 @@ export const PrestamosPage = () => {
   };
 
   const puedeAprobar = authMe?.is_superuser || authMe?.is_director || authMe?.is_gerente_general;
-  const puedeConfirmar = authMe?.is_superuser || authMe?.is_rh;
+  const puedeConfirmar = authMe?.is_rh === true && !authMe?.is_superuser;
 
   const aprobarRechazar = async (sol: SolicitudPrestamo, aprobado: boolean) => {
     setAprobando(true);
@@ -278,24 +283,33 @@ export const PrestamosPage = () => {
           <option value="cancelada">Cancelada</option>
         </select>
         {(busqueda || filtroEstado) && (
-          <button onClick={() => { setBusqueda(''); setFiltroEstado('pendiente'); }}
+          <button onClick={() => { setBusqueda(''); setFiltroEstado(''); }}
             style={{ padding: '7px 12px', backgroundColor: '#fee2e2', color: '#991b1b', border: '1px solid #fecaca', borderRadius: '6px', fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer' }}>
             ✕ Limpiar
           </button>
         )}
       </div>
 
+      {loadError && (
+        <div style={{ padding: '12px 16px', backgroundColor: '#fee2e2', border: '1px solid #fecaca', borderRadius: '8px', color: '#991b1b', fontSize: '0.88rem', marginBottom: '16px' }}>
+          <strong>Error al cargar:</strong> {loadError}
+          <button onClick={cargar} style={{ marginLeft: 12, padding: '3px 10px', backgroundColor: '#dc2626', color: 'white', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600 }}>Reintentar</button>
+        </div>
+      )}
       {loading ? (
         <p style={{ color: '#666' }}>Cargando...</p>
       ) : filtradas.length === 0 ? (
         <div style={{ padding: '32px', textAlign: 'center', backgroundColor: 'white', borderRadius: '10px', border: '1px solid #e5e7eb', color: '#9ca3af' }}>
-          No se encontraron solicitudes con los filtros aplicados.
+          {solicitudes.length === 0
+            ? 'No hay solicitudes de préstamo registradas.'
+            : 'No se encontraron solicitudes con los filtros aplicados.'}
         </div>
       ) : (
         <div style={{ overflowX: 'auto', backgroundColor: 'white', borderRadius: '10px', border: '1px solid #e5e7eb', boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
+                <th style={th}>No. solicitud</th>
                 <th style={th}>Empleado</th>
                 <th style={{ ...th, textAlign: 'right' }}>Monto</th>
                 <th style={{ ...th, textAlign: 'center' }}>Plazo</th>
@@ -312,6 +326,11 @@ export const PrestamosPage = () => {
                 return (
                   <tr key={sol.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
                     <td style={td}>
+                      <span style={{ fontFamily: 'monospace', fontSize: '0.78rem', backgroundColor: '#f1f5f9', color: '#334155', padding: '2px 7px', borderRadius: 4, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                        {sol.numero_solicitud ?? `#${sol.id}`}
+                      </span>
+                    </td>
+                    <td style={td}>
                       <div style={{ fontWeight: 600, fontSize: '0.86rem' }}>{nombreEmpleado(sol.empleado)}</div>
                       <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>No. {sol.empleado?.numero_empleado ?? '—'}</div>
                     </td>
@@ -326,7 +345,7 @@ export const PrestamosPage = () => {
                         {ESTADO_LABEL[sol.estado] ?? sol.estado}
                       </span>
                     </td>
-                    <td style={td}>{new Date(sol.created_at).toLocaleDateString('es-MX', { dateStyle: 'short', timeStyle: 'short' })}</td>
+                    <td style={td}>{new Date(sol.created_at).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' })}</td>
                     {(isRH || puedeAprobar || puedeConfirmar) && (
                       <td style={{ ...td, textAlign: 'center' }}>
                         <div style={{ display: 'flex', gap: 6, justifyContent: 'center', flexWrap: 'wrap' }}>
@@ -340,10 +359,17 @@ export const PrestamosPage = () => {
                               w.document.write('<html><body style="font-family:system-ui;padding:40px;text-align:center;color:#666">Cargando documento...</body></html>');
                               (async () => {
                                 try {
-                                  const res = await api.get(`personal/empleados/${sol.empleado_id}`);
+                                  const res = await api.get(`/personal/empleados/${sol.empleado_id}`);
                                   generarDocumentoPrestamo(sol, res.data, w);
-                                } catch {
-                                  generarDocumentoPrestamo(sol, sol.empleado ?? null, w);
+                                } catch (err: any) {
+                                  const fallbackEmp = sol.empleado ?? null;
+                                  if (!fallbackEmp) {
+                                    w.document.open();
+                                    w.document.write('<html><body style="font-family:system-ui;padding:40px;color:#dc2626"><h2>Error al cargar el documento</h2><p>No se pudo obtener la información del empleado. Verifica que el servidor esté en línea e intenta de nuevo.</p><button onclick="window.close()">Cerrar</button></body></html>');
+                                    w.document.close();
+                                    return;
+                                  }
+                                  generarDocumentoPrestamo(sol, fallbackEmp, w);
                                 }
                               })();
                             }}

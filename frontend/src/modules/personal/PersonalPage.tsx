@@ -32,6 +32,10 @@ const emptyForm: FormData = {
 const normalizeStr = (s: string) =>
   s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]/g, '');
 
+/** Elimina caracteres de control y nulos; no permite < > para prevenir inyección HTML. */
+const sanitizeText = (val: string) =>
+  val.replace(/[\u0000-\u001F\u007F]/g, '').replace(/[<>]/g, '');
+
 const estadoBadge = (estado: string) => {
   const map: Record<string, { bg: string; text: string }> = {
     activo: { bg: '#d4edda', text: '#155724' },
@@ -93,7 +97,7 @@ const modalSmall: React.CSSProperties = {
 };
 
 const modalLarge: React.CSSProperties = {
-  ...modalSmall, maxWidth: '800px', maxHeight: '90vh', overflowY: 'auto',
+  ...modalSmall, maxWidth: '800px', height: '90vh', display: 'flex', flexDirection: 'column', overflowY: 'hidden',
 };
 
 
@@ -118,29 +122,29 @@ function PermisosEspecialesPanel({ emp, onUpdated }: { emp: Empleado; onUpdated:
   };
 
   return (
-    <div style={{ marginBottom: '14px', padding: '10px 14px', backgroundColor: '#f8f9fa', border: '1px solid #dee2e6', borderRadius: '6px' }}>
-      <p style={{ margin: '0 0 8px', fontSize: '0.8rem', fontWeight: 600, color: '#6c757d' }}>Permisos especiales</p>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: saving ? 'not-allowed' : 'pointer', fontSize: '0.88rem' }}>
+    <div>
+      <p style={{ margin: '0 0 6px', fontSize: '0.8rem', fontWeight: 600, color: '#6c757d' }}>Permisos especiales</p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: saving ? 'not-allowed' : 'pointer', fontSize: '0.82rem', color: '#374151' }}>
           <input
             type="checkbox"
             checked={emp.exento_incidencias ?? false}
             disabled={saving}
             onChange={e => toggle('exento_incidencias', e.target.checked)}
           />
-          Exento de incidencias (no aparece en reportes de asistencia)
+          Exento de incidencias
         </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: saving ? 'not-allowed' : 'pointer', fontSize: '0.88rem' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: saving ? 'not-allowed' : 'pointer', fontSize: '0.82rem', color: '#374151' }}>
           <input
             type="checkbox"
             checked={emp.puede_checar_remoto ?? false}
             disabled={saving}
             onChange={e => toggle('puede_checar_remoto', e.target.checked)}
           />
-          Puede checar remotamente (portal web)
+          Puede checar remotamente
         </label>
       </div>
-      {error && <p style={{ margin: '6px 0 0', color: '#dc3545', fontSize: '0.8rem' }}>{error}</p>}
+      {error && <p style={{ margin: '4px 0 0', color: '#dc3545', fontSize: '0.78rem' }}>{error}</p>}
     </div>
   );
 }
@@ -166,7 +170,7 @@ export const PersonalPage = () => {
   const POR_PAGINA = 30;
   const [selectedEmpleado, setSelectedEmpleado] = useState<Empleado | null>(null);
   const [showDetalle, setShowDetalle] = useState(false);
-  const [detalleTab, setDetalleTab] = useState<'info' | 'asistencias'>('info');
+  const [detalleTab, setDetalleTab] = useState<'info' | 'asistencias' | 'editar' | 'checadores' | 'huella'>('info');
   const [empChecadas, setEmpChecadas] = useState<Asistencia[]>([]);
   const [loadingChecadas, setLoadingChecadas] = useState(false);
 
@@ -204,6 +208,10 @@ export const PersonalPage = () => {
   const [huellaTemplates, setHuellaTemplates] = useState<{ id: number; finger_index: number; source_device_nombre: string | null; updated_at: string | null }[]>([]);
   const [enrollingHuella, setEnrollingHuella] = useState(false);
   const [enrollStatus, setEnrollStatus] = useState<'idle' | 'completed'>('idle');
+  // Replicación de huella
+  const [replicaDevice, setReplicaDevice] = useState<number | null>(null);
+  const [replicando, setReplicando] = useState(false);
+  const [replicaOk, setReplicaOk] = useState<string | null>(null);
   const [, setEnrollId] = useState<number | null>(null);
 
   const loadData = useCallback(async () => {
@@ -278,7 +286,8 @@ export const PersonalPage = () => {
   }, [form.username, editingId, showFormModal]);
 
   const handleChange = (field: keyof FormData, value: string | boolean | number | number[] | null | undefined) => {
-    setForm(prev => ({ ...prev, [field]: value }));
+    const sanitized = typeof value === 'string' ? sanitizeText(value) : value;
+    setForm(prev => ({ ...prev, [field]: sanitized }));
   };
 
   const toggleDeviceInForm = (deviceId: number) => {
@@ -300,41 +309,6 @@ export const PersonalPage = () => {
     setShowFormModal(true);
   };
 
-  const startEdit = (emp: Empleado) => {
-    setForm({
-      numero_empleado: emp.numero_empleado,
-      nombre: emp.nombre,
-      apellido_paterno: emp.apellido_paterno || '',
-      apellido_materno: emp.apellido_materno || '',
-      email: emp.email || '',
-      telefono: emp.telefono || '',
-      empresa_id: emp.empresa_id ?? undefined,
-      departamento_id: emp.departamento_id ?? undefined,
-      puesto_id: emp.puesto_id ?? undefined,
-      curp: emp.curp || '',
-      rfc: emp.rfc || '',
-      nss: emp.nss || '',
-      direccion: emp.direccion || '',
-      colonia: emp.colonia || '',
-      cp: emp.cp || '',
-      ciudad: emp.ciudad || '',
-      fecha_nacimiento: emp.fecha_nacimiento ? emp.fecha_nacimiento.slice(0, 10) : '',
-      contacto_emergencia: emp.contacto_emergencia || '',
-      telefono_emergencia: emp.telefono_emergencia || '',
-      fecha_ingreso: emp.fecha_ingreso ? emp.fecha_ingreso.slice(0, 10) : '',
-      registrar_en_checador: false,
-      dispositivo_ids: [],
-      password: '',
-      username: emp.username || '',
-      horario_id: emp.horario_id ?? undefined,
-      horario_sabado_id: emp.horario_sabado_id ?? null,
-    });
-    setEditingId(emp.id);
-    setUsernameManual(false);
-    setUsernameStatus('idle');
-    setFormTab('personales');
-    setShowFormModal(true);
-  };
 
   const formTabStyle = (active: boolean): React.CSSProperties => ({
     padding: '10px 16px', cursor: 'pointer', border: 'none',
@@ -374,6 +348,11 @@ export const PersonalPage = () => {
         delete payload.dispositivo_ids;
         await api.put(`/personal/empleados/${editingId}`, payload);
         alert(payload.password ? 'Empleado y contraseña actualizados' : 'Empleado actualizado');
+        if (showDetalle) {
+          setShowDetalle(false);
+          loadData();
+          return;
+        }
       } else {
         await api.post('/personal/empleados', payload);
         const devCount = form.dispositivo_ids.length;
@@ -407,12 +386,6 @@ export const PersonalPage = () => {
     }
   };
 
-  const openChecadorModal = (emp: Empleado) => {
-    setChecadorTarget(emp);
-    setChecadorDevices([]);
-    setShowChecadorModal(true);
-  };
-
   const enviarAChecadores = async () => {
     if (!checadorTarget || checadorDevices.length === 0) { alert('Selecciona al menos un dispositivo'); return; }
     const nombre = `${checadorTarget.nombre} ${checadorTarget.apellido_paterno || ''} ${checadorTarget.apellido_materno || ''}`.trim();
@@ -424,24 +397,6 @@ export const PersonalPage = () => {
     } catch (error: unknown) {
       const err = error as { response?: { data?: { detail?: string } } };
       alert(err.response?.data?.detail || 'Error');
-    }
-  };
-
-  const openHuellaModal = async (emp: Empleado) => {
-    setHuellaTarget(emp);
-    setEnrollDevice(null);
-    setEnrollStatus('idle');
-    setEnrollId(null);
-    setHuellaTemplates([]);
-    setShowHuellaModal(true);
-    try {
-      const res = await api.get(`/asistencia/fingerprint-templates/${emp.numero_empleado}`);
-      const templates = Array.isArray(res.data) ? res.data : [];
-      setHuellaTemplates(templates);
-      setTieneHuella(templates.length > 0);
-    } catch {
-      setTieneHuella(false);
-      setHuellaTemplates([]);
     }
   };
 
@@ -463,6 +418,21 @@ export const PersonalPage = () => {
     setShowHuellaModal(false);
   };
 
+  const replicarHuella = async (emp: Empleado) => {
+    if (!replicaDevice) { alert('Selecciona un dispositivo destino'); return; }
+    setReplicando(true);
+    setReplicaOk(null);
+    try {
+      await api.post(`/asistencia/devices/${replicaDevice}/enqueue-replicate`, { numero_empleado: emp.numero_empleado });
+      const devNombre = activeDevices.find(d => d.id === replicaDevice)?.nombre || replicaDevice;
+      setReplicaOk(`Replicación encolada hacia "${devNombre}". El agente la procesará en el próximo ciclo.`);
+      setReplicaDevice(null);
+    } catch (err: any) {
+      alert(err.response?.data?.detail || 'Error al encolar replicación de huella');
+    } finally {
+      setReplicando(false);
+    }
+  };
 
   const getEmpresaNombre = (empresaId?: number | null) => {
     if (!empresaId) return '-';
@@ -633,10 +603,67 @@ export const PersonalPage = () => {
     }
   };
 
+  const loadHuellaTemplates = async (emp: Empleado) => {
+    setHuellaTemplates([]);
+    setTieneHuella(false);
+    setReplicaDevice(null);
+    setReplicaOk(null);
+    try {
+      const res = await api.get(`/asistencia/fingerprint-templates/${emp.numero_empleado}`);
+      const templates = Array.isArray(res.data) ? res.data : [];
+      setHuellaTemplates(templates);
+      setTieneHuella(templates.length > 0);
+    } catch {
+      setTieneHuella(false);
+      setHuellaTemplates([]);
+    }
+  };
+
   const viewDetail = (emp: Empleado) => {
     setSelectedEmpleado(emp);
     setDetalleTab('info');
     setEmpChecadas([]);
+    // Pre-poblar formulario de edición
+    setForm({
+      numero_empleado: emp.numero_empleado,
+      nombre: emp.nombre,
+      apellido_paterno: emp.apellido_paterno || '',
+      apellido_materno: emp.apellido_materno || '',
+      email: emp.email || '',
+      telefono: emp.telefono || '',
+      empresa_id: emp.empresa_id ?? undefined,
+      departamento_id: emp.departamento_id ?? undefined,
+      puesto_id: emp.puesto_id ?? undefined,
+      curp: emp.curp || '',
+      rfc: emp.rfc || '',
+      nss: emp.nss || '',
+      direccion: emp.direccion || '',
+      colonia: emp.colonia || '',
+      cp: emp.cp || '',
+      ciudad: emp.ciudad || '',
+      fecha_nacimiento: emp.fecha_nacimiento ? emp.fecha_nacimiento.slice(0, 10) : '',
+      contacto_emergencia: emp.contacto_emergencia || '',
+      telefono_emergencia: emp.telefono_emergencia || '',
+      fecha_ingreso: emp.fecha_ingreso ? emp.fecha_ingreso.slice(0, 10) : '',
+      registrar_en_checador: false,
+      dispositivo_ids: [],
+      password: '',
+      username: emp.username || '',
+      horario_id: emp.horario_id ?? undefined,
+      horario_sabado_id: emp.horario_sabado_id ?? null,
+    });
+    setEditingId(emp.id);
+    setUsernameManual(false);
+    setUsernameStatus('idle');
+    setFormTab('personales');
+    // Pre-poblar checadores
+    setChecadorTarget(emp);
+    setChecadorDevices([]);
+    // Pre-poblar huella
+    setHuellaTarget(emp);
+    setEnrollDevice(null);
+    setEnrollStatus('idle');
+    setEnrollId(null);
     setShowDetalle(true);
   };
 
@@ -979,15 +1006,15 @@ export const PersonalPage = () => {
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '14px' }}>
                     <div>
                       <label style={labelStyle}>Nombre *</label>
-                      <input style={inputStyle} value={form.nombre} onChange={e => handleChange('nombre', e.target.value)} required />
+                      <input style={inputStyle} value={form.nombre} onChange={e => handleChange('nombre', e.target.value)} required maxLength={100} />
                     </div>
                     <div>
                       <label style={labelStyle}>Apellido Paterno *</label>
-                      <input style={inputStyle} value={form.apellido_paterno} onChange={e => handleChange('apellido_paterno', e.target.value)} required />
+                      <input style={inputStyle} value={form.apellido_paterno} onChange={e => handleChange('apellido_paterno', e.target.value)} required maxLength={100} />
                     </div>
                     <div>
                       <label style={labelStyle}>Apellido Materno *</label>
-                      <input style={inputStyle} value={form.apellido_materno} onChange={e => handleChange('apellido_materno', e.target.value)} required />
+                      <input style={inputStyle} value={form.apellido_materno} onChange={e => handleChange('apellido_materno', e.target.value)} required maxLength={100} />
                     </div>
                     <div>
                       <label style={labelStyle}>Fecha de Nacimiento *</label>
@@ -995,35 +1022,35 @@ export const PersonalPage = () => {
                     </div>
                     <div style={{ gridColumn: '1 / -1' }}>
                       <label style={labelStyle}>Direccion</label>
-                      <input style={inputStyle} value={form.direccion} onChange={e => handleChange('direccion', e.target.value)} placeholder="Calle y numero" />
+                      <input style={inputStyle} value={form.direccion} onChange={e => handleChange('direccion', e.target.value)} placeholder="Calle y numero" maxLength={200} />
                     </div>
                     <div>
                       <label style={labelStyle}>Colonia</label>
-                      <input style={inputStyle} value={form.colonia} onChange={e => handleChange('colonia', e.target.value)} />
+                      <input style={inputStyle} value={form.colonia} onChange={e => handleChange('colonia', e.target.value)} maxLength={100} />
                     </div>
                     <div>
                       <label style={labelStyle}>CP</label>
-                      <input style={inputStyle} value={form.cp} onChange={e => handleChange('cp', e.target.value)} placeholder="5 digitos" maxLength={5} />
+                      <input style={inputStyle} value={form.cp} onChange={e => handleChange('cp', e.target.value.replace(/\D/g, ''))} placeholder="5 digitos" maxLength={5} />
                     </div>
                     <div>
                       <label style={labelStyle}>Ciudad</label>
-                      <input style={inputStyle} value={form.ciudad} onChange={e => handleChange('ciudad', e.target.value)} />
+                      <input style={inputStyle} value={form.ciudad} onChange={e => handleChange('ciudad', e.target.value)} maxLength={100} />
                     </div>
                     <div>
                       <label style={labelStyle}>Telefono</label>
-                      <input style={inputStyle} value={form.telefono} onChange={e => handleChange('telefono', e.target.value)} placeholder="10 digitos" />
+                      <input style={inputStyle} value={form.telefono} onChange={e => handleChange('telefono', e.target.value.replace(/\D/g, ''))} placeholder="10 digitos" maxLength={15} />
                     </div>
                     <div>
                       <label style={labelStyle}>Email</label>
-                      <input type="email" style={inputStyle} value={form.email} onChange={e => handleChange('email', e.target.value)} />
+                      <input type="email" style={inputStyle} value={form.email} onChange={e => handleChange('email', e.target.value)} maxLength={255} />
                     </div>
                     <div>
                       <label style={labelStyle}>Contacto de emergencia</label>
-                      <input style={inputStyle} value={form.contacto_emergencia} onChange={e => handleChange('contacto_emergencia', e.target.value)} />
+                      <input style={inputStyle} value={form.contacto_emergencia} onChange={e => handleChange('contacto_emergencia', e.target.value)} maxLength={150} />
                     </div>
                     <div>
                       <label style={labelStyle}>Telefono de emergencia</label>
-                      <input style={inputStyle} value={form.telefono_emergencia} onChange={e => handleChange('telefono_emergencia', e.target.value)} />
+                      <input style={inputStyle} value={form.telefono_emergencia} onChange={e => handleChange('telefono_emergencia', e.target.value.replace(/\D/g, ''))} maxLength={15} />
                     </div>
                   </div>
                 </div>
@@ -1248,9 +1275,10 @@ export const PersonalPage = () => {
         </div>
       )}
 
-      {/* ========== MODAL: DETALLE ========== */}
+      {/* ========== MODAL UNIFICADO: VER EMPLEADO ========== */}
       {showDetalle && selectedEmpleado && (() => {
         const emp = selectedEmpleado;
+
         const sections: { title: string; rows: [string, string | undefined | null][] }[] = [
           {
             title: 'Datos Personales',
@@ -1309,70 +1337,72 @@ export const PersonalPage = () => {
         })();
 
         const detTabStyle = (active: boolean): React.CSSProperties => ({
-          padding: '8px 20px', cursor: 'pointer', border: 'none',
+          padding: '9px 16px', cursor: 'pointer', border: 'none',
           borderBottom: active ? '3px solid #0ea5e9' : '3px solid transparent',
-          backgroundColor: 'transparent', fontWeight: active ? 600 : 400,
-          fontSize: '0.9rem', color: active ? '#0ea5e9' : '#888',
+          backgroundColor: active ? 'rgba(14,165,233,0.07)' : 'transparent',
+          fontWeight: active ? 600 : 400,
+          fontSize: '0.88rem', color: active ? '#0ea5e9' : '#666',
+          whiteSpace: 'nowrap',
         });
 
         return (
           <div style={modalOverlay} onClick={() => setShowDetalle(false)}>
-            <div style={modalLarge} onClick={e => e.stopPropagation()}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '16px', flexWrap: 'wrap', gap: '12px' }}>
+            <div style={{ ...modalLarge, maxWidth: '860px' }} onClick={e => e.stopPropagation()}>
+
+              {/* Header */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
                 <div>
-                  <h2 style={{ margin: '0 0 4px 0' }}>{nombreCompleto(emp)}</h2>
-                  <p style={{ margin: 0, color: '#666', fontSize: '0.9rem' }}>No. {emp.numero_empleado} &middot; {emp.departamento?.nombre || 'Sin departamento'} &middot; {emp.puesto?.nombre || 'Sin puesto'}</p>
+                  <h2 style={{ margin: '0 0 3px 0', fontSize: '1.2rem' }}>{nombreCompleto(emp)}</h2>
+                  <p style={{ margin: 0, color: '#666', fontSize: '0.88rem' }}>
+                    No. {emp.numero_empleado} &middot; {emp.departamento?.nombre || 'Sin departamento'} &middot; {emp.puesto?.nombre || 'Sin puesto'}
+                  </p>
                 </div>
-                <button onClick={() => setShowDetalle(false)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#999', lineHeight: 1 }}>&times;</button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  {estadoBadge(emp.estado)}
+                  {emp.estado !== 'baja' && (
+                    <button onClick={() => handleBaja(emp)} style={{ ...btnDanger, padding: '5px 14px', fontSize: '0.82rem' }}>
+                      Dar de Baja
+                    </button>
+                  )}
+                  <button onClick={() => setShowDetalle(false)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#999', lineHeight: 1, marginLeft: '4px' }}>&times;</button>
+                </div>
               </div>
 
-              {/* Barra de acciones — siempre visible dentro del modal */}
-              <div style={{
-                display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '16px',
-                padding: '10px 14px', backgroundColor: '#f0f9ff',
-                borderRadius: '8px', border: '1px solid #bae6fd',
-                alignItems: 'center',
-              }}>
-                {estadoBadge(emp.estado)}
-                <div style={{ width: '1px', height: '24px', backgroundColor: '#bae6fd', margin: '0 4px' }} />
-                <button onClick={() => startEdit(emp)} style={{ ...btnPrimary, padding: '6px 16px', fontSize: '0.85rem' }}>
-                  Editar
+              {/* Tabs unificadas */}
+              <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+              <div style={{ display: 'flex', borderBottom: '2px solid #e5e7eb', marginBottom: '18px', overflowX: 'auto', flexShrink: 0 }}>
+                <button style={detTabStyle(detalleTab === 'info')} onClick={() => setDetalleTab('info')}>
+                  Informacion
                 </button>
-                <button onClick={() => openChecadorModal(emp)} style={{ ...btnPrimary, padding: '6px 16px', fontSize: '0.85rem', backgroundColor: '#6f42c1' }}>
-                  Enviar a Checadores
-                </button>
-                <button onClick={() => openHuellaModal(emp)} style={{ ...btnPrimary, padding: '6px 16px', fontSize: '0.85rem', backgroundColor: '#20c997' }}>
-                  Gestion Huella
-                </button>
-                {emp.estado !== 'baja' && (
-                  <button onClick={() => handleBaja(emp)} style={{ ...btnDanger, padding: '6px 16px', fontSize: '0.85rem' }}>
-                    Dar de Baja
-                  </button>
-                )}
-              </div>
-
-              {/* Panel de permisos especiales — solo admin */}
-              {isAdmin && (
-                <PermisosEspecialesPanel
-                  emp={emp}
-                  onUpdated={(updated) => {
-                    setEmpleados((prev) => prev.map((e) => e.id === updated.id ? updated : e));
-                    setSelectedEmpleado(updated);
-                  }}
-                />
-              )}
-
-              {/* Sub-tabs dentro del detalle */}
-              <div style={{ display: 'flex', borderBottom: '2px solid #e5e7eb', marginBottom: '16px' }}>
-                <button style={detTabStyle(detalleTab === 'info')} onClick={() => setDetalleTab('info')}>Informacion</button>
                 <button style={detTabStyle(detalleTab === 'asistencias')} onClick={() => {
                   setDetalleTab('asistencias');
                   if (empChecadas.length === 0) loadChecadas(emp.id);
-                }}>Asistencias</button>
+                }}>
+                  Asistencias
+                </button>
+                <button style={detTabStyle(detalleTab === 'editar')} onClick={() => setDetalleTab('editar')}>
+                  Editar
+                </button>
+                {isAdmin && (
+                  <button style={detTabStyle(detalleTab === 'checadores')} onClick={() => setDetalleTab('checadores')}>
+                    Checadores
+                  </button>
+                )}
+                <button style={detTabStyle(detalleTab === 'huella')} onClick={() => {
+                  setDetalleTab('huella');
+                  loadHuellaTemplates(emp);
+                }}>
+                  Huella
+                </button>
               </div>
+
+              {/* Área de contenido con scroll */}
+              <div style={{ flex: 1, overflowY: 'auto', minHeight: 0 }}>
+
+              {/* ── TAB: INFORMACIÓN ── */}
               {detalleTab === 'info' && (
                 <>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: '16px' }}>
                     {sections.map(section => (
                       <div key={section.title} style={{ padding: '16px', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
                         <h4 style={{ margin: '0 0 12px 0', color: '#0ea5e9', borderBottom: '1px solid #e5e7eb', paddingBottom: '6px', fontSize: '0.95rem' }}>{section.title}</h4>
@@ -1392,17 +1422,15 @@ export const PersonalPage = () => {
                 </>
               )}
 
+              {/* ── TAB: ASISTENCIAS ── */}
               {detalleTab === 'asistencias' && (
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                    <p style={{ margin: 0, color: '#555', fontSize: '0.9rem' }}>
-                      {empChecadas.length} registro(s)
-                    </p>
+                    <p style={{ margin: 0, color: '#555', fontSize: '0.9rem' }}>{empChecadas.length} registro(s)</p>
                     <button onClick={() => loadChecadas(emp.id)} style={{ ...btnPrimary, padding: '6px 14px', fontSize: '0.8rem' }} disabled={loadingChecadas}>
                       {loadingChecadas ? 'Cargando...' : 'Actualizar'}
                     </button>
                   </div>
-
                   {loadingChecadas && empChecadas.length === 0 ? (
                     <p style={{ textAlign: 'center', color: '#888', padding: '20px 0' }}>Cargando asistencias...</p>
                   ) : empDayRows.length === 0 ? (
@@ -1421,18 +1449,11 @@ export const PersonalPage = () => {
                         </thead>
                         <tbody>
                           {empDayRows.map(row => (
-                            <tr key={row.key} style={{
-                              borderBottom: '1px solid #eee',
-                              backgroundColor: row.esTiempoExtra ? '#fff8e1' : 'transparent',
-                            }}>
+                            <tr key={row.key} style={{ borderBottom: '1px solid #eee', backgroundColor: row.esTiempoExtra ? '#fff8e1' : 'transparent' }}>
                               <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
                                 {row.fecha}
                                 {row.esTiempoExtra && (
-                                  <span style={{
-                                    marginLeft: '8px', padding: '2px 8px', borderRadius: '4px',
-                                    fontSize: '0.72rem', fontWeight: 600,
-                                    backgroundColor: '#ff9800', color: 'white',
-                                  }}>T. EXTRA</span>
+                                  <span style={{ marginLeft: '8px', padding: '2px 8px', borderRadius: '4px', fontSize: '0.72rem', fontWeight: 600, backgroundColor: '#ff9800', color: 'white' }}>T. EXTRA</span>
                                 )}
                               </td>
                               <td style={{ padding: '8px 12px', textAlign: 'center', fontWeight: 600, color: row.entrada ? '#155724' : '#ccc' }}>{row.entrada || '--:--'}</td>
@@ -1447,6 +1468,336 @@ export const PersonalPage = () => {
                   )}
                 </div>
               )}
+
+              {/* ── TAB: EDITAR ── */}
+              {detalleTab === 'editar' && (
+                <form onSubmit={handleSubmit}>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', borderBottom: '2px solid #e5e7eb', marginBottom: '16px' }}>
+                    <button type="button" style={formTabStyle(formTab === 'personales')} onClick={() => setFormTab('personales')}>Datos personales</button>
+                    <button type="button" style={formTabStyle(formTab === 'laborales')} onClick={() => setFormTab('laborales')}>Datos laborales</button>
+                  </div>
+
+                  {formTab === 'personales' && (
+                    <div style={{ padding: '8px 0 20px' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '14px' }}>
+                        <div>
+                          <label style={labelStyle}>Nombre *</label>
+                          <input style={inputStyle} value={form.nombre} onChange={e => handleChange('nombre', e.target.value)} required />
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Apellido Paterno *</label>
+                          <input style={inputStyle} value={form.apellido_paterno} onChange={e => handleChange('apellido_paterno', e.target.value)} required />
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Apellido Materno *</label>
+                          <input style={inputStyle} value={form.apellido_materno} onChange={e => handleChange('apellido_materno', e.target.value)} required />
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Fecha de Nacimiento *</label>
+                          <input type="date" style={inputStyle} value={form.fecha_nacimiento} onChange={e => handleChange('fecha_nacimiento', e.target.value)} required />
+                        </div>
+                        <div style={{ gridColumn: '1 / -1' }}>
+                          <label style={labelStyle}>Direccion</label>
+                          <input style={inputStyle} value={form.direccion} onChange={e => handleChange('direccion', e.target.value)} placeholder="Calle y numero" />
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Colonia</label>
+                          <input style={inputStyle} value={form.colonia} onChange={e => handleChange('colonia', e.target.value)} />
+                        </div>
+                        <div>
+                          <label style={labelStyle}>CP</label>
+                          <input style={inputStyle} value={form.cp} onChange={e => handleChange('cp', e.target.value)} placeholder="5 digitos" maxLength={5} />
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Ciudad</label>
+                          <input style={inputStyle} value={form.ciudad} onChange={e => handleChange('ciudad', e.target.value)} />
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Telefono</label>
+                          <input style={inputStyle} value={form.telefono} onChange={e => handleChange('telefono', e.target.value)} placeholder="10 digitos" />
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Email</label>
+                          <input type="email" style={inputStyle} value={form.email} onChange={e => handleChange('email', e.target.value)} />
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Contacto de emergencia</label>
+                          <input style={inputStyle} value={form.contacto_emergencia} onChange={e => handleChange('contacto_emergencia', e.target.value)} />
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Telefono de emergencia</label>
+                          <input style={inputStyle} value={form.telefono_emergencia} onChange={e => handleChange('telefono_emergencia', e.target.value)} />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {formTab === 'laborales' && (
+                    <div style={{ padding: '8px 0 20px' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px', marginBottom: '20px' }}>
+                        <div>
+                          <label style={labelStyle}>Empresa *</label>
+                          <select style={inputStyle} value={form.empresa_id ?? ''} onChange={e => { setNumeroManual(false); handleChange('empresa_id', e.target.value ? Number(e.target.value) : undefined); }} required>
+                            <option value="">-- Seleccione empresa --</option>
+                            {activeEmpresas.map(e2 => <option key={e2.id} value={e2.id}>{e2.nombre}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Departamento *</label>
+                          <select style={inputStyle} value={form.departamento_id ?? ''} onChange={e => handleChange('departamento_id', e.target.value ? Number(e.target.value) : undefined)} required>
+                            <option value="">-- Seleccione departamento --</option>
+                            {deptosForEmpresa(form.empresa_id).map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Puesto *</label>
+                          <select style={inputStyle} value={form.puesto_id ?? ''} onChange={e => handleChange('puesto_id', e.target.value ? Number(e.target.value) : undefined)} required>
+                            <option value="">-- Seleccione puesto --</option>
+                            {activePuestos.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Horario de trabajo (Lun–Vie)</label>
+                          <select style={inputStyle} value={form.horario_id ?? ''} onChange={e => handleChange('horario_id', e.target.value ? Number(e.target.value) : undefined)}>
+                            <option value="">-- Sin horario asignado --</option>
+                            {horarios.map(h => <option key={h.id} value={h.id}>{h.nombre} ({h.hora_entrada} – {h.hora_salida})</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Horario sábado</label>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '6px' }}>
+                            <input type="checkbox" id="chk-trabaja-sabado-det" checked={form.horario_sabado_id !== null && form.horario_sabado_id !== undefined}
+                              onChange={e => handleChange('horario_sabado_id', e.target.checked ? (horarios[0]?.id ?? null) : null)}
+                              style={{ width: '15px', height: '15px', cursor: 'pointer' }} />
+                            <label htmlFor="chk-trabaja-sabado-det" style={{ fontSize: '0.85rem', color: '#374151', cursor: 'pointer', margin: 0 }}>¿Trabaja los sábados?</label>
+                          </div>
+                          {(form.horario_sabado_id !== null && form.horario_sabado_id !== undefined) && (
+                            <select style={{ ...inputStyle, borderColor: '#d97706' }} value={form.horario_sabado_id ?? ''} onChange={e => handleChange('horario_sabado_id', e.target.value ? Number(e.target.value) : null)}>
+                              <option value="">-- Selecciona horario sábado --</option>
+                              {horarios.map(h => <option key={h.id} value={h.id}>{h.nombre} ({h.hora_entrada} – {h.hora_salida_sabado || h.hora_salida})</option>)}
+                            </select>
+                          )}
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Fecha de ingreso *</label>
+                          <input type="date" style={inputStyle} value={form.fecha_ingreso} onChange={e => handleChange('fecha_ingreso', e.target.value)} required />
+                        </div>
+                        <div>
+                          <label style={labelStyle}>CURP</label>
+                          <input style={inputStyle} value={form.curp} onChange={e => handleChange('curp', e.target.value.toUpperCase())} maxLength={18} placeholder="18 caracteres" />
+                        </div>
+                        <div>
+                          <label style={labelStyle}>RFC</label>
+                          <input style={inputStyle} value={form.rfc} onChange={e => handleChange('rfc', e.target.value.toUpperCase())} maxLength={13} placeholder="13 caracteres" />
+                        </div>
+                        <div>
+                          <label style={labelStyle}>NSS (IMSS)</label>
+                          <input style={inputStyle} value={form.nss} onChange={e => handleChange('nss', e.target.value)} maxLength={11} placeholder="11 digitos" />
+                        </div>
+                      </div>
+                      <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '16px' }}>
+                        <p style={{ margin: '0 0 12px', fontWeight: 600, fontSize: '0.88rem', color: '#374151' }}>Acceso al sistema</p>
+                        <div style={{ display: 'grid', gridTemplateColumns: isAdmin ? '1fr 1fr 1fr' : '1fr 1fr', gap: '14px' }}>
+                          <div>
+                            <label style={labelStyle}>Usuario</label>
+                            <div style={{ position: 'relative' }}>
+                              <input
+                                style={{ ...inputStyle, paddingRight: '28px', borderColor: usernameStatus === 'taken' ? '#dc3545' : usernameStatus === 'available' ? '#28a745' : undefined }}
+                                value={form.username || ''}
+                                onChange={e => { setUsernameManual(true); handleChange('username', e.target.value.toLowerCase().replace(/[^a-z0-9]/g, '')); }}
+                                placeholder="Auto-generado" autoComplete="off"
+                              />
+                              {usernameStatus === 'checking' && <span style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', fontSize: '0.75rem', color: '#6b7280' }}>...</span>}
+                              {usernameStatus === 'available' && <span style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', color: '#28a745', fontWeight: 700 }}>✓</span>}
+                              {usernameStatus === 'taken' && <span style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', color: '#dc3545', fontWeight: 700 }}>✗</span>}
+                            </div>
+                            {usernameStatus === 'taken' && <p style={{ margin: '4px 0 0', fontSize: '0.78rem', color: '#dc3545' }}>Usuario ya en uso</p>}
+                          </div>
+                          <div>
+                            <label style={labelStyle}>Nueva contraseña</label>
+                            <input type="password" style={inputStyle} value={form.password || ''} onChange={e => handleChange('password', e.target.value)} placeholder="Dejar vacio para no cambiar" autoComplete="new-password" />
+                          </div>
+                          {isAdmin && (
+                            <div style={{ display: 'flex', alignItems: 'flex-start', paddingTop: '2px' }}>
+                              <PermisosEspecialesPanel
+                                emp={emp}
+                                onUpdated={(updated) => {
+                                  setEmpleados((prev) => prev.map((e) => e.id === updated.id ? updated : e));
+                                  setSelectedEmpleado(updated);
+                                }}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', paddingTop: '12px', borderTop: '1px solid #e5e7eb' }}>
+                    <button type="button" onClick={() => setDetalleTab('info')} style={btnSecondary}>Cancelar</button>
+                    <button type="submit" style={saving ? { ...btnSuccess, opacity: 0.6, cursor: 'not-allowed' } : btnSuccess} disabled={saving}>
+                      {saving ? 'Guardando...' : 'Guardar Cambios'}
+                    </button>
+                  </div>
+                </form>
+              )}
+
+              {/* ── TAB: CHECADORES (solo admin) ── */}
+              {detalleTab === 'checadores' && isAdmin && (
+                <div>
+                  <p style={{ color: '#555', margin: '0 0 14px', fontSize: '0.9rem' }}>
+                    Selecciona los dispositivos a los que deseas enviar al empleado:
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '20px' }}>
+                    {activeDevices.filter(d => !d.nombre.toLowerCase().includes('portal')).map(d => (
+                      <label key={d.id} style={{
+                        ...checkboxDeviceStyle,
+                        backgroundColor: checadorDevices.includes(d.id) ? '#e8f5e9' : 'white',
+                        borderColor: checadorDevices.includes(d.id) ? '#4caf50' : '#d1d5db',
+                      }}>
+                        <input type="checkbox" checked={checadorDevices.includes(d.id)}
+                          onChange={() => setChecadorDevices(prev => prev.includes(d.id) ? prev.filter(x => x !== d.id) : [...prev, d.id])}
+                          style={{ width: '16px', height: '16px' }} />
+                        <div>
+                          <div style={{ fontWeight: 500 }}>{d.nombre}</div>
+                          {d.ubicacion && <div style={{ fontSize: '0.78rem', color: '#666' }}>{d.ubicacion}</div>}
+                        </div>
+                      </label>
+                    ))}
+                    {activeDevices.filter(d => !d.nombre.toLowerCase().includes('portal')).length === 0 && <p style={{ color: '#999' }}>No hay dispositivos activos.</p>}
+                  </div>
+                  <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                    <button onClick={enviarAChecadores} style={checadorDevices.length === 0 ? { ...btnSuccess, opacity: 0.5, cursor: 'not-allowed' } : btnSuccess} disabled={checadorDevices.length === 0}>
+                      Enviar a {checadorDevices.length} dispositivo(s)
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* ── TAB: HUELLA ── */}
+              {detalleTab === 'huella' && (
+                <div>
+                  {tieneHuella ? (
+                    <div style={{ padding: '12px 14px', borderRadius: '8px', marginBottom: '16px', backgroundColor: '#d4edda', border: '1px solid #c3e6cb' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: huellaTemplates.length > 0 ? '8px' : 0 }}>
+                        <span style={{ color: '#155724', fontWeight: 700, fontSize: '1rem' }}>&#10003;</span>
+                        <span style={{ fontWeight: 600, fontSize: '0.9rem', color: '#155724' }}>
+                          {huellaTemplates.length} huella{huellaTemplates.length !== 1 ? 's' : ''} registrada{huellaTemplates.length !== 1 ? 's' : ''} en el sistema
+                        </span>
+                      </div>
+                      {huellaTemplates.length > 0 && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                          {huellaTemplates.map(t => (
+                            <span key={t.id} style={{ padding: '3px 10px', borderRadius: '20px', backgroundColor: '#b8dfc8', color: '#155724', fontSize: '0.78rem', fontWeight: 500 }}>
+                              Dedo {t.finger_index + 1}{t.source_device_nombre ? ` · ${t.source_device_nombre}` : ''}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div style={{ padding: '10px 14px', borderRadius: '8px', marginBottom: '16px', backgroundColor: '#fff3cd', border: '1px solid #ffeeba' }}>
+                      <span style={{ fontWeight: 500, fontSize: '0.9rem', color: '#856404' }}>Sin huella registrada en el sistema</span>
+                    </div>
+                  )}
+
+                  {enrollStatus === 'completed' && (
+                    <div style={{ padding: '16px', backgroundColor: '#d4edda', borderRadius: '8px', marginBottom: '16px', display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+                      <span style={{ fontSize: '1.4rem', color: '#155724', lineHeight: 1 }}>&#10003;</span>
+                      <div>
+                        <p style={{ fontWeight: 700, fontSize: '0.95rem', color: '#155724', margin: '0 0 4px' }}>Solicitud de registro enviada</p>
+                        <p style={{ color: '#155724', fontSize: '0.85rem', margin: 0 }}>
+                          El agente procesara el registro de huella en el siguiente ciclo. Pide al empleado que coloque el dedo en el checador cuando el dispositivo lo solicite.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {enrollStatus === 'idle' && (
+                    <>
+                      <p style={{ margin: '0 0 12px', fontSize: '0.85rem', color: '#555' }}>
+                        Selecciona el dispositivo donde el empleado registrara su huella. Debe estar presente fisicamente frente al checador.
+                      </p>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
+                        {activeDevices.filter(d => !d.nombre.toLowerCase().includes('portal')).map(d => (
+                          <label key={d.id} style={{
+                            ...checkboxDeviceStyle,
+                            backgroundColor: enrollDevice === d.id ? '#e0f2f1' : 'white',
+                            borderColor: enrollDevice === d.id ? '#20c997' : '#d1d5db',
+                          }}>
+                            <input type="radio" name="enrollDevice" checked={enrollDevice === d.id}
+                              onChange={() => setEnrollDevice(d.id)}
+                              style={{ width: '16px', height: '16px' }} />
+                            <div>
+                              <div style={{ fontWeight: 500 }}>{d.nombre}</div>
+                              {d.ubicacion && <div style={{ fontSize: '0.78rem', color: '#666' }}>{d.ubicacion}</div>}
+                            </div>
+                          </label>
+                        ))}
+                        {activeDevices.filter(d => !d.nombre.toLowerCase().includes('portal')).length === 0 && <p style={{ color: '#999', fontSize: '0.85rem' }}>No hay dispositivos activos.</p>}
+                      </div>
+                      <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                        <button onClick={iniciarEnrollHuella}
+                          style={enrollingHuella || !enrollDevice ? { ...btnPrimary, backgroundColor: '#20c997', opacity: 0.6, cursor: 'not-allowed' } : { ...btnPrimary, backgroundColor: '#20c997' }}
+                          disabled={enrollingHuella || !enrollDevice}>
+                          {enrollingHuella ? 'Iniciando...' : 'Iniciar Registro de Huella'}
+                        </button>
+                      </div>
+                    </>
+                  )}
+
+                  {/* ── Sección Replicar Huella ── */}
+                  {tieneHuella && activeDevices.filter(d => !d.nombre.toLowerCase().includes('portal')).length > 1 && (
+                    <div style={{ marginTop: '20px', borderTop: '1px solid #e5e7eb', paddingTop: '16px' }}>
+                      <p style={{ fontWeight: 600, fontSize: '0.9rem', margin: '0 0 6px', color: '#374151' }}>
+                        Replicar huella a otro dispositivo
+                      </p>
+                      <p style={{ margin: '0 0 10px', fontSize: '0.82rem', color: '#6b7280' }}>
+                        Copia la huella almacenada a un segundo checador del mismo modelo. El agente lo procesará en el próximo ciclo.
+                      </p>
+
+                      {replicaOk && (
+                        <div style={{ padding: '10px 14px', borderRadius: '8px', backgroundColor: '#d4edda', border: '1px solid #c3e6cb', marginBottom: '12px', fontSize: '0.85rem', color: '#155724' }}>
+                          ✓ {replicaOk}
+                        </div>
+                      )}
+
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '12px' }}>
+                        {activeDevices
+                          .filter(d => !d.nombre.toLowerCase().includes('portal'))
+                          .map(d => (
+                            <label key={d.id} style={{
+                              ...checkboxDeviceStyle,
+                              backgroundColor: replicaDevice === d.id ? '#eff6ff' : 'white',
+                              borderColor: replicaDevice === d.id ? '#3b82f6' : '#d1d5db',
+                            }}>
+                              <input type="radio" name="replicaDevice" checked={replicaDevice === d.id}
+                                onChange={() => { setReplicaDevice(d.id); setReplicaOk(null); }}
+                                style={{ width: '16px', height: '16px' }} />
+                              <div>
+                                <div style={{ fontWeight: 500 }}>{d.nombre}</div>
+                                {d.ubicacion && <div style={{ fontSize: '0.78rem', color: '#666' }}>{d.ubicacion}</div>}
+                              </div>
+                            </label>
+                          ))}
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                        <button
+                          onClick={() => replicarHuella(emp)}
+                          disabled={replicando || !replicaDevice}
+                          style={replicando || !replicaDevice
+                            ? { ...btnPrimary, backgroundColor: '#3b82f6', opacity: 0.6, cursor: 'not-allowed' }
+                            : { ...btnPrimary, backgroundColor: '#3b82f6' }}>
+                          {replicando ? 'Encolando...' : 'Replicar Huella'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              </div>{/* fin área scroll */}
+              </div>{/* fin flex column tabs */}
             </div>
           </div>
         );
@@ -1462,7 +1813,7 @@ export const PersonalPage = () => {
             </p>
             <p style={{ fontSize: '0.85rem', color: '#555', margin: '0 0 12px' }}>Selecciona los dispositivos:</p>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '20px' }}>
-              {activeDevices.map(d => (
+              {activeDevices.filter(d => !d.nombre.toLowerCase().includes('portal')).map(d => (
                 <label key={d.id} style={{
                   ...checkboxDeviceStyle,
                   backgroundColor: checadorDevices.includes(d.id) ? '#e8f5e9' : 'white',
@@ -1479,7 +1830,7 @@ export const PersonalPage = () => {
                   </div>
                 </label>
               ))}
-              {activeDevices.length === 0 && <p style={{ color: '#999' }}>No hay dispositivos activos.</p>}
+              {activeDevices.filter(d => !d.nombre.toLowerCase().includes('portal')).length === 0 && <p style={{ color: '#999' }}>No hay dispositivos activos.</p>}
             </div>
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
               <button onClick={() => setShowChecadorModal(false)} style={btnSecondary}>Cancelar</button>

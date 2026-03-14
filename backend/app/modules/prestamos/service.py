@@ -79,6 +79,13 @@ def listar_solicitudes(
     return q.order_by(models.SolicitudPrestamo.created_at.desc()).offset(skip).limit(limit).all()
 
 
+def _asignar_numero_solicitud(db: Session, sol: models.SolicitudPrestamo) -> None:
+    """Genera y persiste el número de solicitud único: PRE-{año}-{id:06d}."""
+    año = sol.created_at.year if sol.created_at else __import__('datetime').datetime.utcnow().year
+    sol.numero_solicitud = f"PRE-{año}-{sol.id:06d}"
+    db.commit()
+
+
 def crear_solicitud(
     db: Session,
     data: schemas.SolicitudPrestamoCreate,
@@ -95,6 +102,7 @@ def crear_solicitud(
     db.add(sol)
     db.commit()
     db.refresh(sol)
+    _asignar_numero_solicitud(db, sol)
     resultado = _con_relaciones(db, sol.id)
     # Notificar a gerentes de la nueva solicitud
     nombre_emp = ""
@@ -126,6 +134,7 @@ def crear_solicitud_rh(
     db.add(sol)
     db.commit()
     db.refresh(sol)
+    _asignar_numero_solicitud(db, sol)
     resultado = _con_relaciones(db, sol.id)
     # Notificar a gerentes de la nueva solicitud
     nombre_emp = ""

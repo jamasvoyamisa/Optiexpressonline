@@ -172,6 +172,61 @@ def enqueue_user_multi(
     return {"results": results}
 
 
+@router.post("/devices/{device_id}/enqueue-replicate", response_model=schemas.PendingReplicateResponse, status_code=status.HTTP_201_CREATED)
+def enqueue_replicate(
+    device_id: int,
+    data: schemas.EnqueueReplicateRequest,
+    db: Session = Depends(get_db),
+):
+    """Encola la replicación de huella de un empleado hacia un dispositivo destino.
+    Requiere que el empleado ya tenga template almacenado en el backend."""
+    numero = data.numero_empleado.strip()
+
+    dispositivo = service.AsistenciaService.get_dispositivo(db, device_id)
+    if not dispositivo:
+        raise HTTPException(status_code=404, detail="Dispositivo no encontrado")
+
+    tiene_template = db.query(models.FingerprintTemplate).filter(
+        models.FingerprintTemplate.numero_empleado == numero
+    ).first()
+    if not tiene_template:
+        raise HTTPException(
+            status_code=400,
+            detail=f"El empleado {numero} no tiene huellas almacenadas en el sistema. "
+                   "Primero realiza un enroll en algún dispositivo."
+        )
+
+    existente = db.query(models.PendingReplicate).filter(
+        models.PendingReplicate.dispositivo_id == device_id,
+        models.PendingReplicate.numero_empleado == numero,
+    ).first()
+    if existente:
+        if existente.procesado:
+            existente.procesado = False
+            existente.procesado_at = None
+            db.commit()
+            db.refresh(existente)
+        return existente
+
+    pr = models.PendingReplicate(
+        dispositivo_id=device_id,
+        numero_empleado=numero,
+    )
+    db.add(pr)
+    db.commit()
+    db.refresh(pr)
+    return pr
+
+
+@router.get("/devices/{device_id}/pending-replicate", response_model=List[schemas.PendingReplicateResponse])
+def get_pending_replicate_for_device(device_id: int, db: Session = Depends(get_db)):
+    """Ver cola de replicaciones pendientes para un dispositivo"""
+    return db.query(models.PendingReplicate).filter(
+        models.PendingReplicate.dispositivo_id == device_id,
+        models.PendingReplicate.procesado == False,
+    ).all()
+
+
 @router.get("/fingerprint-templates/{numero_empleado}", response_model=List[schemas.FingerprintTemplateResponse])
 def get_templates_for_employee(numero_empleado: str, db: Session = Depends(get_db)):
     """Ver si un empleado tiene templates de huella almacenados, con nombre del dispositivo origen"""
@@ -363,6 +418,65 @@ def agent_upload_template(
         db.add(tpl)
     db.commit()
     return {"ok": True, "numero_empleado": data.numero_empleado.strip(), "finger_index": data.finger_index}
+
+
+@router.get("/agent/pending-replicate")
+def agent_get_pending_replicate(
+    dispositivo: models.Dispositivo = Depends(_get_device_from_api_key),
+    db: Session = Depends(get_db),
+):
+    """Replicaciones de huella pendientes para este dispositivo.
+    Retorna la lista con template_data incluido para que el agente los suba directamente."""
+    pending = db.query(models.PendingReplicate).filter(
+        models.PendingReplicate.dispositivo_id == dispositivo.id,
+        models.PendingReplicate.procesado == False,
+    ).all()
+
+    result = []
+    for pr in pending:
+        templates = db.query(models.FingerprintTemplate).filter(
+            models.FingerprintTemplate.numero_empleado == pr.numero_empleado,
+        ).all()
+        if not templates:
+            continue
+        emp = db.query(personal_models.Empleado).filter(
+            personal_models.Empleado.numero_empleado == pr.numero_empleado
+        ).first()
+        pin = str(emp.pin_checador).strip() if (emp and emp.pin_checador) else pr.numero_empleado
+        nombre = f"{emp.nombre or ''} {emp.apellido_paterno or ''}".strip() if emp else pr.numero_empleado
+
+        for tpl in templates:
+            result.append({
+                "id": pr.id,
+                "numero_empleado": pr.numero_empleado,
+                "user_id": pin,
+                "nombre": nombre,
+                "finger_index": tpl.finger_index,
+                "template_data": tpl.template_data,
+                "create_user_first": True,
+            })
+    return result
+
+
+@router.post("/agent/pending-replicate/{replicate_id}/mark-done")
+def agent_mark_replicate_done(
+    replicate_id: int,
+    success: bool = Query(True),
+    dispositivo: models.Dispositivo = Depends(_get_device_from_api_key),
+    db: Session = Depends(get_db),
+):
+    """El agente marca una replicación como procesada (éxito o fallo)."""
+    pr = db.query(models.PendingReplicate).filter(
+        models.PendingReplicate.id == replicate_id,
+        models.PendingReplicate.dispositivo_id == dispositivo.id,
+    ).first()
+    if not pr:
+        raise HTTPException(status_code=404, detail="No encontrado")
+    if success:
+        pr.procesado = True
+        pr.procesado_at = datetime.now(timezone.utc)
+    db.commit()
+    return {"ok": True, "success": success}
 
 
 @router.get("/agent/pending-templates")

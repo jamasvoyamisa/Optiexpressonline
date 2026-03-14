@@ -37,10 +37,14 @@ def get_current_empleado_with_rol(
                     is_rh = True
                 if rol.nombre in GERENTE_GENERAL_ROL_NAMES:
                     is_gerente_general = True
-        if empleado.puesto_rel and (empleado.puesto_rel.nombre or "").strip().lower() == "director":
-            is_director = True
-        if empleado.puesto_rel and (empleado.puesto_rel.nombre or "").strip().lower() == "gerente general":
-            is_gerente_general = True
+        if empleado.puesto_rel:
+            puesto_lower = (empleado.puesto_rel.nombre or "").strip().lower()
+            if puesto_lower == "director":
+                is_director = True
+            if puesto_lower == "gerente general":
+                is_gerente_general = True
+            if puesto_lower in ("rh", "recursos humanos"):
+                is_rh = True
         from app.modules.personal.models import Departamento
         from app.modules.personal import service as personal_service
         jefe_count = db.query(Departamento).filter(Departamento.jefe_id == empleado_id).count()

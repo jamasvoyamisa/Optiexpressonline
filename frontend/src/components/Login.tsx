@@ -41,13 +41,21 @@ export const Login = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    setLoading(true);
 
+    // Sanitización básica: recortar espacios, límite de longitud
+    const cleanUsername = username.trim().slice(0, 100);
+    const cleanPassword = password.slice(0, 200);
+
+    if (!cleanUsername || !cleanPassword) {
+      setError('Ingresa usuario y contraseña.');
+      return;
+    }
+
+    setLoading(true);
     try {
-      const authMe = await login(username, password);
+      const authMe = await login(cleanUsername, cleanPassword);
       if (authMe !== null) {
         const route = getDefaultRoute(authMe);
-        // Defer navigate para que el estado de auth se actualice antes de renderizar la ruta
         setTimeout(() => navigate(route, { replace: true }), 0);
       } else {
         setError('Credenciales incorrectas');
@@ -58,9 +66,9 @@ export const Login = () => {
       if (typeof msg === 'string') {
         setError(msg);
       } else if (ax?.response) {
-        setError('Error del servidor. Revisa la consola.');
+        setError('Error al iniciar sesión. Inténtalo de nuevo.');
       } else {
-        setError('No se pudo conectar al servidor. Verifica que el backend esté en ejecución (puerto 9081).');
+        setError('No se pudo conectar al servidor. Verifica tu conexión.');
       }
     } finally {
       setLoading(false);
@@ -73,40 +81,89 @@ export const Login = () => {
       justifyContent: 'center',
       alignItems: 'center',
       minHeight: '100vh',
-      backgroundColor: '#f5f5f5'
+      background: 'linear-gradient(135deg, #0f2057 0%, #1a4a8a 40%, #0e7ab5 70%, #0ea5c9 100%)',
+      overflow: 'hidden',
     }}>
+      {/* Orbes de fondo para que el glass tenga algo que difuminar */}
+      <div style={{ position: 'fixed', inset: 0, pointerEvents: 'none', overflow: 'hidden' }}>
+        <div style={{
+          position: 'absolute', top: '-160px', right: '-100px',
+          width: '520px', height: '520px', borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(14,165,233,0.45) 0%, transparent 70%)',
+        }} />
+        <div style={{
+          position: 'absolute', bottom: '-120px', left: '-120px',
+          width: '480px', height: '480px', borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(99,102,241,0.35) 0%, transparent 70%)',
+        }} />
+        <div style={{
+          position: 'absolute', top: '40%', left: '30%',
+          width: '300px', height: '300px', borderRadius: '50%',
+          background: 'radial-gradient(circle, rgba(255,255,255,0.08) 0%, transparent 70%)',
+        }} />
+      </div>
+
+      {/* Tarjeta glassmorphism */}
       <div style={{
-        backgroundColor: 'white',
-        padding: '2rem',
-        borderRadius: '8px',
-        boxShadow: '0 2px 10px rgba(0,0,0,0.1)',
+        position: 'relative',
+        zIndex: 10,
+        background: 'rgba(255, 255, 255, 0.12)',
+        backdropFilter: 'blur(20px)',
+        WebkitBackdropFilter: 'blur(20px)',
+        border: '1px solid rgba(255, 255, 255, 0.25)',
+        padding: '2.5rem',
+        borderRadius: '20px',
+        boxShadow: '0 8px 40px rgba(0,0,0,0.30), inset 0 1px 0 rgba(255,255,255,0.2)',
         width: '100%',
-        maxWidth: '400px'
+        maxWidth: '400px',
       }}>
-        <h1 style={{ textAlign: 'center', marginBottom: '2rem', color: '#333' }}>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '1.5rem' }}>
+          <img
+            src="/GPOCristal.png"
+            alt="Grupo Cristal"
+            style={{ maxWidth: '180px', height: 'auto', objectFit: 'contain', filter: 'brightness(0) invert(1)' }}
+          />
+        </div>
+        <h1 style={{
+          textAlign: 'center', marginBottom: '0.4rem',
+          color: '#ffffff', fontSize: '1.15rem', fontWeight: 700,
+          textShadow: '0 1px 4px rgba(0,0,0,0.2)',
+        }}>
           Sistema de Gestión Interna
         </h1>
+        <p style={{ textAlign: 'center', color: 'rgba(255,255,255,0.7)', fontSize: '0.85rem', marginBottom: '2rem' }}>
+          Inicia sesión para continuar
+        </p>
         <form onSubmit={handleSubmit}>
           <div style={{ marginBottom: '1rem' }}>
-            <label style={{ display: 'block', marginBottom: '0.5rem', color: '#555' }}>
-              Usuario (Email o Número de Empleado)
+            <label style={{ display: 'block', marginBottom: '0.4rem', color: 'rgba(255,255,255,0.85)', fontSize: '0.88rem', fontWeight: 500 }}>
+              Usuario
             </label>
             <input
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               required
+              autoComplete="username"
+              maxLength={100}
+              spellCheck={false}
               style={{
-                width: '100%',
-                padding: '0.75rem',
-                border: '1px solid #ddd',
-                borderRadius: '4px',
-                fontSize: '1rem'
+                width: '100%', padding: '0.7rem 0.9rem',
+                border: '1px solid rgba(255,255,255,0.3)', borderRadius: '10px',
+                fontSize: '0.95rem', color: '#ffffff',
+                background: 'rgba(255,255,255,0.15)',
+                backdropFilter: 'blur(6px)',
+                WebkitBackdropFilter: 'blur(6px)',
+                outline: 'none',
+                boxSizing: 'border-box',
+                transition: 'border-color 0.15s, background 0.15s',
               }}
+              onFocus={e => { e.target.style.borderColor = 'rgba(255,255,255,0.7)'; e.target.style.background = 'rgba(255,255,255,0.22)'; }}
+              onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.3)'; e.target.style.background = 'rgba(255,255,255,0.15)'; }}
             />
           </div>
           <div style={{ marginBottom: '1.5rem' }}>
-            <label style={{ display: 'block', marginBottom: '0.5rem', color: '#555' }}>
+            <label style={{ display: 'block', marginBottom: '0.4rem', color: 'rgba(255,255,255,0.85)', fontSize: '0.88rem', fontWeight: 500 }}>
               Contraseña
             </label>
             <input
@@ -114,22 +171,31 @@ export const Login = () => {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
+              autoComplete="current-password"
+              maxLength={200}
               style={{
-                width: '100%',
-                padding: '0.75rem',
-                border: '1px solid #ddd',
-                borderRadius: '4px',
-                fontSize: '1rem'
+                width: '100%', padding: '0.7rem 0.9rem',
+                border: '1px solid rgba(255,255,255,0.3)', borderRadius: '10px',
+                fontSize: '0.95rem', color: '#ffffff',
+                background: 'rgba(255,255,255,0.15)',
+                backdropFilter: 'blur(6px)',
+                WebkitBackdropFilter: 'blur(6px)',
+                outline: 'none',
+                boxSizing: 'border-box',
+                transition: 'border-color 0.15s, background 0.15s',
               }}
+              onFocus={e => { e.target.style.borderColor = 'rgba(255,255,255,0.7)'; e.target.style.background = 'rgba(255,255,255,0.22)'; }}
+              onBlur={e => { e.target.style.borderColor = 'rgba(255,255,255,0.3)'; e.target.style.background = 'rgba(255,255,255,0.15)'; }}
             />
           </div>
           {error && (
             <div style={{
-              color: 'red',
-              marginBottom: '1rem',
-              padding: '0.5rem',
-              backgroundColor: '#fee',
-              borderRadius: '4px'
+              color: '#fecdd3', marginBottom: '1rem', padding: '0.6rem 0.8rem',
+              background: 'rgba(239,68,68,0.25)',
+              border: '1px solid rgba(239,68,68,0.4)',
+              borderRadius: '8px',
+              fontSize: '0.875rem',
+              backdropFilter: 'blur(4px)',
             }}>
               {error}
             </div>
@@ -138,18 +204,20 @@ export const Login = () => {
             type="submit"
             disabled={loading}
             style={{
-              width: '100%',
-              padding: '0.75rem',
-              backgroundColor: '#0ea5e9',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              fontSize: '1rem',
+              width: '100%', padding: '0.75rem',
+              background: loading
+                ? 'rgba(14,165,233,0.4)'
+                : 'linear-gradient(135deg, rgba(14,165,233,0.9) 0%, rgba(6,100,175,0.9) 100%)',
+              color: 'white', border: '1px solid rgba(255,255,255,0.2)',
+              borderRadius: '10px',
+              fontSize: '0.95rem', fontWeight: 600,
               cursor: loading ? 'not-allowed' : 'pointer',
-              opacity: loading ? 0.6 : 1
+              letterSpacing: '0.02em',
+              boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
+              transition: 'opacity 0.15s',
             }}
           >
-            {loading ? 'Iniciando sesión...' : 'Iniciar Sesión'}
+            {loading ? 'Iniciando sesión...' : 'Iniciar sesión'}
           </button>
         </form>
       </div>

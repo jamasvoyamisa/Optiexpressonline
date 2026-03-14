@@ -966,7 +966,7 @@ export const ConfiguracionPage = () => {
         <div>
           <div style={{ padding: '16px', backgroundColor: '#f0f9ff', borderRadius: '8px', marginBottom: '20px', border: '1px solid #bae6fd' }}>
             <p style={{ margin: 0, fontSize: '0.9rem', color: '#0369a1' }}>
-              <strong>Usuarios Especiales</strong> no generan incidencias automáticas (faltas, retardos, salida anticipada, incompleta). Útil para directivos, visitas o personal con horarios flexibles.
+              <strong>Usuarios especiales</strong> no generan incidencias automáticas (faltas, retardos, salida anticipada, incompleta). Útil para directivos, visitas o personal con horarios flexibles.
             </p>
           </div>
           {loadingUsuariosEspeciales ? (

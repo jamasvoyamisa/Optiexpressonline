@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Intranet Optiexpress - Avisos</title>
+    <link rel="icon" type="image/png" href="images/Favicon.png">
+    <link rel="shortcut icon" type="image/png" href="images/Favicon.png">
+    <link rel="apple-touch-icon" href="images/Favicon.png">
+    <!-- Preload recursos críticos -->
+    <link rel="preload" href="styles.css" as="style">
+    <link rel="preload" href="images/Optiexpress_Logo.png" as="image">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="header-content">
+                <div class="logo-section">
+                    <a href="index.html">
+                        <img src="images/Optiexpress_Logo.png" alt="Optiexpress Logo" class="logo-img" width="200" height="50" fetchpriority="high">
+                    </a>
+                </div>
+                <div class="header-nav">
+                    <a href="avisos.html" class="nav-link">Avisos</a>
+                    <a href="promociones-activas.html" class="nav-link">Promociones Activas</a>
+                    <a href="catalogos.html" class="nav-link">Catálogos</a>
+                </div>
+                <div class="header-right">
+                    <a href="https://web.whatsapp.com" target="_blank" class="what-link">
+                        <img src="images/what.png" alt="WhatsApp" class="what-img" width="30" height="30" loading="lazy">
+                    </a>
+                    <a href="/login" class="btn-login">Iniciar Sesión</a>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <div class="container main-content">
+        <div class="carousel-container">
+            <div class="carousel-wrapper" id="carouselWrapper">
+                <!-- Las promociones con imágenes se cargarán aquí dinámicamente -->
+            </div>
+        </div>
+    </div>
+
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <div class="footer-logo">
+                        <img src="images/Favicon.png" alt="Optiexpress Logo" class="footer-logo-img" width="40" height="40" loading="lazy">
+                        <h3>Optiexpress</h3>
+                    </div>
+                    <p class="footer-description">Distribuidora mayorista de artículos ópticos con más de 50 años de experiencia. Especialistas en lentes oftálmicos, lentes de contacto, armazones, equipo óptico y accesorios.</p>
+                </div>
+                
+                <div class="footer-section">
+                    <h4>Sucursales</h4>
+                    <div class="footer-info">
+                        <p><strong>Guadalajara</strong></p>
+                        <p>📍 Av. Juárez 545 int 105, Col. Centro, GDL C.P. 44100</p>
+                        <p>📞 Tel: (33) 3614-5285 Ext. 1,2,3 y 4 / (33) 2362-9378</p>
+                        <p style="margin-top: 15px;"><strong>CDMX</strong></p>
+                        <p>📍 Bolivar 31 Desp. 201 A y B, Col. Centro, CDMX C.P. 06000</p>
+                        <p>📞 Tel: (55) 5521-7747 / (55) 8057-7385</p>
+                    </div>
+                </div>
+                
+                <div class="footer-section">
+                    <h4>Horarios de Atención</h4>
+                    <div class="footer-info">
+                        <p>Lunes - Viernes: 9:00 AM - 6:00 PM</p>
+                        <p>Sábados: 9:00 AM - 2:00 PM</p>
+                        <p>Domingos: Cerrado</p>
+                    </div>
+                </div>
+                
+            </div>
+            
+            <div class="footer-bottom">
+                <p>&copy; <span id="currentYear"></span> OptiExpress. Todos los derechos reservados. | <a href="https://optiexpress.com.mx" target="_blank">optiexpress.com.mx</a></p>
+            </div>
+        </div>
+    </footer>
+
+    <script src="aurora.js" defer></script>
+    <script src="script.js" defer></script>
+    <script>
+        // Actualizar año actual en el footer
+        document.addEventListener('DOMContentLoaded', () => {
+            const yearElement = document.getElementById('currentYear');
+            if (yearElement) {
+                yearElement.textContent = new Date().getFullYear();
+            }
+        });
+
+    </script>
+</body>
+</html>

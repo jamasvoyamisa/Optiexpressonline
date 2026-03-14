@@ -12,3 +12,4 @@ class ChecadaRemotaResponse(BaseModel):
     mensaje: str
     tipo: str | None = None  # entrada, salida_comer, regreso_comer, salida
     timestamp: str | None = None
+    nombre_empleado: str | None = None

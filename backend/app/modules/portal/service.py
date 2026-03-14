@@ -96,11 +96,13 @@ def registrar_checada_remota(
     ).first()
     if existente:
         ts_mex = to_mexico(timestamp) or timestamp
+        nombre_emp = f"{empleado.nombre} {empleado.apellido_paterno or ''}".strip()
         return ChecadaRemotaResponse(
             ok=True,
             mensaje="Checada registrada.",
             tipo=existente.tipo.value if existente.tipo else None,
             timestamp=ts_mex.strftime("%Y-%m-%d %H:%M:%S") if ts_mex else None,
+            nombre_empleado=nombre_emp or None,
         )
 
     from app.modules.asistencia.biometric.sync_service import SyncService
@@ -128,9 +130,11 @@ def registrar_checada_remota(
 
     ts_mex = to_mexico(timestamp) or timestamp
     tipo_label = tipo.value if tipo else "entrada"
+    nombre_emp = f"{empleado.nombre} {empleado.apellido_paterno or ''}".strip()
     return ChecadaRemotaResponse(
         ok=True,
         mensaje=f"Checada registrada: {tipo_label}",
         tipo=tipo_label,
         timestamp=ts_mex.strftime("%Y-%m-%d %H:%M:%S") if ts_mex else None,
+        nombre_empleado=nombre_emp or None,
     )

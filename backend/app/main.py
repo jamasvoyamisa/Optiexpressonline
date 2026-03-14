@@ -134,6 +134,8 @@ app.include_router(incapacidades_router)
 from app.modules.prestamos.routes import router as prestamos_router
 app.include_router(prestamos_router)
 app.include_router(portal_router)
+from app.modules.landing.routes import router as landing_router
+app.include_router(landing_router)
 # ADMS (iclock) ya no se usa; solo el agente local sincroniza checadas
 
 if __name__ == "__main__":

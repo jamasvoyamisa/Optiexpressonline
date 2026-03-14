@@ -215,6 +215,35 @@ class CloudSync:
             logger.error(f"Error al marcar delete done: {e}")
             return False
 
+    def get_pending_replicate(self) -> list:
+        """Obtiene huellas pendientes de replicar a este dispositivo"""
+        try:
+            url = f"{self.base_url}/agent/pending-replicate"
+            response = requests.get(url, headers=self.headers, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                result = data if isinstance(data, list) else []
+                if result:
+                    logger.info(f"API: {len(result)} huella(s) pendiente(s) de replicar")
+                return result
+            return []
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error al obtener pending replicate: {e}")
+            return []
+
+    def mark_replicate_done(self, replicate_id: int, success: bool = True) -> bool:
+        """Marca replicación como procesada"""
+        try:
+            url = f"{self.base_url}/agent/pending-replicate/{replicate_id}/mark-done"
+            response = requests.post(url, params={"success": success}, headers=self.headers, timeout=10)
+            if response.status_code == 200:
+                logger.info(f"Replicate {replicate_id} marcado como {'OK' if success else 'fallido'}")
+                return True
+            return False
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error al marcar replicate done: {e}")
+            return False
+
     def get_pending_templates(self) -> list:
         """Obtiene templates pendientes de replicar a este dispositivo"""
         try:

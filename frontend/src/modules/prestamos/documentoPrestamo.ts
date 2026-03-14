@@ -58,9 +58,8 @@ export const generarDocumentoPrestamo = (
   const esBorrador = sol.estado === 'pendiente';
   const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
 
-  const nombreCompleto = emp
-    ? [emp.nombre, emp.apellido_paterno, emp.apellido_materno].filter(Boolean).join(' ')
-    : '';
+  // nombreCompleto no se usa directamente (los campos se inyectan por separado en el HTML)
+  // const nombreCompleto = emp ? [emp.apellido_paterno, emp.apellido_materno, emp.nombre].filter(Boolean).join(' ') : '';
 
   const html = `<!DOCTYPE html>
 <html lang="es">
@@ -74,7 +73,11 @@ export const generarDocumentoPrestamo = (
     font-family: 'Arial', sans-serif;
     font-size: 11pt;
     color: #222;
-    background: #fff;
+    background: #d1d5db;
+    padding: 20px 0 30px;
+  }
+  @media print {
+    body { background: #fff; padding: 0; }
   }
   .no-print {
     padding: 10px 20px;
@@ -84,13 +87,29 @@ export const generarDocumentoPrestamo = (
     align-items: center;
     gap: 10px;
   }
-  @media print { .no-print { display: none !important; } }
+  @media print {
+    .no-print { display: none !important; }
+    @page {
+      margin: 1.5cm;
+      size: A4;
+    }
+  }
 
   .page {
     width: 21cm;
     min-height: 29.7cm;
     margin: 0 auto;
     padding: 1.8cm 1.8cm 1.4cm;
+    background: #fff;
+    border: 1px solid #b0b7c3;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.18);
+  }
+  @media print {
+    .page {
+      border: none;
+      box-shadow: none;
+      margin: 0;
+    }
   }
 
   /* ── Encabezado ── */
@@ -129,8 +148,8 @@ export const generarDocumentoPrestamo = (
     display: flex;
     align-items: flex-end;
     justify-content: space-between;
-    margin-top: 0.4cm;
-    margin-bottom: 0.35cm;
+    margin-top: 1.1cm;
+    margin-bottom: 1cm;
   }
   .sec-label {
     display: flex;
@@ -199,6 +218,7 @@ export const generarDocumentoPrestamo = (
     gap: 0;
     padding: 2px 0 0;
     margin-bottom: 0.15cm;
+    padding-left: 4.3cm;
   }
   .sublabels span {
     flex: 1;
@@ -316,6 +336,17 @@ export const generarDocumentoPrestamo = (
 </head>
 <body>
 
+<style id="print-override"></style>
+<script>
+  window.addEventListener('beforeprint', function() {
+    document.getElementById('print-override').textContent =
+      '@page { margin: 0; size: A4; }';
+  });
+  window.addEventListener('afterprint', function() {
+    document.getElementById('print-override').textContent = '';
+  });
+</script>
+
 <div class="no-print">
   <button class="btn-print" onclick="window.print()">🖨️ Imprimir</button>
   <button class="btn-close" onclick="window.close()">✕ Cerrar</button>
@@ -351,11 +382,11 @@ export const generarDocumentoPrestamo = (
   </div>
 
   <!-- Nombre de colaborador -->
-  <div class="field-row">
-    <div class="field">
-      <span class="field-lbl">Nombre de colaborador:</span>
-      <span class="field-val">${nombreCompleto}</span>
-    </div>
+  <div class="field-row" style="align-items:flex-end; gap:0;">
+    <span class="field-lbl" style="flex-shrink:0; padding-right:8px;">Nombre de colaborador:</span>
+    <span class="field-val" style="flex:1; text-align:center;">${val(emp?.apellido_paterno)}</span>
+    <span class="field-val" style="flex:1; text-align:center; margin-left:4px;">${val(emp?.apellido_materno)}</span>
+    <span class="field-val" style="flex:1; text-align:center; margin-left:4px;">${val(emp?.nombre)}</span>
   </div>
   <!-- sub-etiquetas Apellido Paterno / Materno / Nombre(s) -->
   <div class="sublabels">
@@ -485,10 +516,20 @@ export const generarDocumentoPrestamo = (
 </body>
 </html>`;
 
-  const w = targetWindow ?? window.open('', '_blank', 'width=900,height=1000,scrollbars=yes');
+  // Ancho: A4 (794px) + padding body (0) + borde + sombra + scrollbar ≈ 870px
+  // Alto: limitado al 90% de la pantalla disponible; el documento se desplaza si no entra
+  const screenH = typeof window !== 'undefined' ? Math.round(window.screen.availHeight * 0.9) : 950;
+  const w = targetWindow ?? window.open('', '_blank', `width=870,height=${screenH},scrollbars=yes,resizable=yes`);
   if (w) {
     w.document.open();
     w.document.write(html);
     w.document.close();
+    // Centra la ventana en la pantalla
+    try {
+      const screenW = window.screen.availWidth;
+      const left = Math.round((screenW - 870) / 2);
+      const top = Math.round((window.screen.availHeight - screenH) / 2);
+      w.moveTo(left, top);
+    } catch (_) { /* algunos navegadores bloquean moveTo */ }
   }
 };

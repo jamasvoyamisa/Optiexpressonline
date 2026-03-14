@@ -63,6 +63,7 @@ class EmpleadoResumen(BaseModel):
 
 class SolicitudPrestamoResponse(BaseModel):
     id: int
+    numero_solicitud: Optional[str] = None
     empleado_id: int
     monto: Decimal
     plazo_meses: int

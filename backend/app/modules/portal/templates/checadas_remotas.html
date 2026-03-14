@@ -26,58 +26,75 @@
       box-shadow: 0 8px 32px rgba(0,0,0,0.3);
       border: 1px solid rgba(255,255,255,0.1);
     }
-    h1 {
-      margin: 0 0 0.5rem 0;
-      font-size: 1.5rem;
-      font-weight: 600;
-    }
-    .subtitle {
-      color: rgba(255,255,255,0.7);
-      font-size: 0.9rem;
-      margin-bottom: 1.5rem;
-    }
-    label {
-      display: block;
-      margin-bottom: 0.35rem;
-      font-size: 0.85rem;
-      color: rgba(255,255,255,0.9);
-    }
+    h1 { margin: 0 0 0.5rem 0; font-size: 1.5rem; font-weight: 600; }
+    .subtitle { color: rgba(255,255,255,0.7); font-size: 0.9rem; margin-bottom: 1.5rem; }
+    label { display: block; margin-bottom: 0.35rem; font-size: 0.85rem; color: rgba(255,255,255,0.9); }
     select, input {
-      width: 100%;
-      padding: 0.75rem 1rem;
-      border-radius: 8px;
+      width: 100%; padding: 0.75rem 1rem; border-radius: 8px;
       border: 1px solid rgba(255,255,255,0.2);
-      background: rgba(255,255,255,0.08);
-      color: #fff;
-      font-size: 1rem;
-      margin-bottom: 1rem;
+      background: rgba(255,255,255,0.08); color: #fff;
+      font-size: 1rem; margin-bottom: 1rem;
     }
     select option { background: #1e3a5f; color: #fff; }
     input::placeholder { color: rgba(255,255,255,0.4); }
-    button {
-      width: 100%;
-      padding: 1rem;
-      border: none;
-      border-radius: 8px;
-      background: #0ea5e9;
-      color: #fff;
-      font-size: 1.1rem;
-      font-weight: 600;
-      cursor: pointer;
-      transition: background 0.2s;
+    button.btn-submit {
+      width: 100%; padding: 1rem; border: none; border-radius: 8px;
+      background: #0ea5e9; color: #fff; font-size: 1.1rem; font-weight: 600;
+      cursor: pointer; transition: background 0.2s;
     }
-    button:hover:not(:disabled) { background: #0284c7; }
-    button:disabled { opacity: 0.6; cursor: not-allowed; }
-    .msg {
-      margin-top: 1rem;
-      padding: 0.75rem 1rem;
-      border-radius: 8px;
-      font-size: 0.95rem;
-      text-align: center;
+    button.btn-submit:hover:not(:disabled) { background: #0284c7; }
+    button.btn-submit:disabled { opacity: 0.6; cursor: not-allowed; }
+    .msg-err {
+      margin-top: 1rem; padding: 0.75rem 1rem; border-radius: 8px;
+      font-size: 0.95rem; text-align: center;
+      background: rgba(239,68,68,0.3); color: #fca5a5;
     }
-    .msg.ok { background: rgba(34, 197, 94, 0.3); color: #86efac; }
-    .msg.err { background: rgba(239, 68, 68, 0.3); color: #fca5a5; }
-    .msg.hide { display: none; }
+    .hide { display: none !important; }
+
+    /* ── Modal ── */
+    .modal-overlay {
+      position: fixed; inset: 0; z-index: 100;
+      display: flex; align-items: center; justify-content: center;
+      background: rgba(0,0,0,0.55);
+      backdrop-filter: blur(4px);
+    }
+    .modal-box {
+      background: #fff; border-radius: 20px;
+      padding: 2.5rem 2rem; max-width: 340px; width: 90%;
+      box-shadow: 0 24px 60px rgba(0,0,0,0.35);
+      text-align: center; color: #111;
+    }
+    .modal-icon {
+      width: 72px; height: 72px; border-radius: 50%;
+      margin: 0 auto 14px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 2rem;
+    }
+    .modal-badge {
+      display: inline-block; padding: 4px 16px; border-radius: 20px;
+      font-size: 0.88rem; font-weight: 700; margin-bottom: 14px;
+    }
+    .modal-nombre {
+      font-size: 1.15rem; font-weight: 700; color: #1e3a5f; margin: 0 0 4px;
+    }
+    .modal-hora {
+      font-size: 2rem; font-weight: 800; color: #0f172a;
+      letter-spacing: 0.02em; margin: 0 0 2px;
+    }
+    .modal-fecha {
+      font-size: 0.85rem; color: #6b7280; margin: 0 0 16px;
+    }
+    .modal-ok {
+      color: #16a34a; font-size: 0.9rem; font-weight: 600;
+      margin: 0 0 18px; border-top: 1px solid #f0f0f0; padding-top: 14px;
+    }
+    .btn-aceptar {
+      padding: 10px 36px; background: #0ea5e9; color: #fff;
+      border: none; border-radius: 10px; font-size: 0.95rem;
+      font-weight: 700; cursor: pointer;
+      box-shadow: 0 4px 12px rgba(14,165,233,0.4);
+    }
+    .btn-aceptar:hover { background: #0284c7; }
   </style>
 </head>
 <body>
@@ -93,69 +110,116 @@
       <input type="text" id="numero" placeholder="Ej: 001" required autocomplete="username">
       <label for="password">Contraseña</label>
       <input type="password" id="password" placeholder="Tu contraseña de la app" required autocomplete="current-password">
-      <button type="submit" id="btn">Registrar checada</button>
+      <button type="submit" class="btn-submit" id="btn">Registrar checada</button>
     </form>
-    <div id="msg" class="msg hide"></div>
+    <div id="msg-err" class="msg-err hide"></div>
   </div>
-  <script>
-    const form = document.getElementById('form');
-    const empresaSelect = document.getElementById('empresa');
-    const numeroInput = document.getElementById('numero');
-    const passwordInput = document.getElementById('password');
-    const btn = document.getElementById('btn');
-    const msgEl = document.getElementById('msg');
 
+  <!-- Modal de confirmación -->
+  <div id="modal" class="modal-overlay hide">
+    <div class="modal-box">
+      <div id="modal-icon" class="modal-icon"></div>
+      <div id="modal-badge" class="modal-badge"></div>
+      <p id="modal-nombre" class="modal-nombre"></p>
+      <p id="modal-hora" class="modal-hora"></p>
+      <p id="modal-fecha" class="modal-fecha"></p>
+      <p class="modal-ok">✓ Checada registrada correctamente</p>
+      <button class="btn-aceptar" onclick="cerrarModal()">Aceptar</button>
+    </div>
+  </div>
+
+  <script>
     const API = '/api/v1/portal';
+
+    const TIPOS = {
+      entrada:       { label: 'Entrada',          color: '#065f46', bg: '#d1fae5', icon: '🟢' },
+      salida_comer:  { label: 'Salida a comer',   color: '#92400e', bg: '#fef3c7', icon: '🍽️' },
+      regreso_comer: { label: 'Regreso de comer', color: '#1e40af', bg: '#dbeafe', icon: '↩️' },
+      salida:        { label: 'Salida',           color: '#991b1b', bg: '#fee2e2', icon: '🔴' },
+    };
 
     async function loadEmpresas() {
       try {
         const r = await fetch(API + '/empresas');
         const data = await r.json();
-        empresaSelect.innerHTML = '<option value="">-- Selecciona tu empresa --</option>';
+        const sel = document.getElementById('empresa');
+        sel.innerHTML = '<option value="">-- Selecciona tu empresa --</option>';
         data.forEach(e => {
           const opt = document.createElement('option');
           opt.value = e.id;
           opt.textContent = e.nombre;
-          empresaSelect.appendChild(opt);
+          sel.appendChild(opt);
         });
-      } catch (err) {
-        showMsg('No se pudieron cargar las empresas. Verifica la conexión.', false);
+        if (data.length === 1) sel.value = data[0].id;
+      } catch {
+        mostrarError('No se pudieron cargar las empresas. Verifica la conexión.');
       }
     }
 
-    function showMsg(text, ok) {
-      msgEl.textContent = text;
-      msgEl.className = 'msg ' + (ok ? 'ok' : 'err');
-      msgEl.classList.remove('hide');
+    function mostrarError(texto) {
+      const el = document.getElementById('msg-err');
+      el.textContent = texto;
+      el.classList.remove('hide');
     }
 
-    function hideMsg() {
-      msgEl.classList.add('hide');
+    function ocultarError() {
+      document.getElementById('msg-err').classList.add('hide');
     }
 
-    form.addEventListener('submit', async (e) => {
+    function abrirModal(data) {
+      const tipo = TIPOS[data.tipo] || { label: data.tipo || 'Checada', color: '#374151', bg: '#f3f4f6', icon: '✅' };
+
+      document.getElementById('modal-icon').style.background = tipo.bg;
+      document.getElementById('modal-icon').textContent = tipo.icon;
+
+      const badge = document.getElementById('modal-badge');
+      badge.textContent = tipo.label;
+      badge.style.background = tipo.bg;
+      badge.style.color = tipo.color;
+
+      document.getElementById('modal-nombre').textContent = data.nombre_empleado || '';
+
+      if (data.timestamp) {
+        const hora = data.timestamp.slice(11, 16);
+        const fecha = data.timestamp.slice(0, 10);
+        document.getElementById('modal-hora').textContent = hora;
+        document.getElementById('modal-fecha').textContent = fecha;
+      } else {
+        document.getElementById('modal-hora').textContent = '';
+        document.getElementById('modal-fecha').textContent = '';
+      }
+
+      document.getElementById('modal').classList.remove('hide');
+    }
+
+    function cerrarModal() {
+      document.getElementById('modal').classList.add('hide');
+    }
+
+    document.getElementById('form').addEventListener('submit', async (e) => {
       e.preventDefault();
-      hideMsg();
+      ocultarError();
+      const btn = document.getElementById('btn');
       btn.disabled = true;
       try {
         const r = await fetch(API + '/checadas', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            empresa_id: parseInt(empresaSelect.value),
-            numero_empleado: numeroInput.value.trim(),
-            password: passwordInput.value,
+            empresa_id: parseInt(document.getElementById('empresa').value),
+            numero_empleado: document.getElementById('numero').value.trim(),
+            password: document.getElementById('password').value,
           }),
         });
         const data = await r.json();
         if (data.ok) {
-          showMsg(data.timestamp ? `${data.mensaje} (${data.timestamp})` : data.mensaje, true);
-          passwordInput.value = '';
+          document.getElementById('password').value = '';
+          abrirModal(data);
         } else {
-          showMsg(data.mensaje || 'Error al registrar', false);
+          mostrarError(data.mensaje || 'Error al registrar la checada.');
         }
-      } catch (err) {
-        showMsg('Error de conexión. Intenta de nuevo.', false);
+      } catch {
+        mostrarError('Error de conexión. Intenta de nuevo.');
       } finally {
         btn.disabled = false;
       }

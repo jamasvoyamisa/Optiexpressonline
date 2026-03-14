@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Diseños Popup Cumpleaños</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', sans-serif; background: #1a1a2e; color: #fff; padding: 30px 20px; }
+    h1 { text-align: center; margin-bottom: 10px; font-size: 1.6rem; color: #fff; }
+    .subtitulo { text-align: center; color: #aaa; margin-bottom: 40px; font-size: 0.95rem; }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 40px; max-width: 1400px; margin: 0 auto; }
+
+    .card-wrapper { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+    .card-label { font-size: 0.85rem; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: #888; }
+    .preview-box {
+      width: 100%; min-height: 320px;
+      border-radius: 16px; border: 1px solid #ffffff18;
+      display: flex; align-items: center; justify-content: center;
+      position: relative; overflow: hidden; padding: 20px;
+    }
+
+    /* ─────────────────────────────────────────────────────── */
+    /* DISEÑO 1 — Clásico festivo con confeti y fondo degradado */
+    /* ─────────────────────────────────────────────────────── */
+    .d1-bg { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); }
+    .d1 {
+      background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
+      border-radius: 20px; padding: 36px 32px; text-align: center;
+      box-shadow: 0 20px 60px rgba(106,17,203,0.5);
+      position: relative; overflow: hidden; min-width: 320px; max-width: 380px; width: 100%;
+    }
+    .d1::before {
+      content: '';
+      position: absolute; top: -60px; right: -60px;
+      width: 200px; height: 200px;
+      background: rgba(255,255,255,0.08);
+      border-radius: 50%;
+    }
+    .d1::after {
+      content: '';
+      position: absolute; bottom: -40px; left: -40px;
+      width: 150px; height: 150px;
+      background: rgba(255,255,255,0.05);
+      border-radius: 50%;
+    }
+    .d1 .emoji { font-size: 3.5rem; margin-bottom: 10px; display: block; }
+    .d1 h2 { font-size: 1.4rem; color: #fff; margin-bottom: 6px; font-weight: 800; }
+    .d1 .nombre { font-size: 1.6rem; color: #ffd700; font-weight: 900; margin-bottom: 8px; }
+    .d1 .puesto { font-size: 0.85rem; color: rgba(255,255,255,0.75); margin-bottom: 20px; }
+    .d1 .btn {
+      background: #fff; color: #6a11cb; border: none;
+      padding: 10px 28px; border-radius: 50px; font-weight: 700;
+      cursor: pointer; font-size: 0.9rem; transition: transform 0.2s;
+    }
+    .d1 .btn:hover { transform: scale(1.05); }
+    .d1 .confeti { position: absolute; top: 12px; left: 0; right: 0; text-align: center; font-size: 1.1rem; letter-spacing: 8px; }
+
+    /* ─────────────────────────────────────────────────────── */
+    /* DISEÑO 2 — Minimalista elegante (blanco con acento dorado) */
+    /* ─────────────────────────────────────────────────────── */
+    .d2-bg { background: linear-gradient(135deg, #f5f5f0, #ebe8e0); }
+    .d2 {
+      background: #fff; border-radius: 16px; padding: 36px 32px;
+      text-align: center; box-shadow: 0 12px 40px rgba(0,0,0,0.12);
+      border-top: 5px solid #c8a84b; min-width: 320px; max-width: 380px; width: 100%;
+    }
+    .d2 .emoji { font-size: 2.8rem; margin-bottom: 12px; display: block; }
+    .d2 .titulo { font-size: 0.75rem; letter-spacing: 3px; text-transform: uppercase; color: #c8a84b; font-weight: 700; margin-bottom: 10px; }
+    .d2 h2 { font-size: 1.1rem; color: #333; font-weight: 600; margin-bottom: 4px; }
+    .d2 .nombre { font-size: 1.8rem; color: #1a1a1a; font-weight: 900; margin-bottom: 4px; }
+    .d2 .puesto { font-size: 0.85rem; color: #888; margin-bottom: 6px; }
+    .d2 .depto { font-size: 0.8rem; color: #c8a84b; font-weight: 600; margin-bottom: 22px; }
+    .d2 .btn {
+      background: #c8a84b; color: #fff; border: none;
+      padding: 10px 28px; border-radius: 8px; font-weight: 700;
+      cursor: pointer; font-size: 0.9rem; width: 100%;
+    }
+
+    /* ─────────────────────────────────────────────────────── */
+    /* DISEÑO 3 — Card con foto/avatar y burbuja festiva        */
+    /* ─────────────────────────────────────────────────────── */
+    .d3-bg { background: linear-gradient(135deg, #0f2027, #203a43, #2c5364); }
+    .d3 {
+      background: #fff; border-radius: 24px; overflow: hidden;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+      min-width: 320px; max-width: 380px; width: 100%;
+    }
+    .d3-header {
+      background: linear-gradient(135deg, #f093fb, #f5576c);
+      padding: 28px 24px 50px; text-align: center; position: relative;
+    }
+    .d3-header .emoji-bg { font-size: 3rem; }
+    .d3-header h2 { color: #fff; font-size: 1rem; font-weight: 700; margin-top: 6px; opacity: 0.9; }
+    .d3-avatar {
+      width: 80px; height: 80px; border-radius: 50%;
+      background: linear-gradient(135deg, #ffecd2, #fcb69f);
+      border: 4px solid #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 2rem; margin: -40px auto 0; position: relative; z-index: 1;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+    }
+    .d3-body { padding: 16px 24px 28px; text-align: center; background: #fff; }
+    .d3-body .nombre { font-size: 1.5rem; font-weight: 900; color: #1a1a1a; margin-bottom: 2px; }
+    .d3-body .puesto { font-size: 0.82rem; color: #f5576c; font-weight: 600; margin-bottom: 2px; }
+    .d3-body .depto { font-size: 0.8rem; color: #999; margin-bottom: 18px; }
+    .d3-body .mensaje { font-size: 0.88rem; color: #555; margin-bottom: 20px; line-height: 1.5; }
+    .d3-body .btn {
+      background: linear-gradient(135deg, #f093fb, #f5576c);
+      color: #fff; border: none; padding: 11px 0;
+      border-radius: 50px; font-weight: 700; cursor: pointer;
+      font-size: 0.9rem; width: 100%;
+    }
+
+    /* ─────────────────────────────────────────────────────── */
+    /* DISEÑO 4 — Oscuro neón (estilo gaming/moderno)          */
+    /* ─────────────────────────────────────────────────────── */
+    .d4-bg { background: #0a0a0a; }
+    .d4 {
+      background: #111; border-radius: 20px; padding: 36px 30px;
+      text-align: center; min-width: 320px; max-width: 380px; width: 100%;
+      border: 1px solid #00ff8822;
+      box-shadow: 0 0 40px rgba(0,255,136,0.15), inset 0 0 80px rgba(0,255,136,0.03);
+      position: relative;
+    }
+    .d4::before {
+      content: '';
+      position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+      width: 60%; height: 2px;
+      background: linear-gradient(90deg, transparent, #00ff88, transparent);
+    }
+    .d4 .emoji { font-size: 3rem; display: block; margin-bottom: 14px; filter: drop-shadow(0 0 12px #00ff88); }
+    .d4 .titulo { font-size: 0.7rem; letter-spacing: 4px; text-transform: uppercase; color: #00ff88; font-weight: 700; margin-bottom: 12px; }
+    .d4 .nombre { font-size: 1.8rem; font-weight: 900; color: #fff; margin-bottom: 4px; text-shadow: 0 0 20px rgba(255,255,255,0.3); }
+    .d4 .puesto { font-size: 0.83rem; color: #00ff88; margin-bottom: 4px; }
+    .d4 .depto { font-size: 0.8rem; color: #555; margin-bottom: 22px; }
+    .d4 .btn {
+      background: transparent; color: #00ff88;
+      border: 1px solid #00ff88; padding: 10px 28px;
+      border-radius: 8px; font-weight: 700; cursor: pointer;
+      font-size: 0.9rem; width: 100%;
+      transition: background 0.2s;
+    }
+    .d4 .btn:hover { background: #00ff8822; }
+    .d4 .sparkles { color: #00ff88; font-size: 0.9rem; margin-bottom: 6px; letter-spacing: 6px; }
+
+    /* ─────────────────────────────────────────────────────── */
+    /* DISEÑO 5 — Corporativo soft (para oficina/empresa)      */
+    /* ─────────────────────────────────────────────────────── */
+    .d5-bg { background: linear-gradient(135deg, #e8ecf1, #d0d8e4); }
+    .d5 {
+      background: #fff; border-radius: 20px; overflow: hidden;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+      min-width: 320px; max-width: 380px; width: 100%;
+    }
+    .d5-banner {
+      background: linear-gradient(135deg, #1e3c72, #2a5298);
+      padding: 22px 24px; display: flex; align-items: center; gap: 14px;
+    }
+    .d5-banner .logo-box {
+      width: 48px; height: 48px; background: rgba(255,255,255,0.15);
+      border-radius: 12px; display: flex; align-items: center; justify-content: center;
+      font-size: 1.6rem; flex-shrink: 0;
+    }
+    .d5-banner-text h2 { color: #fff; font-size: 0.95rem; font-weight: 700; }
+    .d5-banner-text p { color: rgba(255,255,255,0.7); font-size: 0.78rem; }
+    .d5-body { padding: 24px; }
+    .d5-person {
+      display: flex; align-items: center; gap: 14px;
+      background: #f8f9fb; border-radius: 12px; padding: 14px 16px; margin-bottom: 16px;
+    }
+    .d5-person .avatar {
+      width: 52px; height: 52px; border-radius: 50%;
+      background: linear-gradient(135deg, #1e3c72, #2a5298);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.4rem; flex-shrink: 0;
+    }
+    .d5-person .info .nombre { font-size: 1.05rem; font-weight: 800; color: #1a1a1a; }
+    .d5-person .info .puesto { font-size: 0.78rem; color: #1e3c72; font-weight: 600; }
+    .d5-person .info .depto { font-size: 0.75rem; color: #999; }
+    .d5 .mensaje { font-size: 0.85rem; color: #666; line-height: 1.6; margin-bottom: 20px; }
+    .d5 .btns { display: flex; gap: 10px; }
+    .d5 .btn-primary {
+      background: #1e3c72; color: #fff; border: none;
+      padding: 10px 0; border-radius: 8px; font-weight: 700;
+      cursor: pointer; font-size: 0.88rem; flex: 1;
+    }
+    .d5 .btn-secondary {
+      background: #f1f3f5; color: #555; border: none;
+      padding: 10px 0; border-radius: 8px; font-weight: 600;
+      cursor: pointer; font-size: 0.88rem; flex: 1;
+    }
+
+    /* ── selector ── */
+    .selector { 
+      display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; 
+      margin-bottom: 40px; 
+    }
+    .selector button {
+      padding: 8px 20px; border-radius: 50px; border: 2px solid #ffffff33;
+      background: transparent; color: #ddd; cursor: pointer; font-size: 0.85rem;
+      transition: all 0.2s;
+    }
+    .selector button.active, .selector button:hover {
+      background: #fff; color: #1a1a2e; border-color: #fff; font-weight: 700;
+    }
+
+    @keyframes fadeIn { from { opacity:0; transform: translateY(20px); } to { opacity:1; transform: translateY(0); } }
+    .d1, .d2, .d3, .d4, .d5 { animation: fadeIn 0.5s ease; }
+  </style>
+</head>
+<body>
+
+<h1>🎂 Diseños Popup Cumpleaños</h1>
+<p class="subtitulo">5 propuestas — con datos de prueba de Delia Villegas</p>
+
+<div class="selector">
+  <button class="active" onclick="mostrarTodos()">Ver todos</button>
+  <button onclick="mostrarUno(1)">1 — Festivo</button>
+  <button onclick="mostrarUno(2)">2 — Elegante</button>
+  <button onclick="mostrarUno(3)">3 — Card Avatar</button>
+  <button onclick="mostrarUno(4)">4 — Oscuro Neón</button>
+  <button onclick="mostrarUno(5)">5 — Corporativo</button>
+</div>
+
+<div class="grid" id="grid">
+
+  <!-- ── DISEÑO 1 ── -->
+  <div class="card-wrapper" id="card1">
+    <div class="card-label">Diseño 1 — Festivo Degradado</div>
+    <div class="preview-box d1-bg">
+      <div class="d1">
+        <div class="confeti">🎊 🎉 🎊 🎉 🎊</div>
+        <span class="emoji">🎂</span>
+        <h2>¡Hoy es su cumpleaños!</h2>
+        <div class="nombre">Delia Villegas</div>
+        <div class="puesto">📍 Óptica Express — Cajera · Sucursal Centro</div>
+        <button class="btn">¡Felicidades! 🎉</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── DISEÑO 2 ── -->
+  <div class="card-wrapper" id="card2">
+    <div class="card-label">Diseño 2 — Elegante Minimalista</div>
+    <div class="preview-box d2-bg">
+      <div class="d2">
+        <span class="emoji">🎂</span>
+        <div class="titulo">Cumpleaños del día</div>
+        <h2>Hoy celebramos a</h2>
+        <div class="nombre">Delia Villegas</div>
+        <div class="puesto">Cajera</div>
+        <div class="depto">Sucursal Centro</div>
+        <button class="btn">Cerrar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── DISEÑO 3 ── -->
+  <div class="card-wrapper" id="card3">
+    <div class="card-label">Diseño 3 — Card con Avatar</div>
+    <div class="preview-box d3-bg">
+      <div class="d3">
+        <div class="d3-header">
+          <div class="emoji-bg">🎊🎉🎊</div>
+          <h2>¡Hoy es un día especial!</h2>
+        </div>
+        <div class="d3-avatar">🎂</div>
+        <div class="d3-body">
+          <div class="nombre">Delia Villegas</div>
+          <div class="puesto">Cajera</div>
+          <div class="depto">Sucursal Centro</div>
+          <div class="mensaje">Hoy celebramos su cumpleaños. ¡Únete para desearle un día increíble!</div>
+          <button class="btn">¡Muchas felicidades! 🎁</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── DISEÑO 4 ── -->
+  <div class="card-wrapper" id="card4">
+    <div class="card-label">Diseño 4 — Oscuro / Neón</div>
+    <div class="preview-box d4-bg">
+      <div class="d4">
+        <div class="sparkles">✦ ✦ ✦</div>
+        <span class="emoji">🎂</span>
+        <div class="titulo">Cumpleaños hoy</div>
+        <div class="nombre">Delia Villegas</div>
+        <div class="puesto">Cajera</div>
+        <div class="depto">Sucursal Centro</div>
+        <button class="btn">¡Feliz cumpleaños!</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── DISEÑO 5 ── -->
+  <div class="card-wrapper" id="card5">
+    <div class="card-label">Diseño 5 — Corporativo Soft</div>
+    <div class="preview-box d5-bg">
+      <div class="d5">
+        <div class="d5-banner">
+          <div class="logo-box">🎂</div>
+          <div class="d5-banner-text">
+            <h2>Cumpleaños del equipo</h2>
+            <p>Óptica Express · Hoy</p>
+          </div>
+        </div>
+        <div class="d5-body">
+          <div class="d5-person">
+            <div class="avatar">👩</div>
+            <div class="info">
+              <div class="nombre">Delia Villegas</div>
+              <div class="puesto">Cajera</div>
+              <div class="depto">Sucursal Centro</div>
+            </div>
+          </div>
+          <p class="mensaje">Hoy es su cumpleaños. Es un buen momento para desearle un excelente día.</p>
+          <div class="btns">
+            <button class="btn-secondary">Cerrar</button>
+            <button class="btn-primary">¡Felicidades! 🎉</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  function mostrarTodos() {
+    for (let i = 1; i <= 5; i++) document.getElementById('card'+i).style.display = 'flex';
+    document.getElementById('grid').style.gridTemplateColumns = 'repeat(auto-fit, minmax(380px, 1fr))';
+    document.querySelectorAll('.selector button').forEach((b,i) => b.classList.toggle('active', i===0));
+  }
+  function mostrarUno(n) {
+    for (let i = 1; i <= 5; i++) document.getElementById('card'+i).style.display = i===n ? 'flex' : 'none';
+    document.getElementById('grid').style.gridTemplateColumns = '1fr';
+    document.querySelectorAll('.selector button').forEach((b,i) => b.classList.toggle('active', i===n));
+  }
+</script>
+</body>
+</html>

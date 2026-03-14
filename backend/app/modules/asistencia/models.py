@@ -94,6 +94,23 @@ class PendingDelete(Base):
     dispositivo = relationship("Dispositivo")
 
 
+class PendingReplicate(Base):
+    """Cola de huellas pendientes de replicar a un dispositivo destino"""
+    __tablename__ = "pending_replicate"
+    __table_args__ = (
+        UniqueConstraint('dispositivo_id', 'numero_empleado', name='uq_pending_replicate_device_num'),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    dispositivo_id = Column(Integer, ForeignKey("dispositivos.id"), nullable=False)
+    numero_empleado = Column(String(50), nullable=False)
+    procesado = Column(Boolean, default=False)
+    procesado_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    dispositivo = relationship("Dispositivo")
+
+
 class FingerprintTemplate(Base):
     """Almacena templates de huellas digitales para replicacion entre dispositivos"""
     __tablename__ = "fingerprint_templates"

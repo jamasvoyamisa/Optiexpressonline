@@ -82,6 +82,22 @@ class UploadTemplateRequest(BaseModel):
     template_data: str
 
 
+class EnqueueReplicateRequest(BaseModel):
+    numero_empleado: str
+
+
+class PendingReplicateResponse(BaseModel):
+    id: int
+    dispositivo_id: int
+    numero_empleado: str
+    procesado: bool
+    procesado_at: Optional[datetime] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class FingerprintTemplateResponse(BaseModel):
     id: int
     numero_empleado: str

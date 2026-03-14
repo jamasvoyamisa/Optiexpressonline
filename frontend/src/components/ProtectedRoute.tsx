@@ -13,7 +13,7 @@ const hasPermission = (authMe: AuthMe | null, perm: RoutePermission): boolean =>
   if (perm === 'rh') return authMe.is_rh === true || authMe.is_superuser === true;
   if (perm === 'dashboard') return authMe.puede_ver_dashboard === true || authMe.puede_ver_mi_area === true;
   if (perm === 'mi_area') return authMe.puede_ver_mi_area === true;
-  if (perm === 'solicitudes_vacaciones') return authMe.is_superuser === true || authMe.is_director === true || authMe.is_gerente_general === true;
+  if (perm === 'solicitudes_vacaciones') return authMe.is_superuser === true || authMe.is_director === true || authMe.is_gerente_general === true || authMe.is_rh === true;
   return false;
 };
 
