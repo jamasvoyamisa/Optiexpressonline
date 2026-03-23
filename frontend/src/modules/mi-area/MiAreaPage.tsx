@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { parseTimestampForMexico, toMexicoDateString } from '../../utils/date';
+import { useSearchParams } from 'react-router-dom';
 
 type TipoIncidencia = 'retardo' | 'falta' | 'completa' | 'horas_extra' | 'salida_anticipada' | 'incompleta';
 type TipoChecada = 'entrada' | 'salida' | 'salida_comer' | 'regreso_comer';
@@ -41,6 +42,23 @@ interface SolicitudVacaciones {
   fecha_aprobacion?: string | null;
   comentarios_aprobacion?: string | null;
   created_at: string;
+}
+
+interface SolicitudPrestamo {
+  id: number;
+  numero_solicitud?: string | null;
+  empleado_id: number;
+  monto: number | string;
+  plazo_meses: number;
+  motivo?: string | null;
+  estado: string;
+  created_at: string;
+  empleado?: {
+    id: number;
+    nombre: string;
+    apellido_paterno?: string | null;
+    apellido_materno?: string | null;
+  } | null;
 }
 
 interface EmpleadoArea {
@@ -91,7 +109,7 @@ const tipoIncidenciasColores: Record<string, { backgroundColor: string; color: s
   falta: { backgroundColor: '#fee2e2', color: '#b91c1c' },           // Rojo #EF4444 - Crítico
 };
 
-type TabKey = 'personal' | 'asistencia' | 'incidencias' | 'vacaciones';
+type TabKey = 'personal' | 'asistencia' | 'incidencias' | 'vacaciones' | 'prestamos';
 
 const ITEMS_PER_PAGE = 15;
 
@@ -149,6 +167,7 @@ function formatQuincenaLabel(year: number, month: number, num: 1 | 2): string {
 }
 
 export const MiAreaPage = () => {
+  const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<TabKey>('personal');
   const [authMe, setAuthMe] = useState<AuthMe | null>(null);
 
@@ -181,6 +200,12 @@ export const MiAreaPage = () => {
   const [modalAprobar, setModalAprobar] = useState<SolicitudVacaciones | null>(null);
   const [aprobacionComentarios, setAprobacionComentarios] = useState('');
   const [aprobando, setAprobando] = useState(false);
+  const [solicitudesPrestamos, setSolicitudesPrestamos] = useState<SolicitudPrestamo[]>([]);
+  const [loadingPrestamos, setLoadingPrestamos] = useState(false);
+  const [filtroEstadoPrestamos, setFiltroEstadoPrestamos] = useState<string>('pendiente');
+  const [modalAprobarPrestamo, setModalAprobarPrestamo] = useState<SolicitudPrestamo | null>(null);
+  const [comentariosPrestamo, setComentariosPrestamo] = useState('');
+  const [aprobandoPrestamo, setAprobandoPrestamo] = useState(false);
 
   // Mapa id→nombre empleado
   const [empleadosMap, setEmpleadosMap] = useState<Record<number, string>>({});
@@ -196,6 +221,18 @@ export const MiAreaPage = () => {
       .catch(() => { if (!cancelled) setAuthMe(null); });
     return () => { cancelled = true; };
   }, []);
+
+  // Permite abrir Mi Área desde links con filtros (ej. campana)
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    const justificada = searchParams.get('justificada');
+    if (tab === 'incidencias') {
+      setActiveTab('incidencias');
+      if (justificada === 'pendientes' || justificada === 'justificadas' || justificada === 'todas') {
+        setFiltroJustificada(justificada);
+      }
+    }
+  }, [searchParams]);
 
   // Cargar mapa de empleados
   useEffect(() => {
@@ -283,17 +320,32 @@ export const MiAreaPage = () => {
       .finally(() => setLoadingVacaciones(false));
   };
 
+  const loadSolicitudesPrestamos = () => {
+    setLoadingPrestamos(true);
+    const params: Record<string, string | number> = { limit: 500 };
+    if (filtroEstadoPrestamos !== 'todas') params.estado = filtroEstadoPrestamos;
+    api.get<SolicitudPrestamo[]>('/prestamos/mi-area', { params })
+      .then(res => setSolicitudesPrestamos(Array.isArray(res.data) ? res.data : []))
+      .catch(() => setSolicitudesPrestamos([]))
+      .finally(() => setLoadingPrestamos(false));
+  };
+
   useEffect(() => {
     if (!puedeVerMiArea) return;
     if (activeTab === 'personal') loadPersonal();
     if (activeTab === 'asistencia') loadChecadas();
     if (activeTab === 'incidencias') loadIncidencias();
     if (activeTab === 'vacaciones') loadSolicitudesVacaciones();
+    if (activeTab === 'prestamos') loadSolicitudesPrestamos();
   }, [puedeVerMiArea, activeTab]);
 
   useEffect(() => {
     if (activeTab === 'vacaciones' && puedeVerMiArea) loadSolicitudesVacaciones();
   }, [filtroEstadoVacaciones]);
+
+  useEffect(() => {
+    if (activeTab === 'prestamos' && puedeVerMiArea) loadSolicitudesPrestamos();
+  }, [filtroEstadoPrestamos]);
 
   useEffect(() => {
     if (activeTab === 'asistencia' && puedeVerMiArea) loadChecadas();
@@ -339,6 +391,22 @@ export const MiAreaPage = () => {
       .finally(() => setAprobando(false));
   };
 
+  const handleAprobarRechazarPrestamo = (aprobar: boolean) => {
+    if (!modalAprobarPrestamo) return;
+    setAprobandoPrestamo(true);
+    api.post(`/prestamos/${modalAprobarPrestamo.id}/aprobar-departamento`, {
+      aprobado: aprobar,
+      comentarios: comentariosPrestamo.trim() || null,
+    })
+      .then(() => {
+        loadSolicitudesPrestamos();
+        setModalAprobarPrestamo(null);
+        setComentariosPrestamo('');
+      })
+      .catch((err) => alert(err.response?.data?.detail ?? err.message ?? 'Error al autorizar o rechazar préstamo'))
+      .finally(() => setAprobandoPrestamo(false));
+  };
+
   if (authMe && !puedeVerMiArea) {
     return (
       <div style={{ padding: '24px' }}>
@@ -365,6 +433,7 @@ export const MiAreaPage = () => {
         <button style={tabStyle(activeTab === 'asistencia')} onClick={() => setActiveTab('asistencia')}>Asistencia</button>
         <button style={tabStyle(activeTab === 'incidencias')} onClick={() => setActiveTab('incidencias')}>Incidencias</button>
         <button style={tabStyle(activeTab === 'vacaciones')} onClick={() => setActiveTab('vacaciones')}>Vacaciones</button>
+        <button style={tabStyle(activeTab === 'prestamos')} onClick={() => setActiveTab('prestamos')}>Préstamos</button>
       </div>
 
       {/* ─── TAB: PERSONAL ─── */}
@@ -931,6 +1000,93 @@ export const MiAreaPage = () => {
         </>
       )}
 
+      {/* ─── TAB: PRÉSTAMOS ─── */}
+      {activeTab === 'prestamos' && (
+        <>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px', flexWrap: 'wrap' }}>
+            <select
+              value={filtroEstadoPrestamos}
+              onChange={e => setFiltroEstadoPrestamos(e.target.value)}
+              style={{ padding: '8px 12px', border: '1px solid #ddd', borderRadius: '6px', fontSize: '0.9rem', height: '36px', boxSizing: 'border-box' }}
+            >
+              <option value="pendiente">Pendientes</option>
+              <option value="aprobada_departamento">Aprobadas por área</option>
+              <option value="depositado">Depositadas</option>
+              <option value="rechazada">Rechazadas</option>
+              <option value="todas">Todas</option>
+            </select>
+            <button
+              onClick={loadSolicitudesPrestamos}
+              disabled={loadingPrestamos}
+              style={{ padding: '8px 16px', height: '36px', boxSizing: 'border-box', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.9rem' }}
+            >
+              {loadingPrestamos ? 'Cargando...' : 'Actualizar'}
+            </button>
+          </div>
+          {loadingPrestamos ? (
+            <p style={{ color: '#666' }}>Cargando solicitudes de préstamos...</p>
+          ) : solicitudesPrestamos.length === 0 ? (
+            <p style={{ color: '#666', padding: '24px', backgroundColor: '#f8f9fa', borderRadius: '8px' }}>
+              No hay solicitudes de préstamos para el filtro seleccionado.
+            </p>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
+                <thead>
+                  <tr>
+                    <th style={th}>Folio</th>
+                    <th style={th}>Empleado</th>
+                    <th style={{ ...th, textAlign: 'right' }}>Monto</th>
+                    <th style={{ ...th, textAlign: 'center' }}>Plazo</th>
+                    <th style={th}>Estado</th>
+                    <th style={th}>Motivo</th>
+                    <th style={th}>Fecha</th>
+                    <th style={{ ...th, textAlign: 'center' }}>Acción</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {solicitudesPrestamos.map((s) => {
+                    const empleadoNombre = s.empleado
+                      ? `${s.empleado.nombre} ${s.empleado.apellido_paterno || ''} ${s.empleado.apellido_materno || ''}`.trim()
+                      : (empleadosMap[s.empleado_id] || `#${s.empleado_id}`);
+                    const montoNum = Number(s.monto || 0);
+                    const estadoLabel: Record<string, string> = {
+                      pendiente: 'Pendiente',
+                      aprobada_departamento: 'Aprobada por área',
+                      depositado: 'Depositada',
+                      rechazada: 'Rechazada',
+                    };
+                    return (
+                      <tr key={s.id}>
+                        <td style={{ ...td, fontWeight: 600 }}>{s.numero_solicitud || `#${s.id}`}</td>
+                        <td style={td}>{empleadoNombre}</td>
+                        <td style={{ ...td, textAlign: 'right', fontWeight: 600 }}>
+                          ${montoNum.toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                        <td style={{ ...td, textAlign: 'center' }}>{s.plazo_meses} quincena{s.plazo_meses !== 1 ? 's' : ''}</td>
+                        <td style={td}>{estadoLabel[s.estado] || s.estado}</td>
+                        <td style={{ ...td, maxWidth: '260px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{s.motivo || '—'}</td>
+                        <td style={td}>{new Date(s.created_at).toLocaleDateString('es-MX', { dateStyle: 'short' })}</td>
+                        <td style={{ ...td, textAlign: 'center' }}>
+                          {s.estado === 'pendiente' ? (
+                            <button
+                              onClick={() => { setModalAprobarPrestamo(s); setComentariosPrestamo(''); }}
+                              style={{ padding: '5px 12px', backgroundColor: '#0d9488', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.82rem' }}
+                            >
+                              Aprobar / Rechazar
+                            </button>
+                          ) : <span style={{ color: '#9ca3af' }}>—</span>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+
       {/* ─── MODAL JUSTIFICAR ─── */}
       {modalIncidencia && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.4)' }}
@@ -994,6 +1150,44 @@ export const MiAreaPage = () => {
               <button onClick={() => handleAprobarRechazar(true)} disabled={aprobando}
                 style={{ padding: '9px 18px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>
                 {aprobando ? '...' : 'Aprobar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ─── MODAL APROBAR/RECHAZAR PRÉSTAMO ─── */}
+      {modalAprobarPrestamo && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.4)' }}
+          onClick={() => setModalAprobarPrestamo(null)} role="presentation">
+          <div style={{ backgroundColor: 'white', padding: '24px', borderRadius: '12px', maxWidth: '460px', width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}
+            onClick={e => e.stopPropagation()} role="dialog">
+            <h2 style={{ marginTop: 0, marginBottom: '12px' }}>Autorizar o rechazar préstamo</h2>
+            <p style={{ color: '#555', marginBottom: '6px', fontWeight: 500 }}>
+              {modalAprobarPrestamo.empleado
+                ? `${modalAprobarPrestamo.empleado.nombre} ${modalAprobarPrestamo.empleado.apellido_paterno || ''} ${modalAprobarPrestamo.empleado.apellido_materno || ''}`.trim()
+                : (empleadosMap[modalAprobarPrestamo.empleado_id] || `#${modalAprobarPrestamo.empleado_id}`)}
+            </p>
+            <p style={{ color: '#555', marginBottom: '14px', fontSize: '0.9rem' }}>
+              Folio: {modalAprobarPrestamo.numero_solicitud || `#${modalAprobarPrestamo.id}`} · Monto: ${Number(modalAprobarPrestamo.monto || 0).toLocaleString('es-MX', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} · Plazo: {modalAprobarPrestamo.plazo_meses} quincena{modalAprobarPrestamo.plazo_meses !== 1 ? 's' : ''}
+            </p>
+            <div style={{ marginBottom: '14px' }}>
+              <label style={{ display: 'block', fontWeight: 600, marginBottom: '6px', fontSize: '0.9rem' }}>Comentarios (opcional)</label>
+              <textarea value={comentariosPrestamo} onChange={e => setComentariosPrestamo(e.target.value)} rows={2}
+                style={{ width: '100%', padding: '10px', border: '1px solid #ddd', borderRadius: '6px', resize: 'vertical', fontSize: '0.9rem' }} />
+            </div>
+            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+              <button onClick={() => setModalAprobarPrestamo(null)}
+                style={{ padding: '9px 18px', backgroundColor: '#e5e7eb', color: '#374151', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>
+                Cancelar
+              </button>
+              <button onClick={() => handleAprobarRechazarPrestamo(false)} disabled={aprobandoPrestamo}
+                style={{ padding: '9px 18px', backgroundColor: '#dc2626', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>
+                {aprobandoPrestamo ? '...' : 'Rechazar'}
+              </button>
+              <button onClick={() => handleAprobarRechazarPrestamo(true)} disabled={aprobandoPrestamo}
+                style={{ padding: '9px 18px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>
+                {aprobandoPrestamo ? '...' : 'Aprobar'}
               </button>
             </div>
           </div>

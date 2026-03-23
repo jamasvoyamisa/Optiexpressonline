@@ -6,91 +6,65 @@ Este documento describe el módulo de solicitudes de préstamos: su uso, flujo, 
 
 ## 1. Descripción general
 
-El módulo permite a los empleados solicitar préstamos de nómina y a Recursos Humanos (RH) o Administradores gestionar esas solicitudes (aprobar, rechazar o registrar en nombre de empleados).
+El módulo permite a los empleados solicitar préstamos de nómina y a **Recursos Humanos (RH)** o **Administradores** registrar solicitudes en nombre de otros. El flujo de aprobación es en dos niveles: **gerente del departamento del solicitante** y luego **Gerente General / Director / Administrador** para registrar el depósito y la **referencia bancaria**.
 
 **Características principales:**
 - El empleado crea su solicitud indicando monto y plazo en meses.
 - El descuento quincenal se calcula automáticamente.
-- RH/Admin aprueba o rechaza las solicitudes pendientes.
-- El empleado puede cancelar sus propias solicitudes mientras estén pendientes.
+- El **jefe del departamento** autoriza o rechaza las solicitudes `pendiente` de sus colaboradores.
+- El **Gerente General** (o Director/Admin) pasa la solicitud a **depositado** e ingresa la referencia bancaria del depósito.
+- **RH** solo **confirma** el registro en nómina después del depósito (`fecha_confirmacion_rh`); al confirmar se notifica al empleado.
+- Notificaciones al empleado: **aprobado** (departamento), **depositado** (GG), **confirmado por RH** (nómina).
+- El empleado puede cancelar sus propias solicitudes mientras estén `pendiente`.
 
 ---
 
 ## 2. Flujo del proceso
 
-El flujo es similar al de vacaciones: **Gerente General/Director/Admin aprueban**; **RH solo confirma**.
-
 ```
-┌─────────────────┐     ┌──────────────────────┐     ┌─────────────────────┐     ┌──────────┐
-│    EMPLEADO     │     │ GG / DIRECTOR / ADM  │     │         RH           │     │  ESTADO  │
-└────────┬────────┘     └──────────┬───────────┘     └──────────┬──────────┘     └────┬─────┘
-         │                        │                            │                     │
-         │ 1. Crear solicitud    │                            │                     │
-         │   (monto, plazo)      │                            │                     │
-         │───────────────────────┼────────────────────────────┼─────────────────────► PENDIENTE
-         │                       │                            │                     │
-         │                       │ 2. Aprobar / Rechazar      │                     │
-         │                       │────────────────────────────┼─────────────────────► APROBADA_GERENTE
-         │                       │                    o       │              o       RECHAZADA
-         │                       │                            │                     │
-         │                       │                            │ 3. Confirmar        │
-         │                       │                            │─────────────────────► APROBADA
-         │                       │                            │                     │
-         │ 4. (Opcional)         │                            │                     │
-         │    Cancelar (pendiente)│                            │                     │
-         │───────────────────────┼────────────────────────────┼─────────────────────► CANCELADA
+EMPLEADO → crea solicitud → PENDIENTE
+    → GERENTE DEL DEPARTAMENTO autoriza/rechaza → APROBADA_DEPARTAMENTO o RECHAZADA
+    → GERENTE GENERAL registra depósito + referencia → DEPOSITADO
+    → RH confirma nómina (marca fecha_confirmacion_rh)
 ```
 
 ### Pasos detallados
 
 | Paso | Actor | Acción | Estado resultante |
 |------|-------|--------|-------------------|
-| 1 | Empleado | Crea solicitud con monto, plazo (meses) y motivo opcional | `pendiente` |
-| 2a | Gerente General / Director / Admin | Aprueba la solicitud | `aprobada_gerente` |
-| 2b | Gerente General / Director / Admin | Rechaza la solicitud | `rechazada` |
-| 3 | RH | Confirma la solicitud ya aprobada por gerente | `aprobada` |
-| 4 | Empleado | Cancela su solicitud (solo si está pendiente) | `cancelada` |
+| 1 | Empleado | Crea solicitud | `pendiente` |
+| 2a | Gerente del departamento (jefe del depto. del solicitante) | Autoriza | `aprobada_departamento` |
+| 2b | Gerente del departamento | Rechaza | `rechazada` |
+| 3 | Gerente General / Director / Admin | Registra depósito y referencia bancaria | `depositado` |
+| 4 | RH | Confirma registro en nómina (mismo estado; se guarda `fecha_confirmacion_rh`) | `depositado` |
+| 5 | Empleado | Cancela (solo si está pendiente) | `cancelada` |
 
-**Restricciones:**
-- Solo se pueden editar o cancelar solicitudes en estado `pendiente`.
-- Gerente General, Director y Administrador aprueban o rechazan (primer nivel).
-- RH solo confirma las ya aprobadas por gerente; no puede rechazar desde la confirmación.
+**Notas:**
+- La notificación inicial va al **jefe del departamento** del solicitante; si no hay jefe asignado, se notifica a GG/Director/Admin.
+- Tras autorización departamental, se notifica a GG/Director/Admin para el depósito.
+- El saldo restante del préstamo activo se calcula a partir de **`fecha_deposito`** (o respaldo desde datos previos).
+- **Administrador (superuser)** puede autorizar en nombre del departamento si hace falta soporte (misma API `aprobar-departamento`).
 
 ---
 
-## 3. Roles y permisos
+## 3. Roles y permisos (resumen)
 
-| Rol | Ver solicitudes | Crear (propias) | Crear (en nombre de otros) | Aprobar/Rechazar (1er nivel) | Confirmar (RH) | Cancelar (propias) |
-|-----|-----------------|-----------------|----------------------------|------------------------------|----------------|---------------------|
-| Empleado | Solo las propias | ✓ | — | — | — | ✓ (pendientes) |
-| Gerente General | Todas | ✓ | — | ✓ | — | — |
-| Director | Todas | ✓ | — | ✓ | — | — |
-| RH | Todas | ✓ | ✓ | — | ✓ | — |
-| Administrador | Todas | ✓ | ✓ | ✓ | ✓ | — |
-
-- **Aprobar/Rechazar**: Gerente General, Director o Administrador (igual que vacaciones).
-- **Confirmar**: Solo RH (o Administrador). Mueve `aprobada_gerente` → `aprobada`.
+| Rol | Autorizar departamento | Registrar depósito (ref. bancaria) | Ver listados amplios |
+|-----|------------------------|------------------------------------|------------------------|
+| Jefe de departamento | ✓ sus colaboradores | — | Pendientes de su depto. |
+| Gerente General / Director / Admin | — (salvo superuser) | ✓ | Sí |
+| RH | — | — | Todas las solicitudes (listado) |
+| Empleado | — | — | Solo las propias |
 
 ---
 
 ## 4. Cálculo del descuento quincenal
 
-El descuento quincenal se calcula automáticamente en base al monto y al plazo:
+Igual que antes:
 
 ```
 descuento_quincenal = monto ÷ (plazo_meses × 2)
 ```
-
-- **2 quincenas por mes**: Se asume nómina quincenal (común en México).
-- **Redondeo**: A 2 decimales (centavos).
-
-**Ejemplos:**
-
-| Monto | Plazo | Quincenas | Descuento quincenal |
-|-------|-------|-----------|---------------------|
-| $10,000 | 12 meses | 24 | $416.67 |
-| $5,000 | 6 meses | 12 | $416.67 |
-| $15,000 | 24 meses | 48 | $312.50 |
 
 ---
 
@@ -100,18 +74,10 @@ descuento_quincenal = monto ÷ (plazo_meses × 2)
 
 | Campo | Tipo | Descripción |
 |-------|------|-------------|
-| `id` | Integer | Clave primaria |
-| `empleado_id` | Integer | Empleado que solicita (FK a empleados) |
-| `monto` | Numeric(12,2) | Monto solicitado en MXN |
-| `plazo_meses` | Integer | Plazo en meses |
-| `motivo` | Text | Motivo opcional |
-| `descuento_quincenal` | Numeric(10,2) | Calculado automáticamente |
-| `estado` | Enum | pendiente, aprobada_gerente, aprobada, rechazada, cancelada |
-| `aprobado_por_id` | Integer | Empleado que aprobó/rechazó (FK) |
-| `fecha_aprobacion` | DateTime | Fecha de aprobación/rechazo |
-| `comentarios_aprobacion` | Text | Comentarios del aprobador |
-| `created_at` | DateTime | Fecha de creación |
-| `updated_at` | DateTime | Última actualización |
+| `estado` | Enum | `pendiente`, `aprobada_departamento`, `depositado`, `rechazada`, `cancelada` |
+| `referencia_bancaria` | String(120) | Referencia del depósito (obligatoria al marcar depositado) |
+| `fecha_deposito` | DateTime | Fecha en que GG registró el depósito |
+| … | … | Ver migración y modelo SQLAlchemy |
 
 ---
 
@@ -119,92 +85,23 @@ descuento_quincenal = monto ÷ (plazo_meses × 2)
 
 **Prefijo base:** `/api/v1/prestamos`
 
-| Método | Ruta | Descripción | Permiso |
-|--------|------|-------------|---------|
-| GET | `/` | Listar solicitudes | Empleado: propias; RH/Admin: todas |
-| GET | `/solicitudes-pendientes` | Listar pendientes para aprobar | GG/Director/Admin |
-| GET | `/solicitudes-pendientes-rh` | Listar pendientes de confirmar RH | RH/Admin |
-| POST | `/` | Crear solicitud propia | Cualquier autenticado |
-| POST | `/rh` | Crear solicitud en nombre de empleado | RH/Admin |
-| GET | `/{id}` | Obtener detalle | Propietario o RH |
-| PUT | `/{id}` | Actualizar (solo pendientes) | Propietario |
-| POST | `/{id}/aprobar` | Aprobar o rechazar (1er nivel) | GG/Director/Admin |
-| PUT | `/{id}/confirmar-rh` | Confirmar (aprobada_gerente → aprobada) | RH/Admin |
-| DELETE | `/{id}` | Cancelar (solo pendientes) | Propietario |
+| Método | Ruta | Descripción |
+|--------|------|-------------|
+| GET | `/pendientes-mi-departamento` | Pendientes del departamento del jefe actual |
+| GET | `/pendientes-deposito` | Autorizadas por depto.; pendientes de depósito (GG/Director/Admin) |
+| GET | `/solicitudes-pendientes` | Alias de `pendientes-mi-departamento` |
+| POST | `/{id}/aprobar-departamento` | Autorizar o rechazar (gerente de departamento) |
+| POST | `/{id}/depositar` | Registrar depósito + `referencia_bancaria` (GG/Director/Admin) |
+| POST | `/{id}/aprobar` | **Obsoleto** (410) |
+| GET | `/solicitudes-pendientes-rh` | Depositados pendientes de confirmación RH | RH/Admin |
+| PUT | `/{id}/confirmar-rh` | RH confirma nómina; **notifica al empleado** | RH/Admin |
 
-### Parámetros de listado (GET)
-
-- `empleado_id`: Filtrar por empleado (solo RH).
-- `estado`: Filtrar por estado (pendiente, aprobada, rechazada, cancelada).
-- `skip`, `limit`: Paginación.
-
-### Payload de creación (POST)
-
-```json
-{
-  "monto": 10000,
-  "plazo_meses": 12,
-  "motivo": "Gastos médicos"
-}
-```
-
-El campo `descuento_quincenal` no se envía; se calcula en el backend.
+El resto de rutas (`GET /`, `POST /`, `POST /rh`, etc.) se mantienen; las respuestas incluyen `referencia_bancaria`, `fecha_deposito`, `fecha_confirmacion_rh` y `saldo_restante` cuando aplica.
 
 ---
 
-## 7. Uso en el frontend
+## 7. Frontend
 
-### Empleados: "Mis préstamos" (`/mis-prestamos`)
-
-- **Acceso**: Menú lateral "Mis préstamos" (cualquier empleado autenticado).
-- **Funciones**:
-  - Ver todas sus solicitudes.
-  - Crear nueva solicitud (monto, plazo, motivo).
-  - Vista previa del descuento quincenal calculado (a X quincenas).
-  - Cancelar solicitudes pendientes.
-
-### Gerente General / Director: "Solicitudes a aprobar"
-
-- **Acceso**: Menú "Solicitudes a aprobar" → pestaña "Préstamos".
-- **Funciones**:
-  - Ver solicitudes de préstamos pendientes.
-  - Aprobar o rechazar (primer nivel). Aprobado → pendiente confirmación RH.
-
-### RH: Pestaña "Préstamos" (dentro de Recursos Humanos)
-
-- **Acceso**: Recursos Humanos → pestaña "Préstamos".
-- **Funciones**:
-  - Ver todas las solicitudes de la organización.
-  - Filtrar por estado (incl. "Aprobada por gerente") y buscar por empleado.
-  - Registrar solicitud en nombre de un empleado (Empresa → Departamento → Empleado).
-  - **Confirmar** solicitudes en estado "Aprobada por gerente" (botón Confirmar).
-  - Administrador puede además aprobar/rechazar pendientes.
-  - Ver columna "Descuento/q" con el monto calculado.
-
----
-
-## 8. Archivos del módulo
-
-### Backend
-
-```
-backend/app/modules/prestamos/
-├── models.py      # SolicitudPrestamo, EstadoSolicitudPrestamo
-├── schemas.py     # Create, Update, Response, AprobarRechazar
-├── service.py     # Lógica de negocio y cálculo de descuento
-└── routes.py      # Endpoints REST
-```
-
-### Frontend
-
-```
-frontend/src/modules/
-├── rh/PrestamosPage.tsx           # Vista RH (tab dentro de RH)
-└── empleado/MisPrestamosPage.tsx  # Vista empleado
-```
-
-### Migración
-
-```
-backend/alembic/versions/p9q0r1s2t3u4_add_solicitudes_prestamos.py
-```
+- **Mi Área / Solicitudes a aprobar:** tab Préstamos con dos bloques si aplica: autorización por departamento y depósito por GG.
+- **RH → Préstamos:** listado completo; acciones según rol (autorizar si es jefe de área; registrar depósito si es GG; **Confirmar RH** si el préstamo está depositado y falta confirmación en nómina).
+- **Mis préstamos:** estados y columna de referencia bancaria; documento imprimible muestra estado y referencia si existe.

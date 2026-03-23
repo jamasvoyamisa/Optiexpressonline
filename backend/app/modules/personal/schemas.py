@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr
-from typing import Optional, List
+from typing import Optional, List, Literal
 from datetime import datetime
 from .models import EstadoEmpleado
 
@@ -11,6 +11,8 @@ class EmpresaBase(BaseModel):
     rfc: Optional[str] = None
     direccion: Optional[str] = None
     telefono: Optional[str] = None
+    dias_laborales: Literal["lun-sab", "lun-dom"] = "lun-sab"
+    trabaja_festivos: bool = False
 
 
 class EmpresaCreate(EmpresaBase):
@@ -24,12 +26,16 @@ class EmpresaUpdate(BaseModel):
     telefono: Optional[str] = None
     activo: Optional[bool] = None
     checadas_remotas: Optional[bool] = None
+    dias_laborales: Optional[Literal["lun-sab", "lun-dom"]] = None
+    trabaja_festivos: Optional[bool] = None
 
 
 class EmpresaResponse(EmpresaBase):
     id: int
     activo: bool
     checadas_remotas: bool = False
+    dias_laborales: Literal["lun-sab", "lun-dom"] = "lun-sab"
+    trabaja_festivos: bool = False
     rango_inicio: Optional[int] = None
     rango_fin: Optional[int] = None
     created_at: datetime

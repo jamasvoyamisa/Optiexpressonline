@@ -1,4 +1,6 @@
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from typing import List, Optional
 from . import models
 
@@ -64,3 +66,26 @@ def contar_no_leidas(db: Session, empleado_id: int) -> int:
         models.Notificacion.empleado_id == empleado_id,
         models.Notificacion.leida == False,
     ).count()
+
+
+def limpiar_notificaciones_antiguas(
+    db: Session,
+    empleado_id: int,
+    dias_retencion: int = 15,
+) -> int:
+    """
+    Elimina notificaciones con antigüedad mayor a `dias_retencion` para un empleado,
+    excepto las relacionadas con incidencias.
+    """
+    limite = datetime.now(timezone.utc) - timedelta(days=dias_retencion)
+    deleted = db.query(models.Notificacion).filter(
+        models.Notificacion.empleado_id == empleado_id,
+        models.Notificacion.created_at < limite,
+        ~or_(
+            models.Notificacion.tipo.ilike("incidencia%"),
+            models.Notificacion.tipo.ilike("%incidencia%"),
+        ),
+    ).delete(synchronize_session=False)
+    if deleted:
+        db.commit()
+    return deleted

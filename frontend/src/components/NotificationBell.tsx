@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import api from '../services/api';
 import { useIsMobile } from '../hooks/useIsMobile';
+import { useNavigate } from 'react-router-dom';
 import type { Dispositivo } from '../types';
 
 interface Notificacion {
@@ -49,6 +50,7 @@ function timeAgo(dateStr: string): string {
 }
 
 export const NotificationBell = ({ dispositivos = [] }: Props) => {
+  const navigate = useNavigate();
   const isMobile = useIsMobile();
   const dispositivosConAlertas = dispositivos.filter(d => !esDispositivoPortal(d));
   const inactivos = dispositivosConAlertas.filter(d => !d.activo);
@@ -62,16 +64,18 @@ export const NotificationBell = ({ dispositivos = [] }: Props) => {
   const [open, setOpen] = useState(false);
   const [notificaciones, setNotificaciones] = useState<Notificacion[]>([]);
   const [noLeidas, setNoLeidas] = useState(0);
+  const [incidenciasPorJustificar, setIncidenciasPorJustificar] = useState(0);
   const panelRef = useRef<HTMLDivElement>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const cargar = useCallback(async () => {
     try {
-      const res = await api.get<{ total_no_leidas: number; notificaciones: Notificacion[] }>(
+      const res = await api.get<{ total_no_leidas: number; incidencias_por_justificar?: number; notificaciones: Notificacion[] }>(
         '/notificaciones/mis-notificaciones?limit=30',
       );
       setNotificaciones(res.data.notificaciones);
       setNoLeidas(res.data.total_no_leidas);
+      setIncidenciasPorJustificar(res.data.incidencias_por_justificar ?? 0);
     } catch {
       // silencioso
     }
@@ -110,6 +114,11 @@ export const NotificationBell = ({ dispositivos = [] }: Props) => {
     } catch { /* silencioso */ }
   };
 
+  const irAIncidenciasPendientes = () => {
+    setOpen(false);
+    navigate('/mi-area?tab=incidencias&justificada=pendientes');
+  };
+
   return (
     <div style={{ position: 'relative' }} ref={panelRef}>
       {/* Botón campana */}
@@ -135,7 +144,7 @@ export const NotificationBell = ({ dispositivos = [] }: Props) => {
           <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
           <path d="M13.73 21a2 2 0 0 1-3.46 0" />
         </svg>
-        {(noLeidas + totalAlertas) > 0 && (
+        {(noLeidas + totalAlertas + incidenciasPorJustificar) > 0 && (
           <span style={{
             position: 'absolute',
             top: '2px',
@@ -153,7 +162,7 @@ export const NotificationBell = ({ dispositivos = [] }: Props) => {
             justifyContent: 'center',
             lineHeight: 1,
           }}>
-            {(noLeidas + totalAlertas) > 99 ? '99+' : (noLeidas + totalAlertas)}
+            {(noLeidas + totalAlertas + incidenciasPorJustificar) > 99 ? '99+' : (noLeidas + totalAlertas + incidenciasPorJustificar)}
           </span>
         )}
       </button>
@@ -199,7 +208,7 @@ export const NotificationBell = ({ dispositivos = [] }: Props) => {
             zIndex: 1,
           }}>
             <span style={{ fontWeight: 700, fontSize: '0.9rem', color: '#1f2937' }}>
-              Notificaciones{(noLeidas + totalAlertas) > 0 && <span style={{ color: '#ef4444' }}> ({noLeidas + totalAlertas})</span>}
+              Notificaciones{(noLeidas + totalAlertas + incidenciasPorJustificar) > 0 && <span style={{ color: '#ef4444' }}> ({noLeidas + totalAlertas + incidenciasPorJustificar})</span>}
             </span>
             {noLeidas > 0 && (
               <button
@@ -283,6 +292,32 @@ export const NotificationBell = ({ dispositivos = [] }: Props) => {
             </div>
           )}
 
+          {/* ── Alerta diaria: incidencias por justificar ── */}
+          {incidenciasPorJustificar > 0 && (
+            <div style={{ borderBottom: '1px solid #e5e7eb' }}>
+              <div style={{
+                padding: '8px 14px',
+                backgroundColor: '#fff7ed',
+                display: 'flex',
+                gap: '10px',
+                alignItems: 'center',
+                cursor: 'pointer',
+              }}
+              onClick={irAIncidenciasPendientes}
+              title="Ir a incidencias pendientes de justificar">
+                <div style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#c2410c', flexShrink: 0 }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: '0.82rem', fontWeight: 700, color: '#9a3412' }}>
+                    Incidencias por justificar: {incidenciasPorJustificar}
+                  </div>
+                  <div style={{ fontSize: '0.77rem', color: '#b45309' }}>
+                    Se muestran incidencias pendientes de días anteriores (alerta diaria).
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* ── Notificaciones del sistema ── */}
           {notificaciones.length > 0 && (
             <div style={{
@@ -297,7 +332,7 @@ export const NotificationBell = ({ dispositivos = [] }: Props) => {
               Actividad reciente
             </div>
           )}
-          {notificaciones.length === 0 && totalAlertas === 0 ? (
+          {notificaciones.length === 0 && totalAlertas === 0 && incidenciasPorJustificar === 0 ? (
             <div style={{ padding: '24px 16px', textAlign: 'center', color: '#9ca3af', fontSize: '0.85rem' }}>
               No hay notificaciones
             </div>

@@ -1,0 +1,16 @@
+[Unit]
+Description=Optiexpress frontend (intranet SPA)
+After=network.target
+
+[Service]
+Type=simple
+User=marco
+WorkingDirectory=/home/marco/optiexpress/frontend/dist
+ExecStart=/usr/bin/python3 -m http.server 3000 --bind 0.0.0.0
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/home/marco/optiexpress/frontend/frontend.log
+StandardError=append:/home/marco/optiexpress/frontend/frontend.log
+
+[Install]
+WantedBy=multi-user.target

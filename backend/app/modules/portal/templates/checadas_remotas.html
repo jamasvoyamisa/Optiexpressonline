@@ -49,6 +49,17 @@
       font-size: 0.95rem; text-align: center;
       background: rgba(239,68,68,0.3); color: #fca5a5;
     }
+    .msg-ok {
+      margin-top: 1rem; padding: 0.75rem 1rem; border-radius: 8px;
+      font-size: 0.95rem; text-align: center;
+      background: rgba(22,163,74,0.25); color: #bbf7d0;
+      border: 1px solid rgba(34,197,94,0.4);
+    }
+    .msg-info {
+      margin-top: 1rem; padding: 0.75rem 1rem; border-radius: 8px;
+      font-size: 0.95rem; text-align: center;
+      background: rgba(59,130,246,0.2); color: #bfdbfe;
+    }
     .hide { display: none !important; }
 
     /* ── Modal ── */
@@ -98,9 +109,16 @@
   </style>
 </head>
 <body>
-  <div class="card">
+  <!-- Día completado o no laboral: sin formulario de checada -->
+  <div id="panel-completado" class="card hide">
+    <h1 id="titulo-completado">¡Listo por hoy!</h1>
+    <p id="texto-completado" class="subtitle" style="margin-bottom:0;"></p>
+    <p id="sub-completado" style="color: rgba(255,255,255,0.75); font-size: 0.88rem; margin-top: 1rem;"></p>
+  </div>
+
+  <div class="card" id="card-form">
     <h1>Checada Remota</h1>
-    <p class="subtitle">Ingresa tu empresa, número de empleado y contraseña</p>
+    <p class="subtitle">Ingresa tu empresa, número de empleado y contraseña. Se requieren 4 checadas de lunes a viernes y 2 los sábados (si trabajas sábado).</p>
     <form id="form">
       <label for="empresa">Empresa</label>
       <select id="empresa" required>
@@ -110,9 +128,12 @@
       <input type="text" id="numero" placeholder="Ej: 001" required autocomplete="username">
       <label for="password">Contraseña</label>
       <input type="password" id="password" placeholder="Tu contraseña de la app" required autocomplete="current-password">
+      <button type="button" class="btn-submit" id="btn-estado" style="margin-bottom:0.75rem;background:#334155;font-size:1rem;">Consultar estado de hoy</button>
       <button type="submit" class="btn-submit" id="btn">Registrar checada</button>
     </form>
     <div id="msg-err" class="msg-err hide"></div>
+    <div id="msg-info" class="msg-info hide"></div>
+    <div id="msg-ok-inline" class="msg-ok hide"></div>
   </div>
 
   <!-- Modal de confirmación -->
@@ -166,6 +187,87 @@
       document.getElementById('msg-err').classList.add('hide');
     }
 
+    function ocultarInfo() {
+      document.getElementById('msg-info').classList.add('hide');
+      document.getElementById('msg-ok-inline').classList.add('hide');
+    }
+
+    function mostrarInfo(texto) {
+      ocultarError();
+      const el = document.getElementById('msg-info');
+      el.textContent = texto;
+      el.classList.remove('hide');
+    }
+
+    function mostrarOkInline(texto) {
+      ocultarError();
+      const el = document.getElementById('msg-ok-inline');
+      el.textContent = texto;
+      el.classList.remove('hide');
+    }
+
+    function mostrarPanelCompletado(titulo, texto, sub) {
+      document.getElementById('card-form').classList.add('hide');
+      document.getElementById('panel-completado').classList.remove('hide');
+      document.getElementById('titulo-completado').textContent = titulo;
+      document.getElementById('texto-completado').textContent = texto;
+      document.getElementById('sub-completado').textContent = sub || '';
+    }
+
+    function aplicarEstadoDesdeServidor(data) {
+      ocultarInfo();
+      if (data.dia_no_laboral) {
+        mostrarPanelCompletado('No aplica checada', data.mensaje || '', '');
+        return;
+      }
+      if (data.completado && data.requeridas_hoy > 0) {
+        mostrarPanelCompletado(
+          '¡Listo por hoy!',
+          'Ya registraste las ' + data.requeridas_hoy + ' checadas necesarias de este día.',
+          data.nombre_empleado ? ('Hola, ' + data.nombre_empleado + '.') : ''
+        );
+        return;
+      }
+      if (data.requeridas_hoy > 0 && !data.completado) {
+        mostrarOkInline('Progreso hoy: ' + data.checadas_hoy + ' de ' + data.requeridas_hoy + ' checadas.');
+      }
+    }
+
+    async function consultarEstado() {
+      ocultarError();
+      ocultarInfo();
+      const empresa = document.getElementById('empresa').value;
+      const numero = document.getElementById('numero').value.trim();
+      const password = document.getElementById('password').value;
+      if (!empresa || !numero || !password) {
+        mostrarError('Selecciona empresa, número y contraseña para consultar.');
+        return;
+      }
+      const btn = document.getElementById('btn-estado');
+      btn.disabled = true;
+      try {
+        const r = await fetch(API + '/estado-hoy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            empresa_id: parseInt(empresa, 10),
+            numero_empleado: numero,
+            password: password,
+          }),
+        });
+        const data = await r.json();
+        if (!data.ok) {
+          mostrarError(data.mensaje || 'No se pudo consultar.');
+          return;
+        }
+        aplicarEstadoDesdeServidor(data);
+      } catch {
+        mostrarError('Error de conexión.');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
     function abrirModal(data) {
       const tipo = TIPOS[data.tipo] || { label: data.tipo || 'Checada', color: '#374151', bg: '#f3f4f6', icon: '✅' };
 
@@ -196,9 +298,12 @@
       document.getElementById('modal').classList.add('hide');
     }
 
+    document.getElementById('btn-estado').addEventListener('click', () => consultarEstado());
+
     document.getElementById('form').addEventListener('submit', async (e) => {
       e.preventDefault();
       ocultarError();
+      ocultarInfo();
       const btn = document.getElementById('btn');
       btn.disabled = true;
       try {
@@ -212,9 +317,33 @@
           }),
         });
         const data = await r.json();
+        if (data.completado && !data.ok) {
+          if (data.dia_no_laboral) {
+            mostrarPanelCompletado('No aplica checada', data.mensaje || '', '');
+          } else {
+            mostrarPanelCompletado(
+              '¡Listo por hoy!',
+              data.mensaje || 'Ya completaste las checadas necesarias.',
+              ''
+            );
+          }
+          return;
+        }
+        if (data.ok && data.completado) {
+          document.getElementById('password').value = '';
+          mostrarPanelCompletado(
+            '¡Listo por hoy!',
+            data.mensaje || ('Ya registraste las ' + (data.requeridas_hoy || '') + ' checadas de hoy.'),
+            data.nombre_empleado ? ('Hola, ' + data.nombre_empleado + '.') : ''
+          );
+          return;
+        }
         if (data.ok) {
           document.getElementById('password').value = '';
           abrirModal(data);
+          if (data.requeridas_hoy && data.checadas_hoy != null) {
+            mostrarOkInline('Checadas de hoy: ' + data.checadas_hoy + ' de ' + data.requeridas_hoy + '.');
+          }
         } else {
           mostrarError(data.mensaje || 'Error al registrar la checada.');
         }

@@ -744,9 +744,7 @@ class AsistenciaService:
 
         dia_semana = fecha.weekday()  # 0=lunes … 6=domingo
 
-        # Si el día es festivo activo, no generar incidencias
-        if AsistenciaService.es_dia_festivo(db, fecha):
-            return {"fecha": str(fecha), "incidencias_creadas": 0, "omitidas_duplicadas": 0, "motivo": "día festivo"}
+        es_festivo_global = AsistenciaService.es_dia_festivo(db, fecha)
 
         # Obtener todos los EmpleadoHorario activos
         asignaciones = db.query(models.EmpleadoHorario).filter(
@@ -764,6 +762,12 @@ class AsistenciaService:
                 personal_models.Empleado.id.in_(empleado_ids)
             ).all()
         } if empleado_ids else {}
+        empresa_ids = {e.empresa_id for e in empleados_map.values() if e and e.empresa_id}
+        empresas_map = {
+            emp.id: emp for emp in db.query(personal_models.Empresa).filter(
+                personal_models.Empresa.id.in_(empresa_ids)
+            ).all()
+        } if empresa_ids else {}
 
         # Pre-cargar empleados con incapacidad activa ese día para evitar generar faltas
         from app.modules.incapacidades import service as incapacidad_service
@@ -793,10 +797,17 @@ class AsistenciaService:
 
             # dias_semana usa 1=lunes…7=domingo; weekday() devuelve 0=lun…6=dom
             dia_num = dia_semana + 1  # 1–7
+            empleado = empleados_map.get(asig.empleado_id)
+            empresa = empresas_map.get(empleado.empresa_id) if empleado and empleado.empresa_id else None
+            dias_laborales_empresa = ((empresa.dias_laborales if empresa else None) or "lun-sab").strip().lower()
+            trabaja_festivos_empresa = bool(getattr(empresa, "trabaja_festivos", False))
+
+            # En festivo global, solo procesar empresas que sí laboran festivos.
+            if es_festivo_global and not trabaja_festivos_empresa:
+                continue
 
             # ── Sábado (dia_num == 6): lógica especial ──
             if dia_num == 6:
-                empleado = empleados_map.get(asig.empleado_id)
                 # Si el empleado no tiene horario sabatino asignado → no labora → sin incidencia
                 if not empleado or not empleado.horario_sabado_id:
                     continue
@@ -809,6 +820,13 @@ class AsistenciaService:
                     continue
                 hora_salida_efectiva = horario_sab.hora_salida
                 tolerancia_efectiva = horario_sab.tolerancia_minutos or 0
+            elif dia_num == 7:
+                # Domingo: solo aplica para empresas configuradas como lun-dom.
+                if dias_laborales_empresa != "lun-dom":
+                    continue
+                # Domingo se trata como jornada corta (2 checadas: entrada/salida).
+                hora_salida_efectiva = horario.hora_salida
+                tolerancia_efectiva = horario.tolerancia_minutos or 0
             else:
                 # Verificar si el día está incluido en dias_semana
                 if horario.dias_semana:
@@ -818,8 +836,8 @@ class AsistenciaService:
                 hora_salida_efectiva = horario.hora_salida
                 tolerancia_efectiva = horario.tolerancia_minutos or 0
 
-            # Sábado: solo 2 checadas requeridas (entrada + salida, sin comida)
-            checadas_requeridas = 2 if dia_num == 6 else 4
+            # Sábado y domingo laborable: 2 checadas (entrada + salida, sin comida)
+            checadas_requeridas = 2 if dia_num in (6, 7) else 4
 
             # Contar checadas del empleado ese día (rango en UTC para fecha en México)
             checadas = db.query(models.Asistencia).filter(

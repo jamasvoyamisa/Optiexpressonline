@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List, Literal
 from datetime import datetime, date
 from decimal import Decimal
 from .models import EstadoSolicitud
@@ -87,6 +87,7 @@ class PeriodoVacacionesResponse(BaseModel):
     dias_derecho: int
     dias_tomados: float
     dias_disponibles: float
+    dias_adelantados: float = 0  # tomados por encima del derecho (adelanto al próximo periodo)
     fecha_aniversario: Optional[str] = None
     fecha_limite_goce: Optional[str] = None  # después de esta fecha se prescriben
 
@@ -101,3 +102,45 @@ class BalanceConPeriodosResponse(BaseModel):
     dias_tomados: Decimal
     dias_pendientes: Decimal
     fecha_limite_goce: Optional[str] = None  # del periodo que vence primero (anterior)
+
+
+# --- Vacaciones generales (días empresa / calendario) ---
+
+class VacacionGeneralCreate(BaseModel):
+    nombre: str
+    fecha_inicio: date
+    fecha_fin: date
+    alcance: Literal["global", "empresa", "departamento"]
+    empresa_id: Optional[int] = None
+    departamento_id: Optional[int] = None
+    dias_cuenta_ley: Decimal
+    dias_regalo_empresa: Decimal = Decimal("0")
+    activo: bool = True
+    notas: Optional[str] = None
+
+
+class VacacionGeneralResponse(BaseModel):
+    id: int
+    nombre: str
+    fecha_inicio: date
+    fecha_fin: date
+    alcance: str
+    empresa_id: Optional[int] = None
+    departamento_id: Optional[int] = None
+    dias_cuenta_ley: Decimal
+    dias_regalo_empresa: Decimal
+    activo: bool
+    notas: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class AplicarVacacionGeneralResultado(BaseModel):
+    vacacion_general_id: int
+    empleados_totales: int
+    aplicados: int
+    omitidos: List[dict]
+    errores: List[dict]

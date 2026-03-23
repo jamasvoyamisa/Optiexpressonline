@@ -23,14 +23,29 @@ interface EmpleadoDoc {
 
 interface SolicitudPrestamoDoc {
   id: number;
+  numero_solicitud?: string | null;
   empleado_id: number;
   monto: string;
   plazo_meses: number;
   motivo?: string | null;
   descuento_quincenal?: string | null;
   estado?: string;
+  referencia_bancaria?: string | null;
+  fecha_deposito?: string | null;
   created_at: string;
 }
+
+const labelEstado = (e?: string) => {
+  const x = (e || '').toLowerCase();
+  const m: Record<string, string> = {
+    pendiente: 'Pendiente',
+    aprobada_departamento: 'Autorizada por departamento',
+    depositado: 'Depositado',
+    rechazada: 'Rechazada',
+    cancelada: 'Cancelada',
+  };
+  return m[x] || e || '—';
+};
 
 const val = (x: string | null | undefined) => x ?? '';
 
@@ -56,6 +71,10 @@ export const generarDocumentoPrestamo = (
 ) => {
   const hoy = fmtPartes(new Date().toISOString().slice(0, 10));
   const esBorrador = sol.estado === 'pendiente';
+  const refBancaria = val(sol.referencia_bancaria);
+  const fechaDep = sol.fecha_deposito
+    ? fmtPartes(sol.fecha_deposito.includes('T') ? sol.fecha_deposito : sol.fecha_deposito + 'T12:00:00')
+    : null;
   const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
 
   // nombreCompleto no se usa directamente (los campos se inyectan por separado en el HTML)
@@ -172,6 +191,19 @@ export const generarDocumentoPrestamo = (
     font-size: 10pt;
     color: #222;
     padding-bottom: 4px;
+  }
+  .folio-fecha-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+  }
+  .folio-box {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 10pt;
+    color: #222;
   }
   .fecha-box .cell {
     border-bottom: 1px solid #555;
@@ -371,13 +403,19 @@ export const generarDocumentoPrestamo = (
       <span class="title">Solicitante</span>
       <span class="subtitle">Datos personales e información</span>
     </div>
-    <div class="fecha-box">
-      <span>Fecha:</span>
-      <span class="cell">${hoy.dd}</span>
-      <span class="sep">|</span>
-      <span class="cell">${hoy.mm}</span>
-      <span class="sep">|</span>
-      <span class="cell">${hoy.aaaa}</span>
+    <div class="folio-fecha-wrap">
+      <div class="folio-box">
+        <span>No. solicitud:</span>
+        <span class="cell" style="min-width:120px;">${val(sol.numero_solicitud) || `#${sol.id}`}</span>
+      </div>
+      <div class="fecha-box">
+        <span>Fecha:</span>
+        <span class="cell">${hoy.dd}</span>
+        <span class="sep">|</span>
+        <span class="cell">${hoy.mm}</span>
+        <span class="sep">|</span>
+        <span class="cell">${hoy.aaaa}</span>
+      </div>
     </div>
   </div>
 
@@ -469,6 +507,19 @@ export const generarDocumentoPrestamo = (
       <span class="field-val"></span>
     </div>
   </div>
+
+  <!-- ── Estado y depósito (flujo departamento + GG) ── -->
+  <div class="motivo-block" style="margin-top:0.35cm;">
+    <div class="motivo-lbl">Estado de la solicitud:</div>
+    <div class="motivo-line" style="font-weight:600;">${labelEstado(sol.estado)}</div>
+  </div>
+  ${refBancaria ? `
+  <div class="motivo-block">
+    <div class="motivo-lbl">Referencia bancaria del depósito:</div>
+    <div class="motivo-line" style="font-family:monospace;font-weight:600;">${refBancaria}</div>
+    ${fechaDep ? `<div style="font-size:9pt;color:#555;margin-top:4px;">Fecha de depósito: ${fechaDep.dd}/${fechaDep.mm}/${fechaDep.aaaa}</div>` : ''}
+  </div>
+  ` : ''}
 
   <!-- ── Motivo ── -->
   <div class="motivo-block">

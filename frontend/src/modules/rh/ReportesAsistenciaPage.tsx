@@ -21,6 +21,7 @@ interface ResumenEmpleado {
   retardos: number;
   salidas_anticipadas: number;
   dias_incapacidad: number;
+  dias_vacaciones: number;
   puntualidad_pct: number;
 }
 
@@ -33,6 +34,7 @@ interface DetalleDia {
   es_festivo: boolean;
   festivo_nombre?: string | null;
   en_incapacidad: boolean;
+  en_vacaciones: boolean;
   checadas: DetalleChecada[];
   incidencias: DetalleIncidencia[];
 }
@@ -76,63 +78,34 @@ const TIPO_INC_LABEL: Record<string, { label: string; bg: string; color: string 
   horas_extra: { label: 'Horas extra', bg: '#d1fae5', color: '#065f46' },
 };
 
-// ─── Exportar XLSX ───────────────────────────────────────────────────────────
-async function exportarXLSX(datos: ResumenEmpleado[], fi: string, ff: string, label: string) {
-  const XLSX = await import('xlsx');
-
-  const cols = [
-    'No.', 'Nombre', 'Empresa', 'Departamento',
-    'Días laborables', 'Asistió', 'Completos', 'Faltas', 'Faltas justif.', 'Incompletas',
-    'Retardos', 'Salidas anticipadas', 'Incapacidades', '% Puntualidad',
-  ];
-
-  const rows = datos.map(r => [
-    r.numero_empleado,
-    `${r.nombre} ${r.apellido_paterno}`.trim(),
-    r.empresa,
-    r.departamento,
-    r.total_dias_laborables,
-    r.dias_asistio,
-    r.dias_completos,
-    r.faltas,
-    r.faltas_justificadas,
-    r.incompletas ?? 0,
-    r.retardos,
-    r.salidas_anticipadas,
-    r.dias_incapacidad,
-    r.puntualidad_pct / 100,   // formato porcentaje real para Excel
-  ]);
-
-  const ws = XLSX.utils.aoa_to_sheet([cols, ...rows]);
-
-  // Ancho de columnas
-  ws['!cols'] = [
-    { wch: 8 }, { wch: 28 }, { wch: 22 }, { wch: 22 },
-    { wch: 14 }, { wch: 10 }, { wch: 11 }, { wch: 8 }, { wch: 12 }, { wch: 11 },
-    { wch: 10 }, { wch: 18 }, { wch: 14 }, { wch: 14 },
-  ];
-
-  // Formato porcentaje en columna % Puntualidad (índice 13, fila 2 en adelante)
-  for (let i = 1; i <= rows.length; i++) {
-    const cell = XLSX.utils.encode_cell({ r: i, c: 13 });
-    if (ws[cell]) { ws[cell].z = '0.0%'; ws[cell].t = 'n'; }
+// ─── Descargar reporte XLSX del backend ──────────────────────────────────────
+async function descargarReporteDetalle(fi: string, ff: string, empresa: string, depto: string) {
+  const params = new URLSearchParams({ fecha_inicio: fi, fecha_fin: ff });
+  if (empresa) params.set('empresa_id', empresa);
+  if (depto) params.set('departamento_id', depto);
+  try {
+    const res = await api.get(`/asistencia/reporte-export-xlsx?${params}`, { responseType: 'blob' });
+    const url = window.URL.createObjectURL(new Blob([res.data]));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `reporte_asistencia_${fi}_${ff}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  } catch (e: any) {
+    let msg = 'Error al generar reporte';
+    try {
+      if (e.response?.data instanceof Blob) {
+        msg = await e.response.data.text();
+        const parsed = JSON.parse(msg);
+        msg = parsed.detail || msg;
+      } else {
+        msg = e.response?.data?.detail || msg;
+      }
+    } catch { /* keep default msg */ }
+    alert(msg);
   }
-
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Asistencia');
-
-  // Segunda hoja: metadatos del reporte
-  const meta = XLSX.utils.aoa_to_sheet([
-    ['Reporte de Asistencia'],
-    ['Período', label],
-    ['Desde', fi],
-    ['Hasta', ff],
-    ['Total empleados', datos.length],
-    ['Generado', new Date().toLocaleString('es-MX')],
-  ]);
-  XLSX.utils.book_append_sheet(wb, meta, 'Info');
-
-  XLSX.writeFile(wb, `reporte_asistencia_${fi}_${ff}.xlsx`);
 }
 
 // ─── Utilidades de quincena ──────────────────────────────────────────────────
@@ -258,6 +231,19 @@ export const ReportesAsistenciaPage = () => {
     }
   }, [filtroEmpresa, filtroDepto]);
 
+  // Navegación rápida por quincena (prev/next) desde el período mostrado arriba.
+  const navegarQuincenaPeriodo = useCallback(async (dir: 'prev' | 'next') => {
+    if (!fiNominal) return;
+    const d = new Date(fiNominal + 'T12:00:00');
+    const year = d.getFullYear();
+    const mes = d.getMonth() + 1;
+    const num: 1 | 2 = d.getDate() <= 15 ? 1 : 2;
+    const q = dir === 'prev' ? quincenaAnterior(year, mes, num) : quincenaSiguiente(year, mes, num);
+    setFechaInicio(q.fi);
+    setFechaFin(q.ff);
+    await buscarConFechas(q.fi, q.ff, q.label);
+  }, [fiNominal, buscarConFechas]);
+
   const buscar = useCallback(() => {
     if (fechaInicio && fechaFin) {
       buscarConFechas(fechaInicio, fechaFin, 'Rango personalizado');
@@ -326,7 +312,8 @@ export const ReportesAsistenciaPage = () => {
     retardos: acc.retardos + r.retardos,
     salidas: acc.salidas + r.salidas_anticipadas,
     incapacidades: acc.incapacidades + r.dias_incapacidad,
-  }), { faltas: 0, faltas_j: 0, incompletas: 0, retardos: 0, salidas: 0, incapacidades: 0 });
+    vacaciones: acc.vacaciones + (r.dias_vacaciones ?? 0),
+  }), { faltas: 0, faltas_j: 0, incompletas: 0, retardos: 0, salidas: 0, incapacidades: 0, vacaciones: 0 });
 
   const badge = (n: number, bg: string, color: string) => (
     <span style={{ backgroundColor: bg, color, borderRadius: 5, padding: '2px 9px', fontSize: '0.78rem', fontWeight: 700 }}>{n}</span>
@@ -339,13 +326,55 @@ export const ReportesAsistenciaPage = () => {
       {/* ── Filtros: todo en una línea ── */}
       <div style={{ backgroundColor: 'white', borderRadius: 10, border: '1px solid #e5e7eb', padding: '16px 20px', marginBottom: 20 }}>
         {quinLabel && (
-          <div style={{ marginBottom: 12 }}>
-            <span style={{ backgroundColor: '#f0f9ff', color: '#0369a1', border: '1px solid #bae6fd', borderRadius: 6, padding: '4px 12px', fontSize: '0.82rem', fontWeight: 700 }}>
-              Período: {quinLabel}
-            </span>
+          <div style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => navegarQuincenaPeriodo('prev')}
+                disabled={cargando}
+                style={{ background: 'white', border: '1px solid #d1d5db', borderRadius: 8, width: 32, height: 32, cursor: cargando ? 'not-allowed' : 'pointer', color: '#374151', fontSize: '1rem', fontWeight: 800 }}
+              >
+                ‹
+              </button>
+              <span style={{ backgroundColor: '#f0f9ff', color: '#0369a1', border: '1px solid #bae6fd', borderRadius: 6, padding: '4px 12px', fontSize: '0.82rem', fontWeight: 700 }}>
+                Período: {quinLabel}
+              </span>
+              <button
+                type="button"
+                onClick={() => navegarQuincenaPeriodo('next')}
+                disabled={cargando}
+                style={{ background: 'white', border: '1px solid #d1d5db', borderRadius: 8, width: 32, height: 32, cursor: cargando ? 'not-allowed' : 'pointer', color: '#374151', fontSize: '1rem', fontWeight: 800 }}
+              >
+                ›
+              </button>
+            </div>
           </div>
         )}
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'flex-end' }}>
+          <div>
+            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#6b7280', marginBottom: 4 }}>Empleado</label>
+            <input
+              type="text"
+              placeholder="Buscar por nombre o No."
+              value={busqueda}
+              onChange={e => setBusqueda(e.target.value)}
+              style={{ ...inputStyle, width: 220, height: 34, backgroundColor: 'white' }}
+            />
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#6b7280', marginBottom: 4 }}>Empresa</label>
+            <select value={filtroEmpresa} onChange={e => setFiltroEmpresa(e.target.value)} style={filterControlStyle}>
+              <option value="">Todas</option>
+              {empresas.map(e => <option key={e.id} value={e.id}>{e.nombre}</option>)}
+            </select>
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#6b7280', marginBottom: 4 }}>Departamento</label>
+            <select value={filtroDepto} onChange={e => setFiltroDepto(e.target.value)} disabled={!filtroEmpresa} style={{ ...filterControlStyle, backgroundColor: !filtroEmpresa ? '#f9fafb' : 'white' }}>
+              <option value="">Todos</option>
+              {deptos.map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}
+            </select>
+          </div>
           <div>
             <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#6b7280', marginBottom: 4 }}>Desde</label>
             <input
@@ -372,20 +401,6 @@ export const ReportesAsistenciaPage = () => {
               style={filterControlStyle}
             />
           </div>
-          <div>
-            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#6b7280', marginBottom: 4 }}>Empresa</label>
-            <select value={filtroEmpresa} onChange={e => setFiltroEmpresa(e.target.value)} style={filterControlStyle}>
-              <option value="">Todas</option>
-              {empresas.map(e => <option key={e.id} value={e.id}>{e.nombre}</option>)}
-            </select>
-          </div>
-          <div>
-            <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#6b7280', marginBottom: 4 }}>Departamento</label>
-            <select value={filtroDepto} onChange={e => setFiltroDepto(e.target.value)} disabled={!filtroEmpresa} style={{ ...filterControlStyle, backgroundColor: !filtroEmpresa ? '#f9fafb' : 'white' }}>
-              <option value="">Todos</option>
-              {deptos.map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}
-            </select>
-          </div>
           <button
             onClick={buscar}
             disabled={cargando}
@@ -410,6 +425,7 @@ export const ReportesAsistenciaPage = () => {
                 { label: 'Retardos', valor: totales.retardos, color: '#d97706', bg: '#fffbeb' },
                 { label: 'Salidas antic.', valor: totales.salidas, color: '#c2410c', bg: '#fff7ed' },
                 { label: 'Incapacidades', valor: totales.incapacidades, color: '#0369a1', bg: '#f0f9ff' },
+                { label: 'Vacaciones', valor: totales.vacaciones, color: '#166534', bg: '#f0fdf4' },
               ].map(c => (
                 <div key={c.label} style={{ backgroundColor: c.bg, border: `1px solid ${c.color}22`, borderRadius: 8, padding: '14px 16px' }}>
                   <div style={{ fontSize: '0.75rem', color: '#6b7280', fontWeight: 600, marginBottom: 4 }}>{c.label}</div>
@@ -423,19 +439,12 @@ export const ReportesAsistenciaPage = () => {
           {filtrados.length > 0 && (
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 12, flexWrap: 'wrap' }}>
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                <input
-                  type="text"
-                  placeholder="Filtrar por nombre, No. o departamento..."
-                  value={busqueda}
-                  onChange={e => setBusqueda(e.target.value)}
-                  style={{ ...inputStyle, width: 260 }}
-                />
                 <span style={{ fontSize: '0.8rem', color: '#6b7280', whiteSpace: 'nowrap' }}>
                   <strong>{quinLabel || 'Período'}</strong> ({fechaInicio} → {fechaFin})
                 </span>
               </div>
               <button
-                onClick={() => exportarXLSX(filtrados, fechaInicio, fechaFin, quinLabel)}
+                onClick={() => descargarReporteDetalle(fechaInicio, fechaFin, filtroEmpresa, filtroDepto)}
                 style={{ padding: '7px 16px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: 7, cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem' }}
               >
                 ⬇ Exportar XLSX
@@ -465,6 +474,7 @@ export const ReportesAsistenciaPage = () => {
                     <th style={thC}>Retardos</th>
                     <th style={thC}>Sal. Antic.</th>
                     <th style={thC}>Incapac.</th>
+                    <th style={thC}>Vacac.</th>
                     <th style={thC}>Puntualidad</th>
                     <th style={thC}>Detalle</th>
                   </tr>
@@ -491,6 +501,7 @@ export const ReportesAsistenciaPage = () => {
                         <td style={tdC}>{r.retardos > 0 ? badge(r.retardos, '#fef3c7', '#92400e') : <span style={{ color: '#d1d5db' }}>0</span>}</td>
                         <td style={tdC}>{r.salidas_anticipadas > 0 ? badge(r.salidas_anticipadas, '#fff7ed', '#c2410c') : <span style={{ color: '#d1d5db' }}>0</span>}</td>
                         <td style={tdC}>{r.dias_incapacidad > 0 ? badge(r.dias_incapacidad, '#f0f9ff', '#0369a1') : <span style={{ color: '#d1d5db' }}>0</span>}</td>
+                        <td style={tdC}>{(r.dias_vacaciones ?? 0) > 0 ? badge(r.dias_vacaciones, '#f0fdf4', '#166534') : <span style={{ color: '#d1d5db' }}>0</span>}</td>
                         <td style={tdC}>
                           <span style={{ backgroundColor: pctBg, color: pctColor, borderRadius: 5, padding: '2px 9px', fontSize: '0.78rem', fontWeight: 700 }}>
                             {pct}%
@@ -565,7 +576,8 @@ export const ReportesAsistenciaPage = () => {
                 { l: 'Retardos', v: detalleEmp.retardos, bg: '#fef3c7', c: '#92400e' },
                 { l: 'Sal.Antic.', v: detalleEmp.salidas_anticipadas, bg: '#fff7ed', c: '#c2410c' },
                 { l: 'Incapac.', v: detalleEmp.dias_incapacidad, bg: '#f0f9ff', c: '#0369a1' },
-                { l: 'Puntualidad', v: `${detalleEmp.puntualidad_pct}%`, bg: '#f0fdf4', c: '#166534' },
+                { l: 'Vacac.', v: detalleEmp.dias_vacaciones ?? 0, bg: '#f0fdf4', c: '#166534' },
+                { l: 'Puntualidad', v: `${detalleEmp.puntualidad_pct}%`, bg: '#ecfdf5', c: '#065f46' },
               ].map(x => (
                 <div key={x.l} style={{ backgroundColor: x.bg, borderRadius: 6, padding: '6px 12px', textAlign: 'center' }}>
                   <div style={{ fontSize: '0.7rem', color: '#6b7280', fontWeight: 600 }}>{x.l}</div>
@@ -592,7 +604,7 @@ export const ReportesAsistenciaPage = () => {
                   </thead>
                   <tbody>
                     {detalleData.dias.map(d => {
-                      const bgRow = d.es_domingo ? '#f3f4f6' : d.en_incapacidad ? '#f0f9ff' : d.es_festivo ? '#fff7ed' : d.incidencias.some(i => i.tipo === 'falta' && !i.justificada) ? '#fef2f2' : d.incidencias.some(i => i.tipo === 'incompleta') ? '#fefce8' : d.incidencias.some(i => i.tipo === 'retardo') ? '#fffbeb' : 'white';
+                      const bgRow = d.es_domingo ? '#f3f4f6' : d.en_vacaciones ? '#f0fdf4' : d.en_incapacidad ? '#f0f9ff' : d.es_festivo ? '#fff7ed' : d.incidencias.some(i => i.tipo === 'falta' && !i.justificada) ? '#fef2f2' : d.incidencias.some(i => i.tipo === 'incompleta') ? '#fefce8' : d.incidencias.some(i => i.tipo === 'retardo') ? '#fffbeb' : 'white';
                       return (
                         <tr key={d.fecha} style={{ backgroundColor: bgRow, borderBottom: '1px solid #f0f0f0' }}>
                           <td style={{ ...td, fontWeight: 600, fontSize: '0.8rem' }}>
@@ -602,8 +614,10 @@ export const ReportesAsistenciaPage = () => {
                           <td style={td}>
                             {d.es_domingo ? (
                               <span style={{ color: '#6b7280', fontSize: '0.75rem', fontWeight: 600 }}>Descanso</span>
+                            ) : d.en_vacaciones ? (
+                              <span style={{ color: '#166534', fontSize: '0.75rem', fontWeight: 600 }}>Vacaciones</span>
                             ) : d.en_incapacidad ? (
-                              <span style={{ color: '#0369a1', fontSize: '0.75rem', fontWeight: 600 }}>🏥 Incapacidad</span>
+                              <span style={{ color: '#0369a1', fontSize: '0.75rem', fontWeight: 600 }}>Incapacidad</span>
                             ) : d.es_festivo ? (
                               <span style={{ color: '#c2410c', fontSize: '0.75rem', fontWeight: 600 }}>🎉 {d.festivo_nombre}</span>
                             ) : d.checadas.length === 0 ? (

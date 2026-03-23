@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import logging
@@ -33,7 +33,10 @@ def create_empresa(empresa: schemas.EmpresaCreate, db: Session = Depends(get_db)
     existing = db.query(models.Empresa).filter(models.Empresa.nombre == empresa.nombre).first()
     if existing:
         raise HTTPException(status_code=400, detail="Ya existe una empresa con ese nombre")
-    return service.PersonalService.create_empresa(db, empresa)
+    try:
+        return service.PersonalService.create_empresa(db, empresa)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/empresas", response_model=List[schemas.EmpresaResponse])
@@ -56,7 +59,10 @@ def get_empresa(empresa_id: int, db: Session = Depends(get_db)):
 
 @router.put("/empresas/{empresa_id}", response_model=schemas.EmpresaResponse)
 def update_empresa(empresa_id: int, empresa: schemas.EmpresaUpdate, db: Session = Depends(get_db)):
-    emp = service.PersonalService.update_empresa(db, empresa_id, empresa)
+    try:
+        emp = service.PersonalService.update_empresa(db, empresa_id, empresa)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if not emp:
         raise HTTPException(status_code=404, detail="Empresa no encontrada")
     return emp
@@ -249,19 +255,24 @@ def delete_rol(rol_id: int, db: Session = Depends(get_db)):
 
 @router.get("/empleados/next-numero")
 def next_numero_empleado(empresa_id: int, db: Session = Depends(get_db)):
-    """Devuelve el siguiente número de empleado disponible para una empresa."""
-    numeros = [
-        int(e.numero_empleado)
+    """Siguiente número de empleado = último numérico registrado en la empresa + 1.
+    Solo considera valores totalmente numéricos; el formato (ceros a la izquierda) se
+    mantiene acorde al ancho máximo existente."""
+    digit_strs = [
+        e.numero_empleado.strip()
         for e in db.query(models.Empleado.numero_empleado)
         .filter(models.Empleado.empresa_id == empresa_id)
         .all()
-        if e.numero_empleado and e.numero_empleado.isdigit()
+        if e.numero_empleado and str(e.numero_empleado).strip().isdigit()
     ]
-    siguiente = 1
-    numeros_set = set(numeros)
-    while siguiente in numeros_set:
-        siguiente += 1
-    return {"numero_empleado": str(siguiente).zfill(3)}
+    if not digit_strs:
+        return {"numero_empleado": "1"}
+    numeros = [int(s) for s in digit_strs]
+    siguiente = max(numeros) + 1
+    sig_str = str(siguiente)
+    min_width = max(len(s) for s in digit_strs)
+    width = max(min_width, len(sig_str))
+    return {"numero_empleado": sig_str.zfill(width)}
 
 
 @router.get("/empleados/check-username")
@@ -496,3 +507,346 @@ def get_subordinados(jefe_id: int, db: Session = Depends(get_db)):
             detail="Jefe no encontrado"
         )
     return service.PersonalService.get_subordinados(db, jefe_id)
+
+
+# ========== IMPORTACIÓN MASIVA DESDE XLSX ==========
+
+@router.get("/importar/plantilla")
+def descargar_plantilla_xlsx(
+    db: Session = Depends(get_db),
+    _current: dict = Depends(get_current_user),
+):
+    """Descarga una plantilla XLSX con las columnas necesarias y catálogos en hojas auxiliares."""
+    from io import BytesIO
+    from fastapi.responses import StreamingResponse
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, Protection
+    from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet.datavalidation import DataValidation
+
+    empresas = db.query(models.Empresa).filter(models.Empresa.activo == True).order_by(models.Empresa.nombre).all()
+    deptos = db.query(models.Departamento).filter(models.Departamento.activo == True).order_by(models.Departamento.nombre).all()
+    puestos = db.query(models.Puesto).filter(models.Puesto.activo == True).order_by(models.Puesto.nombre).all()
+
+    wb = Workbook()
+
+    thin = Side(style="thin", color="B0B0B0")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    hdr_font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+    hdr_fill = PatternFill(start_color="2B6CB0", end_color="2B6CB0", fill_type="solid")
+    opt_fill = PatternFill(start_color="E2E8F0", end_color="E2E8F0", fill_type="solid")
+    align_c = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    # ── Hoja principal: Empleados ──
+    ws = wb.active
+    ws.title = "Empleados"
+
+    columnas = [
+        ("numero_empleado", "No. Empleado *", 14),
+        ("nombre", "Nombre *", 18),
+        ("apellido_paterno", "Ap. Paterno *", 16),
+        ("apellido_materno", "Ap. Materno *", 16),
+        ("empresa", "Empresa *", 24),
+        ("departamento", "Departamento *", 22),
+        ("puesto", "Puesto *", 22),
+        ("fecha_ingreso", "Fecha Ingreso * (DD/MM/AAAA)", 18),
+        ("fecha_nacimiento", "Fecha Nacimiento (DD/MM/AAAA)", 18),
+        ("email", "Email", 26),
+        ("telefono", "Teléfono", 14),
+        ("curp", "CURP", 20),
+        ("rfc", "RFC", 15),
+        ("nss", "NSS", 13),
+        ("direccion", "Dirección", 30),
+        ("colonia", "Colonia", 18),
+        ("cp", "C.P.", 8),
+        ("ciudad", "Ciudad", 16),
+        ("contacto_emergencia", "Contacto Emergencia", 22),
+        ("telefono_emergencia", "Tel. Emergencia", 16),
+        ("password", "Contraseña", 14),
+    ]
+
+    for ci, (key, label, width) in enumerate(columnas, 1):
+        cell = ws.cell(row=1, column=ci, value=label)
+        cell.font = hdr_font
+        cell.fill = hdr_fill
+        cell.alignment = align_c
+        cell.border = border
+        ws.column_dimensions[get_column_letter(ci)].width = width
+        # Columnas opcionales con fondo gris
+        if "*" not in label:
+            for r in range(2, 102):
+                ws.cell(row=r, column=ci).fill = opt_fill
+
+    ws.row_dimensions[1].height = 32
+    ws.freeze_panes = "A2"
+
+    # ── Hoja catálogo: Empresas ──
+    ws_emp = wb.create_sheet("Cat. Empresas")
+    ws_emp.cell(row=1, column=1, value="Empresa").font = hdr_font
+    ws_emp.cell(row=1, column=1).fill = hdr_fill
+    ws_emp.column_dimensions["A"].width = 30
+    for i, e in enumerate(empresas, 2):
+        ws_emp.cell(row=i, column=1, value=e.nombre)
+
+    # ── Hoja catálogo: Departamentos ──
+    ws_dep = wb.create_sheet("Cat. Departamentos")
+    ws_dep.cell(row=1, column=1, value="Departamento").font = hdr_font
+    ws_dep.cell(row=1, column=1).fill = hdr_fill
+    ws_dep.cell(row=1, column=2, value="Empresa").font = hdr_font
+    ws_dep.cell(row=1, column=2).fill = hdr_fill
+    ws_dep.column_dimensions["A"].width = 30
+    ws_dep.column_dimensions["B"].width = 30
+    emp_map = {e.id: e.nombre for e in empresas}
+    for i, d in enumerate(deptos, 2):
+        ws_dep.cell(row=i, column=1, value=d.nombre)
+        ws_dep.cell(row=i, column=2, value=emp_map.get(d.empresa_id, ""))
+
+    # ── Hoja catálogo: Puestos ──
+    ws_pue = wb.create_sheet("Cat. Puestos")
+    ws_pue.cell(row=1, column=1, value="Puesto").font = hdr_font
+    ws_pue.cell(row=1, column=1).fill = hdr_fill
+    ws_pue.column_dimensions["A"].width = 30
+    for i, p in enumerate(puestos, 2):
+        ws_pue.cell(row=i, column=1, value=p.nombre)
+
+    # Validaciones desplegable para Empresa, Depto, Puesto
+    if empresas:
+        dv_emp = DataValidation(type="list", formula1=f"'Cat. Empresas'!$A$2:$A${len(empresas)+1}", allow_blank=False)
+        dv_emp.error = "Seleccione una empresa del catálogo"
+        dv_emp.prompt = "Seleccione empresa"
+        ws.add_data_validation(dv_emp)
+        dv_emp.add(f"E2:E1000")
+    if deptos:
+        dv_dep = DataValidation(type="list", formula1=f"'Cat. Departamentos'!$A$2:$A${len(deptos)+1}", allow_blank=False)
+        ws.add_data_validation(dv_dep)
+        dv_dep.add(f"F2:F1000")
+    if puestos:
+        dv_pue = DataValidation(type="list", formula1=f"'Cat. Puestos'!$A$2:$A${len(puestos)+1}", allow_blank=False)
+        ws.add_data_validation(dv_pue)
+        dv_pue.add(f"G2:G1000")
+
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="plantilla_empleados.xlsx"'},
+    )
+
+
+@router.post("/importar/xlsx")
+async def importar_empleados_xlsx(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _current: dict = Depends(get_current_user),
+):
+    """
+    Importa empleados desde un archivo XLSX.
+    Busca empresa/departamento/puesto por nombre.
+    Si el empleado (numero_empleado + empresa) ya existe, lo omite.
+    Devuelve resumen de creados, omitidos y errores.
+    """
+    from io import BytesIO
+    from openpyxl import load_workbook
+    from datetime import datetime, date
+    from app.core.security import get_password_hash
+
+    if not file.filename or not file.filename.endswith(('.xlsx', '.XLSX')):
+        raise HTTPException(status_code=400, detail="El archivo debe ser .xlsx")
+
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Archivo demasiado grande (máx 10 MB)")
+
+    try:
+        wb = load_workbook(BytesIO(content), read_only=True, data_only=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="No se pudo leer el archivo XLSX")
+
+    ws = wb.active
+    if ws is None:
+        raise HTTPException(status_code=400, detail="El archivo no tiene hojas")
+
+    # Leer encabezados (fila 1)
+    headers = []
+    for cell in ws[1]:
+        headers.append(str(cell.value or "").strip().lower())
+
+    COL_MAP = {
+        "no. empleado": "numero_empleado", "numero_empleado": "numero_empleado", "no empleado": "numero_empleado",
+        "nombre": "nombre",
+        "ap. paterno": "apellido_paterno", "apellido_paterno": "apellido_paterno", "ap paterno": "apellido_paterno",
+        "ap. materno": "apellido_materno", "apellido_materno": "apellido_materno", "ap materno": "apellido_materno",
+        "empresa": "empresa",
+        "departamento": "departamento",
+        "puesto": "puesto",
+        "fecha ingreso": "fecha_ingreso", "fecha_ingreso": "fecha_ingreso",
+        "fecha nacimiento": "fecha_nacimiento", "fecha_nacimiento": "fecha_nacimiento",
+        "email": "email", "correo": "email",
+        "telefono": "telefono", "teléfono": "telefono",
+        "curp": "curp", "rfc": "rfc", "nss": "nss",
+        "direccion": "direccion", "dirección": "direccion",
+        "colonia": "colonia", "c.p.": "cp", "cp": "cp",
+        "ciudad": "ciudad",
+        "contacto emergencia": "contacto_emergencia", "contacto_emergencia": "contacto_emergencia",
+        "tel. emergencia": "telefono_emergencia", "telefono_emergencia": "telefono_emergencia",
+        "contraseña": "password", "password": "password", "contraseña": "password",
+    }
+
+    col_idx = {}
+    for i, h in enumerate(headers):
+        clean = h.replace("*", "").replace("(dd/mm/aaaa)", "").strip()
+        mapped = COL_MAP.get(clean)
+        if mapped:
+            col_idx[mapped] = i
+
+    required = ["numero_empleado", "nombre", "apellido_paterno", "apellido_materno", "empresa", "departamento", "puesto", "fecha_ingreso"]
+    missing = [r for r in required if r not in col_idx]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Columnas faltantes: {', '.join(missing)}")
+
+    # Cachear catálogos
+    empresas_map = {}
+    for e in db.query(models.Empresa).filter(models.Empresa.activo == True).all():
+        empresas_map[e.nombre.strip().lower()] = e.id
+
+    deptos_all = db.query(models.Departamento).filter(models.Departamento.activo == True).all()
+    deptos_map = {}
+    for d in deptos_all:
+        deptos_map[(d.nombre.strip().lower(), d.empresa_id)] = d.id
+
+    puestos_all = db.query(models.Puesto).filter(models.Puesto.activo == True).all()
+    puestos_map = {}
+    for p in puestos_all:
+        puestos_map[p.nombre.strip().lower()] = p.id
+
+    # Rol "empleado" por defecto
+    rol_empleado = db.query(models.Rol).filter(models.Rol.nombre.ilike("%empleado%")).first()
+    rol_id_default = rol_empleado.id if rol_empleado else None
+
+    def get_cell(row_data, field):
+        idx = col_idx.get(field)
+        if idx is None or idx >= len(row_data):
+            return None
+        v = row_data[idx]
+        if v is None:
+            return None
+        return str(v).strip() if not isinstance(v, (datetime, date)) else v
+
+    def parse_date(val):
+        if val is None:
+            return None
+        if isinstance(val, datetime):
+            return val
+        if isinstance(val, date):
+            return datetime(val.year, val.month, val.day)
+        s = str(val).strip()
+        for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d/%m/%y"):
+            try:
+                return datetime.strptime(s, fmt)
+            except ValueError:
+                continue
+        return None
+
+    creados = []
+    omitidos = []
+    errores = []
+
+    for row_num, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+        row_data = list(row)
+
+        num_emp = get_cell(row_data, "numero_empleado")
+        nombre = get_cell(row_data, "nombre")
+        if not num_emp or not nombre:
+            continue  # fila vacía
+
+        ap_pat = get_cell(row_data, "apellido_paterno") or ""
+        ap_mat = get_cell(row_data, "apellido_materno") or ""
+        empresa_name = get_cell(row_data, "empresa") or ""
+        depto_name = get_cell(row_data, "departamento") or ""
+        puesto_name = get_cell(row_data, "puesto") or ""
+
+        # Resolver IDs
+        empresa_id = empresas_map.get(empresa_name.lower())
+        if not empresa_id:
+            errores.append({"fila": row_num, "error": f"Empresa no encontrada: '{empresa_name}'"})
+            continue
+
+        depto_id = deptos_map.get((depto_name.lower(), empresa_id))
+        if not depto_id:
+            errores.append({"fila": row_num, "error": f"Departamento '{depto_name}' no encontrado en empresa '{empresa_name}'"})
+            continue
+
+        puesto_id = puestos_map.get(puesto_name.lower())
+        if not puesto_id:
+            errores.append({"fila": row_num, "error": f"Puesto no encontrado: '{puesto_name}'"})
+            continue
+
+        fecha_ingreso = parse_date(get_cell(row_data, "fecha_ingreso"))
+        if not fecha_ingreso:
+            errores.append({"fila": row_num, "error": "Fecha de ingreso inválida o vacía"})
+            continue
+
+        # Ya existe?
+        existing = db.query(models.Empleado).filter(
+            models.Empleado.numero_empleado == str(num_emp),
+            models.Empleado.empresa_id == empresa_id,
+        ).first()
+        if existing:
+            omitidos.append({"fila": row_num, "numero_empleado": str(num_emp), "nombre": nombre, "razon": "Ya existe"})
+            continue
+
+        fecha_nac = parse_date(get_cell(row_data, "fecha_nacimiento"))
+        email_val = get_cell(row_data, "email") or None
+        if email_val:
+            exists_email = db.query(models.Empleado).filter(models.Empleado.email == email_val).first()
+            if exists_email:
+                email_val = None  # evitar duplicado, se deja sin email
+
+        password_raw = get_cell(row_data, "password")
+        rfc_val = get_cell(row_data, "rfc") or ""
+
+        try:
+            emp_data = schemas.EmpleadoCreate(
+                numero_empleado=str(num_emp),
+                nombre=nombre,
+                apellido_paterno=ap_pat,
+                apellido_materno=ap_mat,
+                empresa_id=empresa_id,
+                departamento_id=depto_id,
+                puesto_id=puesto_id,
+                fecha_ingreso=fecha_ingreso,
+                fecha_nacimiento=fecha_nac,
+                email=email_val,
+                telefono=get_cell(row_data, "telefono"),
+                curp=get_cell(row_data, "curp"),
+                rfc=rfc_val,
+                nss=get_cell(row_data, "nss"),
+                direccion=get_cell(row_data, "direccion"),
+                colonia=get_cell(row_data, "colonia"),
+                cp=get_cell(row_data, "cp"),
+                ciudad=get_cell(row_data, "ciudad"),
+                contacto_emergencia=get_cell(row_data, "contacto_emergencia"),
+                telefono_emergencia=get_cell(row_data, "telefono_emergencia"),
+                rol_id=rol_id_default,
+                password=password_raw,
+                estado=models.EstadoEmpleado.ACTIVO,
+            )
+            db_emp = service.PersonalService.create_empleado(db, emp_data)
+            creados.append({"fila": row_num, "id": db_emp.id, "numero_empleado": str(num_emp), "nombre": f"{nombre} {ap_pat}"})
+        except Exception as e:
+            db.rollback()
+            errores.append({"fila": row_num, "error": str(e)[:200]})
+
+    wb.close()
+
+    return {
+        "total_filas": len(creados) + len(omitidos) + len(errores),
+        "creados": len(creados),
+        "omitidos": len(omitidos),
+        "errores_count": len(errores),
+        "detalle_creados": creados,
+        "detalle_omitidos": omitidos,
+        "detalle_errores": errores,
+    }

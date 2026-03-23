@@ -19,7 +19,8 @@ class ZKTecoClient:
         self.ip = ip
         self.port = port
         self.timeout = timeout
-        self.zk = ZK(ip, port=port, timeout=timeout)
+        # Evita que pyzk lance ping del sistema en cada conexión (en Windows abre ventana de consola).
+        self.zk = ZK(ip, port=port, timeout=timeout, ommit_ping=True)
 
     def get_attendance_logs(self, start_time: Optional[str] = None, end_time: Optional[str] = None) -> List[Dict]:
         """

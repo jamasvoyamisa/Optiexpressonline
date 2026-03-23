@@ -14,6 +14,9 @@ export type {
   DepartamentoUpdate,
   PuestoResponse,
   PuestoCreate,
+  VacacionGeneralCreate,
+  VacacionGeneralResponse,
+  AplicarVacacionGeneralResultado,
 } from './api';
 
 export type Dispositivo = import('./api').DispositivoResponse;

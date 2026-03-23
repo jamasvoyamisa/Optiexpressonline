@@ -115,7 +115,7 @@ function App() {
           <Route
             path="/configuracion"
             element={
-              <ProtectedRoute require="superuser">
+              <ProtectedRoute require="configuracion">
                 <Layout>
                   <ConfiguracionPage />
                 </Layout>

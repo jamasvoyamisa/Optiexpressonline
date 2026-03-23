@@ -1,0 +1,16 @@
+[Unit]
+Description=Optiexpress landing (web público)
+After=network.target
+
+[Service]
+Type=simple
+User=marco
+WorkingDirectory=/home/marco/optiexpress/web
+ExecStart=/usr/bin/python3 -m http.server 8080 --bind 0.0.0.0
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/home/marco/optiexpress/landing.log
+StandardError=append:/home/marco/optiexpress/landing.log
+
+[Install]
+WantedBy=multi-user.target

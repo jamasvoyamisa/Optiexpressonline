@@ -19,6 +19,8 @@ interface Empleado {
   apellido_paterno?: string | null;
   apellido_materno?: string | null;
   departamento_id?: number | null;
+  empresa?: { id: number; nombre: string } | null;
+  departamento?: { id: number; nombre: string; empresa_id?: number } | null;
 }
 
 interface Incapacidad {
@@ -113,22 +115,38 @@ export const IncapacidadesPage = () => {
   const [busqueda, setBusqueda] = useState('');
   const [filtroEstado, setFiltroEstado] = useState('activa');
   const [filtroTipo, setFiltroTipo] = useState('');
+  const [filtroEmpresa, setFiltroEmpresa] = useState('');
+  const [filtroDepto, setFiltroDepto] = useState('');
+  const [allDeptos, setAllDeptos] = useState<Departamento[]>([]);
+  const [deptosFiltro, setDeptosFiltro] = useState<Departamento[]>([]);
 
   const cargar = useCallback(async () => {
     setLoading(true);
     try {
-      const [incRes, empRes] = await Promise.all([
+      const [incRes, empRes, depRes] = await Promise.all([
         api.get<Incapacidad[]>('/incapacidades?limit=500'),
         api.get<Empresa[]>('/personal/empresas?limit=200'),
+        api.get<Departamento[]>('/personal/departamentos?limit=1000'),
       ]);
       setIncapacidades(Array.isArray(incRes.data) ? incRes.data : []);
       setEmpresas(Array.isArray(empRes.data) ? empRes.data : []);
+      setAllDeptos(Array.isArray(depRes.data) ? depRes.data : []);
     } catch {
       setIncapacidades([]);
     } finally {
       setLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    setFiltroDepto('');
+    if (!filtroEmpresa) {
+      setDeptosFiltro([]);
+      return;
+    }
+    const filtered = allDeptos.filter(d => String(d.empresa_id) === filtroEmpresa);
+    setDeptosFiltro(filtered);
+  }, [filtroEmpresa, allDeptos]);
 
   // Al cambiar empresa → cargar departamentos
   useEffect(() => {
@@ -242,6 +260,17 @@ export const IncapacidadesPage = () => {
   };
 
   const filtradas = incapacidades.filter(inc => {
+    const deptoId = inc.empleado?.departamento?.id ?? inc.empleado?.departamento_id ?? null;
+    const deptoEmpId =
+      inc.empleado?.empresa?.id ??
+      inc.empleado?.departamento?.empresa_id ??
+      (deptoId ? allDeptos.find(d => d.id === deptoId)?.empresa_id : undefined);
+    if (filtroEmpresa) {
+      if (!deptoEmpId || String(deptoEmpId) !== filtroEmpresa) return false;
+    }
+    if (filtroDepto) {
+      if (!deptoId || String(deptoId) !== filtroDepto) return false;
+    }
     if (filtroEstado && inc.estado !== filtroEstado) return false;
     if (filtroTipo && inc.tipo !== filtroTipo) return false;
     if (busqueda) {
@@ -283,6 +312,19 @@ export const IncapacidadesPage = () => {
           onChange={e => setBusqueda(e.target.value)}
           style={{ ...filterControlStyle, width: 300, flex: '0 0 300px' }}
         />
+        <select value={filtroEmpresa} onChange={e => setFiltroEmpresa(e.target.value)} style={{ ...filterControlStyle, width: 220 }}>
+          <option value="">Todas las empresas</option>
+          {empresas.map(emp => <option key={emp.id} value={String(emp.id)}>{emp.nombre}</option>)}
+        </select>
+        <select
+          value={filtroDepto}
+          onChange={e => setFiltroDepto(e.target.value)}
+          disabled={!filtroEmpresa}
+          style={{ ...filterControlStyle, width: 220, backgroundColor: !filtroEmpresa ? '#f9fafb' : 'white' }}
+        >
+          <option value="">Todos los departamentos</option>
+          {deptosFiltro.map(d => <option key={d.id} value={String(d.id)}>{d.nombre}</option>)}
+        </select>
         <select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)} style={{ ...filterControlStyle, width: 'auto' }}>
           <option value="">Todos los estados</option>
           <option value="activa">Activa</option>
@@ -293,8 +335,8 @@ export const IncapacidadesPage = () => {
           <option value="">Todos los tipos</option>
           {Object.entries(TIPO_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
-        {(busqueda || filtroEstado || filtroTipo) && (
-          <button onClick={() => { setBusqueda(''); setFiltroEstado('activa'); setFiltroTipo(''); }}
+        {(busqueda || filtroEmpresa || filtroDepto || filtroEstado || filtroTipo) && (
+          <button onClick={() => { setBusqueda(''); setFiltroEmpresa(''); setFiltroDepto(''); setFiltroEstado('activa'); setFiltroTipo(''); }}
             style={{ padding: '7px 12px', backgroundColor: '#fee2e2', color: '#991b1b', border: '1px solid #fecaca', borderRadius: '6px', fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer' }}>
             ✕ Limpiar
           </button>
@@ -313,7 +355,10 @@ export const IncapacidadesPage = () => {
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr>
+                <th style={th}>No.</th>
                 <th style={th}>Empleado</th>
+                <th style={th}>Empresa</th>
+                <th style={th}>Departamento</th>
                 <th style={th}>Tipo</th>
                 <th style={th}>Fecha inicio</th>
                 <th style={th}>Fecha fin</th>
@@ -328,12 +373,26 @@ export const IncapacidadesPage = () => {
               {filtradas.map(inc => {
                 const tipoStyle = TIPO_COLOR[inc.tipo] ?? TIPO_COLOR.otro;
                 const estadoStyle = ESTADO_STYLE[inc.estado] ?? ESTADO_STYLE.activa;
+                const deptoNombre = inc.empleado?.departamento?.nombre
+                  ?? (inc.empleado?.departamento_id ? allDeptos.find(d => d.id === inc.empleado?.departamento_id)?.nombre : undefined)
+                  ?? '—';
+                const empresaNombre = inc.empleado?.empresa?.nombre
+                  ?? (inc.empleado?.departamento?.empresa_id
+                    ? empresas.find(e => e.id === inc.empleado?.departamento?.empresa_id)?.nombre
+                    : (inc.empleado?.departamento_id
+                      ? empresas.find(e => e.id === allDeptos.find(d => d.id === inc.empleado?.departamento_id)?.empresa_id)?.nombre
+                      : undefined))
+                  ?? '—';
                 return (
                   <tr key={inc.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
+                    <td style={{ ...td, fontWeight: 600, color: '#64748b' }}>
+                      {inc.empleado?.numero_empleado ?? '—'}
+                    </td>
                     <td style={td}>
                       <div style={{ fontWeight: 600, fontSize: '0.86rem' }}>{nombreEmpleado(inc.empleado)}</div>
-                      <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>No. {inc.empleado?.numero_empleado ?? '—'}</div>
                     </td>
+                    <td style={{ ...td, color: '#475569', fontSize: '0.82rem' }}>{empresaNombre}</td>
+                    <td style={{ ...td, color: '#475569', fontSize: '0.82rem' }}>{deptoNombre}</td>
                     <td style={td}>
                       <span style={{ backgroundColor: tipoStyle.bg, color: tipoStyle.color, borderRadius: 5, padding: '3px 9px', fontSize: '0.78rem', fontWeight: 600, whiteSpace: 'nowrap' }}>
                         {TIPO_LABEL[inc.tipo] ?? inc.tipo}
@@ -560,6 +619,9 @@ export const IncapacidadesPage = () => {
             </div>
 
             {/* Resumen */}
+            <p style={{ margin: '0 0 12px', fontSize: '0.8rem', color: '#6b7280', lineHeight: 1.45 }}>
+              Si en esas fechas ya se habían generado faltas u otras incidencias automáticas, se quitan para que el período quede cubierto por esta incapacidad (también si el alta es días después).
+            </p>
             <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 8, padding: '12px 16px', marginBottom: 16 }}>
               <p style={{ margin: 0, fontSize: '0.9rem', color: '#166534', fontWeight: 600 }}>
                 ✅ Se eliminaron <strong>{resumenModal.eliminadas}</strong> incidencia{resumenModal.eliminadas !== 1 ? 's' : ''} automática{resumenModal.eliminadas !== 1 ? 's' : ''} generada{resumenModal.eliminadas !== 1 ? 's' : ''} durante el período de incapacidad.

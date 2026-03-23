@@ -19,4 +19,5 @@ class NotificacionResponse(BaseModel):
 
 class NotificacionesResumen(BaseModel):
     total_no_leidas: int
+    incidencias_por_justificar: int = 0
     notificaciones: list[NotificacionResponse]

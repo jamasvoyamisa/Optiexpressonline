@@ -1,4 +1,5 @@
 import { ReactNode, useState, useEffect } from 'react';
+import logoSidebar from '../assets/GPO-Cristal-bco.png';
 
 const MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 const formatFechaHora = () => {
@@ -21,6 +22,24 @@ interface LayoutProps {
   children: ReactNode;
 }
 
+const sidebarIcons: Record<string, JSX.Element> = {
+  '/dashboard': <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>,
+  '/mis-asistencias': <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>,
+  '/mis-vacaciones': <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>,
+  '/mis-prestamos': <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>,
+  '/mis-datos': <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>,
+  '/rh': <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
+  '/asistencia': <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="M8 14l2 2 4-4"/></svg>,
+  '/mi-area': <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>,
+  '/solicitudes-vacaciones': <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>,
+  '/configuracion': <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,
+};
+
+const NavIcon = ({ path }: { path: string }) => {
+  const icon = sidebarIcons[path];
+  return icon ? <span style={{ display: 'inline-flex', flexShrink: 0, opacity: 0.85 }}>{icon}</span> : null;
+};
+
 const empleadoNavItems = [
   { to: '/mis-asistencias', label: 'Mis asistencias' },
   { to: '/mis-vacaciones', label: 'Vacaciones' },
@@ -37,7 +56,7 @@ const superAdminNavItems = [
 ];
 
 const superAdminItems = [
-  { to: '/configuracion', label: 'Configuracion' },
+  { to: '/configuracion', label: 'Configuración' },
 ];
 
 const miAreaNavItem = { to: '/mi-area', label: 'Mi Área' };
@@ -127,14 +146,16 @@ export const Layout = ({ children }: LayoutProps) => {
     return {
       color: 'white',
       textDecoration: 'none',
-      padding: '10px 12px',
-      borderRadius: '6px',
+      padding: '9px 12px',
+      borderRadius: '8px',
       backgroundColor: active ? 'rgba(14,165,233,0.25)' : 'transparent',
       borderLeft: active ? '3px solid #0ea5e9' : '3px solid transparent',
       fontWeight: active ? 600 : 400,
-      fontSize: isMobile ? '1rem' : undefined,
+      fontSize: isMobile ? '1rem' : '0.88rem',
       transition: 'background-color 0.15s',
-      display: 'block',
+      display: 'flex',
+      alignItems: 'center',
+      gap: '10px',
     };
   };
 
@@ -154,7 +175,7 @@ export const Layout = ({ children }: LayoutProps) => {
     <>
       <Link to="/" style={{ display: 'block', marginBottom: '24px', textDecoration: 'none' }}>
         <img
-          src="/GPO-Cristal-bco.png"
+          src={logoSidebar}
           alt="Grupo Cristal"
           style={{ width: '100%', maxWidth: '160px', height: 'auto', objectFit: 'contain', display: 'block' }}
         />
@@ -162,28 +183,42 @@ export const Layout = ({ children }: LayoutProps) => {
 
       <nav style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1 }}>
         {puedeVerDashboard && (
-          <Link key={dashboardNavItem.to} to={dashboardNavItem.to} style={linkStyle(dashboardNavItem.to)}>{dashboardNavItem.label}</Link>
+          <Link key={dashboardNavItem.to} to={dashboardNavItem.to} style={linkStyle(dashboardNavItem.to)}>
+            <NavIcon path={dashboardNavItem.to} />{dashboardNavItem.label}
+          </Link>
         )}
         {puedeVerSolicitudesVacaciones && (
-          <Link key={solicitudesVacacionesNavItem.to} to={solicitudesVacacionesNavItem.to} style={linkStyle(solicitudesVacacionesNavItem.to)}>{solicitudesVacacionesNavItem.label}</Link>
+          <Link key={solicitudesVacacionesNavItem.to} to={solicitudesVacacionesNavItem.to} style={linkStyle(solicitudesVacacionesNavItem.to)}>
+            <NavIcon path={solicitudesVacacionesNavItem.to} />{solicitudesVacacionesNavItem.label}
+          </Link>
         )}
         {showFullAdmin
           ? superAdminNavItems.map(item => (
-              <Link key={item.to} to={item.to} style={linkStyle(item.to)}>{item.label}</Link>
+              <Link key={item.to} to={item.to} style={linkStyle(item.to)}>
+                <NavIcon path={item.to} />{item.label}
+              </Link>
             ))
           : showRH
           ? [
               ...empleadoNavItems.map(item => (
-                <Link key={item.to} to={item.to} style={linkStyle(item.to)}>{item.label}</Link>
+                <Link key={item.to} to={item.to} style={linkStyle(item.to)}>
+                  <NavIcon path={item.to} />{item.label}
+                </Link>
               )),
-              <Link key="/rh" to="/rh" style={linkStyle('/rh')}>Recursos Humanos</Link>,
+              <Link key="/rh" to="/rh" style={linkStyle('/rh')}>
+                <NavIcon path="/rh" />Recursos Humanos
+              </Link>,
             ]
           : [
               ...empleadoNavItems.map(item => (
-                <Link key={item.to} to={item.to} style={linkStyle(item.to)}>{item.label}</Link>
+                <Link key={item.to} to={item.to} style={linkStyle(item.to)}>
+                  <NavIcon path={item.to} />{item.label}
+                </Link>
               )),
               ...(showMiAreaOnly ? [
-                <Link key={miAreaNavItem.to} to={miAreaNavItem.to} style={linkStyle(miAreaNavItem.to)}>{miAreaNavItem.label}</Link>
+                <Link key={miAreaNavItem.to} to={miAreaNavItem.to} style={linkStyle(miAreaNavItem.to)}>
+                  <NavIcon path={miAreaNavItem.to} />{miAreaNavItem.label}
+                </Link>
               ] : []),
             ]
         }
@@ -191,7 +226,9 @@ export const Layout = ({ children }: LayoutProps) => {
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
         {showFullAdmin && superAdminItems.map(item => (
-          <Link key={item.to} to={item.to} style={linkStyle(item.to)}>{item.label}</Link>
+          <Link key={item.to} to={item.to} style={linkStyle(item.to)}>
+            <NavIcon path={item.to} />{item.label}
+          </Link>
         ))}
       </div>
       <div style={{ marginTop: 'auto', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.2)', fontSize: '0.7rem', color: 'rgba(255,255,255,0.5)' }}>
@@ -297,7 +334,7 @@ export const Layout = ({ children }: LayoutProps) => {
 
           {/* Logo pequeño en móvil */}
           {isMobile && (
-            <img src="/GPO-Cristal-bco.png" alt="Logo" style={{ height: '28px', objectFit: 'contain' }} />
+            <img src={logoSidebar} alt="Logo" style={{ height: '28px', objectFit: 'contain' }} />
           )}
 
           {/* Derecha del header */}

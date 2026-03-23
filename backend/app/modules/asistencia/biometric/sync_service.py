@@ -170,6 +170,11 @@ class SyncService:
             ).first()
         if not empleado:
             logger.info(f"Checada ignorada (agente): user_id={user_id} no registrado en el sistema.")
+            # Persistir latido aunque rechacemos la checada (el agente sí conectó)
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
             raise ValueError(f"PIN {user_id} no registrado. Solo se aceptan checadas de empleados dados de alta.")
 
         try:
@@ -185,6 +190,11 @@ class SyncService:
         ).first()
         if existente:
             logger.info(f"Checada duplicada ignorada: empleado={sync_data.user_id}, timestamp={timestamp}")
+            # Persistir ultima_sync_agente aunque no insertemos checada nueva
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
             return existente
 
         tipo, es_tiempo_extra = SyncService._determinar_tipo(db, empleado.id, timestamp)

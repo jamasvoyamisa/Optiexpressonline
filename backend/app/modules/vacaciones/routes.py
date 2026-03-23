@@ -6,7 +6,18 @@ from app.core.database import get_db
 from app.core.config import settings
 from app.core.security import get_current_user
 from app.core.deps import get_current_empleado_with_rol
+
 from . import schemas, service
+
+
+def _require_superuser_vacaciones_generales(current: dict):
+    if not current.get("is_superuser"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo el administrador puede gestionar vacaciones generales",
+        )
+
+
 from .models import SolicitudVacaciones
 from app.modules.notificaciones import service as noti_service
 
@@ -58,7 +69,8 @@ def get_mis_solicitudes(
         skip=skip,
         limit=limit,
         empleado_id=empleado_id,
-        estado=estado
+        estado=estado,
+        include_canceladas=True,
     )
     for s in result:
         _set_jefe_aprobador_nombre(s)
@@ -114,6 +126,7 @@ def get_solicitudes(
     empleado_id: Optional[int] = None,
     estado: Optional[str] = None,
     jefe_id: Optional[int] = None,
+    current: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db)
 ):
     """Listar solicitudes de vacaciones"""
@@ -123,7 +136,8 @@ def get_solicitudes(
         limit=limit,
         empleado_id=empleado_id,
         estado=estado,
-        jefe_id=jefe_id
+        jefe_id=jefe_id,
+        include_canceladas=bool(current.get("is_superuser")),
     )
     for s in result:
         _set_jefe_aprobador_nombre(s)
@@ -131,13 +145,24 @@ def get_solicitudes(
 
 
 @router.get("/solicitudes/{solicitud_id}", response_model=schemas.SolicitudVacacionesResponse)
-def get_solicitud(solicitud_id: int, db: Session = Depends(get_db)):
+def get_solicitud(
+    solicitud_id: int,
+    current: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db),
+):
     """Obtener solicitud por ID"""
     db_solicitud = service.VacacionesService.get_solicitud(db, solicitud_id)
     if not db_solicitud:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Solicitud no encontrada"
+        )
+    empleado_id = int(current["user_id"])
+    estado_sol = getattr(db_solicitud.estado, "value", str(db_solicitud.estado)).lower()
+    if estado_sol == "cancelada" and db_solicitud.empleado_id != empleado_id and not current.get("is_superuser"):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Solicitud no encontrada",
         )
     _set_jefe_aprobador_nombre(db_solicitud)
     return db_solicitud
@@ -391,3 +416,40 @@ def actualizar_dias_disponibles(
         Decimal(str(dias)),
         año
     )
+
+
+@router.get("/generales", response_model=List[schemas.VacacionGeneralResponse])
+def listar_vacaciones_generales(
+    solo_activos: bool = Query(False),
+    db: Session = Depends(get_db),
+    current: dict = Depends(get_current_empleado_with_rol),
+):
+    _require_superuser_vacaciones_generales(current)
+    return service.VacacionesService.listar_vacaciones_generales(db, solo_activos=solo_activos)
+
+
+@router.post("/generales", response_model=schemas.VacacionGeneralResponse, status_code=status.HTTP_201_CREATED)
+def crear_vacacion_general(
+    body: schemas.VacacionGeneralCreate,
+    db: Session = Depends(get_db),
+    current: dict = Depends(get_current_empleado_with_rol),
+):
+    _require_superuser_vacaciones_generales(current)
+    try:
+        return service.VacacionesService.crear_vacacion_general(db, body)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post("/generales/{vacacion_id}/aplicar", response_model=schemas.AplicarVacacionGeneralResultado)
+def aplicar_vacacion_general(
+    vacacion_id: int,
+    db: Session = Depends(get_db),
+    current: dict = Depends(get_current_empleado_with_rol),
+):
+    """Descuenta días LFT y registra días regalo para empleados del alcance (idempotente por empleado)."""
+    _require_superuser_vacaciones_generales(current)
+    try:
+        return service.VacacionesService.aplicar_vacacion_general(db, vacacion_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))

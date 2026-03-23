@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import api from '../../services/api';
+import { useAuth } from '../../hooks/useAuth';
 import { Dispositivo, DispositivoCreate, EmpresaResponse, EmpleadoResponse } from '../../types';
+import { VacacionesGeneralesPage } from '../vacaciones/VacacionesGeneralesPage';
 
 const toLocalDate = (iso: string) =>
   new Date(iso.endsWith('Z') || iso.includes('+') ? iso : iso + 'Z');
@@ -11,25 +13,26 @@ const fmtDate = (iso: string) =>
     hour: '2-digit', minute: '2-digit', second: '2-digit',
   });
 
-/** Muestra "Hoy 14:30", "Ayer 14:30", "Hace 2 días", etc. */
-const fmtRelativo = (iso: string): string => {
-  const d = toLocalDate(iso);
-  const now = new Date();
-  const hoy = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const ayer = new Date(hoy);
-  ayer.setDate(ayer.getDate() - 1);
-  const fecha = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  const hora = d.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
-  if (fecha.getTime() === hoy.getTime()) return `Hoy ${hora}`;
-  if (fecha.getTime() === ayer.getTime()) return `Ayer ${hora}`;
-  const dias = Math.floor((hoy.getTime() - fecha.getTime()) / (24 * 60 * 60 * 1000));
-  if (dias >= 2 && dias <= 6) return `Hace ${dias} días`;
-  if (dias >= 7 && dias < 14) return `Hace 1 semana`;
-  if (dias >= 14 && dias < 30) return `Hace ${Math.floor(dias / 7)} semanas`;
-  return fmtDate(iso);
-};
+type ConfigTab = 'dispositivos' | 'empresas' | 'horarios' | 'festivos' | 'vacaciones_generales' | 'usuarios_especiales';
 
-type ConfigTab = 'dispositivos' | 'empresas' | 'horarios' | 'festivos' | 'usuarios_especiales';
+function configTabSubtitle(tab: ConfigTab): string {
+  switch (tab) {
+    case 'dispositivos':
+      return 'Dispositivos Biometricos';
+    case 'empresas':
+      return 'Empresas';
+    case 'horarios':
+      return 'Horarios de Trabajo';
+    case 'festivos':
+      return 'Días festivos (calendario LFT)';
+    case 'vacaciones_generales':
+      return 'Vacaciones generales y días otorgados por la empresa';
+    case 'usuarios_especiales':
+      return 'Usuarios Especiales';
+    default:
+      return '';
+  }
+}
 
 interface DiaFestivo {
   id: number;
@@ -74,6 +77,9 @@ const btnSuccess: React.CSSProperties = { padding: '9px 20px', backgroundColor: 
 const btnSecondary: React.CSSProperties = { padding: '9px 20px', backgroundColor: '#6c757d', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', whiteSpace: 'nowrap' };
 
 export const ConfiguracionPage = () => {
+  const { authMe } = useAuth();
+  const isSuperuser = authMe?.is_superuser === true;
+
   const [configTab, setConfigTab] = useState<ConfigTab>('dispositivos');
   const [dispositivos, setDispositivos] = useState<Dispositivo[]>([]);
   const [empresas, setEmpresas] = useState<EmpresaResponse[]>([]);
@@ -83,7 +89,14 @@ export const ConfiguracionPage = () => {
   const [showApiKey, setShowApiKey] = useState<Record<number, boolean>>({});
   const [showEmpresaModal, setShowEmpresaModal] = useState(false);
   const [editingEmpresaId, setEditingEmpresaId] = useState<number | null>(null);
-  const [empresaForm, setEmpresaForm] = useState({ nombre: '', rfc: '', direccion: '', telefono: '' });
+  const [empresaForm, setEmpresaForm] = useState<{ nombre: string; rfc: string; direccion: string; telefono: string; dias_laborales: 'lun-sab' | 'lun-dom'; trabaja_festivos: boolean }>({
+    nombre: '',
+    rfc: '',
+    direccion: '',
+    telefono: '',
+    dias_laborales: 'lun-sab',
+    trabaja_festivos: false,
+  });
   const [saving, setSaving] = useState(false);
 
   // Festivos state
@@ -114,9 +127,27 @@ export const ConfiguracionPage = () => {
   useEffect(() => {
     loadData();
     loadFestivos();
-    const interval = setInterval(loadData, 30000);
-    return () => clearInterval(interval);
   }, []);
+
+  /** Solo administrador ve / usa la pestaña Vacaciones generales */
+  useEffect(() => {
+    if (!isSuperuser && configTab === 'vacaciones_generales') {
+      setConfigTab('dispositivos');
+    }
+  }, [isSuperuser, configTab]);
+
+  // Refresco frecuente de dispositivos (última conexión del agente) mientras está en esta pestaña
+  useEffect(() => {
+    if (configTab !== 'dispositivos') return;
+    const cargarSoloDispositivos = () => {
+      api.get('/asistencia/devices')
+        .then(res => { setDispositivos(Array.isArray(res.data) ? res.data : []); })
+        .catch(() => {});
+    };
+    cargarSoloDispositivos();
+    const interval = setInterval(cargarSoloDispositivos, 10000);
+    return () => clearInterval(interval);
+  }, [configTab]);
 
   const loadUsuariosEspeciales = async () => {
     setLoadingUsuariosEspeciales(true);
@@ -360,13 +391,20 @@ export const ConfiguracionPage = () => {
   };
 
   const openNewEmpresa = () => {
-    setEmpresaForm({ nombre: '', rfc: '', direccion: '', telefono: '' });
+    setEmpresaForm({ nombre: '', rfc: '', direccion: '', telefono: '', dias_laborales: 'lun-sab', trabaja_festivos: false });
     setEditingEmpresaId(null);
     setShowEmpresaModal(true);
   };
 
   const startEditEmpresa = (emp: EmpresaResponse) => {
-    setEmpresaForm({ nombre: emp.nombre, rfc: emp.rfc || '', direccion: emp.direccion || '', telefono: emp.telefono || '' });
+    setEmpresaForm({
+      nombre: emp.nombre,
+      rfc: emp.rfc || '',
+      direccion: emp.direccion || '',
+      telefono: emp.telefono || '',
+      dias_laborales: emp.dias_laborales === 'lun-dom' ? 'lun-dom' : 'lun-sab',
+      trabaja_festivos: !!emp.trabaja_festivos,
+    });
     setEditingEmpresaId(emp.id);
     setShowEmpresaModal(true);
   };
@@ -380,6 +418,8 @@ export const ConfiguracionPage = () => {
       if (empresaForm.rfc) payload.rfc = empresaForm.rfc;
       if (empresaForm.direccion) payload.direccion = empresaForm.direccion;
       if (empresaForm.telefono) payload.telefono = empresaForm.telefono;
+      payload.dias_laborales = empresaForm.dias_laborales;
+      payload.trabaja_festivos = empresaForm.trabaja_festivos;
       payload.checadas_remotas = true; // Siempre habilitadas
       if (editingEmpresaId) {
         await api.put(`/personal/empresas/${editingEmpresaId}`, payload);
@@ -416,7 +456,7 @@ export const ConfiguracionPage = () => {
         <div>
           <h1 style={{ margin: 0 }}>Configuracion</h1>
           <p style={{ margin: '4px 0 0', color: '#888', fontSize: '0.9rem' }}>
-            {configTab === 'dispositivos' ? 'Dispositivos Biometricos' : configTab === 'empresas' ? 'Empresas' : configTab === 'usuarios_especiales' ? 'Usuarios Especiales' : 'Horarios de Trabajo'}
+            {configTabSubtitle(configTab)}
           </p>
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
@@ -456,6 +496,11 @@ export const ConfiguracionPage = () => {
         <button style={tabStyle(configTab === 'empresas')} onClick={() => setConfigTab('empresas')}>Empresas</button>
         <button style={tabStyle(configTab === 'horarios')} onClick={() => setConfigTab('horarios')}>Horarios</button>
         <button style={tabStyle(configTab === 'festivos')} onClick={() => { setConfigTab('festivos'); loadFestivos(); }}>Días Festivos</button>
+        {isSuperuser && (
+          <button style={tabStyle(configTab === 'vacaciones_generales')} onClick={() => setConfigTab('vacaciones_generales')}>
+            Vacaciones generales
+          </button>
+        )}
         <button style={tabStyle(configTab === 'usuarios_especiales')} onClick={() => setConfigTab('usuarios_especiales')}>Usuarios especiales</button>
       </div>
 
@@ -547,7 +592,7 @@ export const ConfiguracionPage = () => {
                   <span style={{ color: '#6b7280', fontStyle: 'italic' }}>Portal web — no aplica</span>
                 ) : device.ultima_sync_agente ? (
                   <span style={{ color: '#1565c0', fontWeight: 600 }}>
-                    {fmtRelativo(device.ultima_sync_agente)}
+                    {fmtDate(device.ultima_sync_agente)}
                   </span>
                 ) : (
                   <span style={{ color: '#e65100', fontWeight: 500 }}>Sin conexión — el agente no ha llamado al servidor</span>
@@ -613,7 +658,7 @@ export const ConfiguracionPage = () => {
               <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '10px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
                 <thead>
                   <tr style={{ backgroundColor: '#f8f9fa' }}>
-                    {['Nombre', 'RFC', 'Direccion', 'Telefono', 'Empleados', 'Estado', 'Acciones'].map(h => (
+                    {['Nombre', 'RFC', 'Direccion', 'Telefono', 'Jornada', 'Festivos', 'Empleados', 'Estado', 'Acciones'].map(h => (
                       <th key={h} style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>{h}</th>
                     ))}
                   </tr>
@@ -627,6 +672,12 @@ export const ConfiguracionPage = () => {
                         <td style={{ padding: '11px 14px', color: '#555' }}>{emp.rfc || '-'}</td>
                         <td style={{ padding: '11px 14px', color: '#555', maxWidth: '250px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{emp.direccion || '-'}</td>
                         <td style={{ padding: '11px 14px', color: '#555' }}>{emp.telefono || '-'}</td>
+                        <td style={{ padding: '11px 14px', color: '#334155', fontWeight: 600 }}>
+                          {emp.dias_laborales === 'lun-dom' ? 'Lun-Dom' : 'Lun-Sáb'}
+                        </td>
+                        <td style={{ padding: '11px 14px', color: emp.trabaja_festivos ? '#166534' : '#6b7280', fontWeight: 600 }}>
+                          {emp.trabaja_festivos ? 'Sí' : 'No'}
+                        </td>
                         <td style={{ padding: '11px 14px', fontWeight: 600 }}>{count}</td>
                         <td style={{ padding: '11px 14px' }}>
                           <span style={{ padding: '3px 10px', borderRadius: '4px', fontSize: '0.8rem', backgroundColor: emp.activo ? '#d4edda' : '#f8d7da', color: emp.activo ? '#155724' : '#721c24', fontWeight: 500 }}>
@@ -821,6 +872,33 @@ export const ConfiguracionPage = () => {
                   <input style={inputStyle} value={empresaForm.telefono}
                     onChange={e => setEmpresaForm(p => ({ ...p, telefono: e.target.value }))} />
                 </div>
+                <div>
+                  <label style={labelStyle}>Días laborables de la empresa</label>
+                  <select
+                    style={inputStyle}
+                    value={empresaForm.dias_laborales}
+                    onChange={e => setEmpresaForm(p => ({ ...p, dias_laborales: (e.target.value as 'lun-sab' | 'lun-dom') }))}
+                  >
+                    <option value="lun-sab">Lunes a sábado</option>
+                    <option value="lun-dom">Lunes a domingo</option>
+                  </select>
+                  <span style={{ fontSize: '0.78rem', color: '#6b7280' }}>
+                    Define si el domingo cuenta como día laborable para la lógica de checadas.
+                  </span>
+                </div>
+                <div>
+                  <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <input
+                      type="checkbox"
+                      checked={empresaForm.trabaja_festivos}
+                      onChange={e => setEmpresaForm(p => ({ ...p, trabaja_festivos: e.target.checked }))}
+                    />
+                    ¿La empresa trabaja días festivos?
+                  </label>
+                  <span style={{ fontSize: '0.78rem', color: '#6b7280' }}>
+                    Si está activo, en festivos sí se consideran checadas para esta empresa.
+                  </span>
+                </div>
               </div>
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
                 <button type="button" onClick={() => setShowEmpresaModal(false)} style={btnSecondary}>Cancelar</button>
@@ -959,6 +1037,11 @@ export const ConfiguracionPage = () => {
             </div>
           )}
         </div>
+      )}
+
+      {/* ====== TAB: VACACIONES GENERALES (solo administrador) ====== */}
+      {isSuperuser && configTab === 'vacaciones_generales' && (
+        <VacacionesGeneralesPage embedded />
       )}
 
       {/* ====== TAB: USUARIOS ESPECIALES ====== */}

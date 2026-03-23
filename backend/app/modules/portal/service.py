@@ -1,14 +1,15 @@
 from sqlalchemy.orm import Session
-from datetime import datetime, timezone, timedelta
-from typing import Optional
+from datetime import datetime, timezone, timedelta, date
+from typing import Optional, Tuple
 import hashlib
 import logging
 
 from app.modules.personal import models as personal_models
 from app.modules.asistencia import models as asistencia_models
+from app.modules.asistencia.service import AsistenciaService
 from app.core.security import verify_password
-from app.core.timezone_utils import to_mexico
-from .schemas import ChecadaRemotaResponse
+from app.core.timezone_utils import to_mexico, mexico_date_to_utc_range
+from .schemas import ChecadaRemotaResponse, EstadoChecadaRemotaResponse
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,89 @@ def _get_dispositivo_portal(db: Session) -> Optional[asistencia_models.Dispositi
     return dispositivo
 
 
+def _contar_checadas_dia_mexico(db: Session, empleado_id: int, fecha_mex: date) -> int:
+    dia_inicio_utc, dia_fin_utc = mexico_date_to_utc_range(fecha_mex)
+    return (
+        db.query(asistencia_models.Asistencia)
+        .filter(
+            asistencia_models.Asistencia.empleado_id == empleado_id,
+            asistencia_models.Asistencia.timestamp >= dia_inicio_utc,
+            asistencia_models.Asistencia.timestamp < dia_fin_utc,
+        )
+        .count()
+    )
+
+
+def checadas_requeridas_dia(
+    db: Session,
+    empleado: personal_models.Empleado,
+    fecha_mex: date,
+) -> Tuple[int, str]:
+    """
+    Cuántas checadas se esperan ese día (México): 4 lun–vie, 2 sábado si trabaja sábado, 0 domingo / festivo / no laborable.
+    Siempre alineado con la lógica de faltas (procesar_dia).
+    """
+    empresa = empleado.empresa
+    trabaja_festivos = bool(getattr(empresa, "trabaja_festivos", False))
+    if AsistenciaService.es_dia_festivo(db, fecha_mex) and not trabaja_festivos:
+        return 0, "festivo"
+
+    wd = fecha_mex.weekday()  # 0=lunes … 6=domingo
+    dia_num = wd + 1  # 1-7 (lunes=1 … domingo=7)
+    dias_laborales_emp = ((empleado.empresa.dias_laborales if empleado.empresa else None) or "lun-sab").strip().lower()
+
+    if wd == 6:  # domingo
+        if dias_laborales_emp == "lun-dom":
+            return 2, "domingo_laborable"
+        return 0, "domingo"
+
+    eh = (
+        db.query(asistencia_models.EmpleadoHorario)
+        .filter(
+            asistencia_models.EmpleadoHorario.empleado_id == empleado.id,
+            asistencia_models.EmpleadoHorario.activo == True,
+        )
+        .first()
+    )
+    if not eh or not eh.horario or not eh.horario.activo:
+        return 0, "sin_horario"
+
+    horario = eh.horario
+
+    if wd == 5:  # sábado
+        if not empleado.horario_sabado_id:
+            return 0, "no_sabado"
+        horario_sab = (
+            db.query(asistencia_models.Horario)
+            .filter(
+                asistencia_models.Horario.id == empleado.horario_sabado_id,
+                asistencia_models.Horario.activo == True,
+            )
+            .first()
+        )
+        if not horario_sab:
+            return 0, "no_sabado"
+        return 2, "sabado"
+
+    # Lunes a viernes
+    if horario.dias_semana:
+        dias_permitidos = [int(d.strip()) for d in horario.dias_semana.split(",") if d.strip().isdigit()]
+        if dias_permitidos and dia_num not in dias_permitidos:
+            return 0, "no_laborable"
+
+    return 4, "entre_semana"
+
+
+def _mensaje_dia_no_laboral(motivo: str) -> str:
+    return {
+        "festivo": "Hoy es día festivo. No aplica registrar checada.",
+        "domingo": "Los domingos no aplica checada.",
+        "sin_horario": "No tienes horario asignado. Contacta a RH.",
+        "no_sabado": "No tienes horario de sábado. No aplica checada hoy.",
+        "no_laborable": "Hoy no es día laborable según tu horario.",
+    }.get(motivo, "No aplica checada hoy.")
+
+
 def _verificar_password(empleado: personal_models.Empleado, password: str) -> bool:
     """Verifica la contraseña del empleado (bcrypt o SHA256 legacy)."""
     if not empleado.password_hash:
@@ -48,23 +132,20 @@ def _verificar_password(empleado: personal_models.Empleado, password: str) -> bo
     return verify_password(password, empleado.password_hash)
 
 
-def registrar_checada_remota(
+def _auth_portal_checada(
     db: Session,
     empresa_id: int,
     numero_empleado: str,
     password: str,
-) -> ChecadaRemotaResponse:
-    """
-    Autentica al empleado (empresa + número + contraseña) y registra la checada.
-    Solo empresas con checadas_remotas=True.
-    """
+) -> Tuple[Optional[personal_models.Empleado], Optional[str]]:
+    """Valida empresa + empleado + contraseña + permiso remoto. Devuelve (empleado, None) o (None, mensaje_error)."""
     empresa = db.query(personal_models.Empresa).filter(
         personal_models.Empresa.id == empresa_id,
         personal_models.Empresa.activo == True,
         personal_models.Empresa.checadas_remotas == True,
     ).first()
     if not empresa:
-        return ChecadaRemotaResponse(ok=False, mensaje="Empresa no disponible para checadas remotas.")
+        return None, "Empresa no disponible para checadas remotas."
 
     empleado = db.query(personal_models.Empleado).filter(
         personal_models.Empleado.empresa_id == empresa_id,
@@ -72,37 +153,129 @@ def registrar_checada_remota(
         personal_models.Empleado.estado == personal_models.EstadoEmpleado.ACTIVO,
     ).first()
     if not empleado:
-        return ChecadaRemotaResponse(ok=False, mensaje="Credenciales incorrectas.")
+        return None, "Credenciales incorrectas."
 
-    # Verificar permiso individual de checada remota
     if not empleado.puede_checar_remoto:
-        return ChecadaRemotaResponse(ok=False, mensaje="No tienes permiso para checar de forma remota.")
+        return None, "No tienes permiso para checar de forma remota."
 
     if not _verificar_password(empleado, password):
-        return ChecadaRemotaResponse(ok=False, mensaje="Credenciales incorrectas.")
+        return None, "Credenciales incorrectas."
+
+    return empleado, None
+
+
+def estado_checada_remota(
+    db: Session,
+    empresa_id: int,
+    numero_empleado: str,
+    password: str,
+) -> EstadoChecadaRemotaResponse:
+    """Consulta cuántas checadas llevas hoy vs las requeridas (sin registrar)."""
+    empleado, err = _auth_portal_checada(db, empresa_id, numero_empleado, password)
+    if err or not empleado:
+        return EstadoChecadaRemotaResponse(ok=False, mensaje=err or "Error.")
+
+    ts_mex = to_mexico(datetime.now(timezone.utc))
+    fecha_mex = ts_mex.date() if ts_mex else datetime.now(timezone.utc).date()
+    requeridas, motivo = checadas_requeridas_dia(db, empleado, fecha_mex)
+    count = _contar_checadas_dia_mexico(db, empleado.id, fecha_mex)
+    nombre_emp = f"{empleado.nombre} {empleado.apellido_paterno or ''}".strip()
+
+    if requeridas == 0:
+        return EstadoChecadaRemotaResponse(
+            ok=True,
+            mensaje=_mensaje_dia_no_laboral(motivo),
+            nombre_empleado=nombre_emp or None,
+            checadas_hoy=count,
+            requeridas_hoy=0,
+            completado=True,
+            dia_no_laboral=True,
+        )
+
+    completado = count >= requeridas
+    msg = (
+        f"Ya registraste las {requeridas} checadas necesarias de hoy."
+        if completado
+        else f"Checadas de hoy: {count} de {requeridas}."
+    )
+    return EstadoChecadaRemotaResponse(
+        ok=True,
+        mensaje=msg,
+        nombre_empleado=nombre_emp or None,
+        checadas_hoy=count,
+        requeridas_hoy=requeridas,
+        completado=completado,
+        dia_no_laboral=False,
+    )
+
+
+def registrar_checada_remota(
+    db: Session,
+    empresa_id: int,
+    numero_empleado: str,
+    password: str,
+) -> ChecadaRemotaResponse:
+    """
+    Autentica al empleado y registra una checada.
+    No permite más registros cuando ya se alcanzaron las checadas requeridas del día (4 entre semana, 2 sábado).
+    """
+    empleado, err = _auth_portal_checada(db, empresa_id, numero_empleado, password)
+    if err or not empleado:
+        return ChecadaRemotaResponse(ok=False, mensaje=err or "Error.")
 
     dispositivo = _get_dispositivo_portal(db)
     if not dispositivo:
         return ChecadaRemotaResponse(ok=False, mensaje="Error interno. Intente más tarde.")
 
     timestamp = datetime.now(timezone.utc)
-    ventana = timedelta(seconds=5)
+    ts_mex = to_mexico(timestamp) or timestamp
+    fecha_mex = ts_mex.date() if hasattr(ts_mex, "date") else datetime.now(timezone.utc).date()
 
-    # Evitar duplicados (doble clic o reintento)
+    requeridas, motivo = checadas_requeridas_dia(db, empleado, fecha_mex)
+    count = _contar_checadas_dia_mexico(db, empleado.id, fecha_mex)
+    nombre_emp = f"{empleado.nombre} {empleado.apellido_paterno or ''}".strip()
+
+    if requeridas == 0:
+        return ChecadaRemotaResponse(
+            ok=False,
+            mensaje=_mensaje_dia_no_laboral(motivo),
+            nombre_empleado=nombre_emp or None,
+            checadas_hoy=count,
+            requeridas_hoy=0,
+            completado=True,
+            dia_no_laboral=True,
+        )
+
+    if count >= requeridas:
+        return ChecadaRemotaResponse(
+            ok=False,
+            mensaje=f"Ya registraste las {requeridas} checadas necesarias de hoy. No es necesario volver a checar.",
+            nombre_empleado=nombre_emp or None,
+            checadas_hoy=count,
+            requeridas_hoy=requeridas,
+            completado=True,
+            dia_no_laboral=False,
+        )
+
+    ventana = timedelta(seconds=5)
     existente = db.query(asistencia_models.Asistencia).filter(
         asistencia_models.Asistencia.empleado_id == empleado.id,
         asistencia_models.Asistencia.timestamp >= timestamp - ventana,
         asistencia_models.Asistencia.timestamp <= timestamp + ventana,
     ).first()
     if existente:
-        ts_mex = to_mexico(timestamp) or timestamp
-        nombre_emp = f"{empleado.nombre} {empleado.apellido_paterno or ''}".strip()
+        ts_m = to_mexico(timestamp) or timestamp
+        c2 = _contar_checadas_dia_mexico(db, empleado.id, fecha_mex)
         return ChecadaRemotaResponse(
             ok=True,
             mensaje="Checada registrada.",
             tipo=existente.tipo.value if existente.tipo else None,
-            timestamp=ts_mex.strftime("%Y-%m-%d %H:%M:%S") if ts_mex else None,
+            timestamp=ts_m.strftime("%Y-%m-%d %H:%M:%S") if hasattr(ts_m, "strftime") else None,
             nombre_empleado=nombre_emp or None,
+            checadas_hoy=c2,
+            requeridas_hoy=requeridas,
+            completado=c2 >= requeridas,
+            dia_no_laboral=False,
         )
 
     from app.modules.asistencia.biometric.sync_service import SyncService
@@ -128,13 +301,22 @@ def registrar_checada_remota(
 
     db.commit()
 
-    ts_mex = to_mexico(timestamp) or timestamp
+    nuevo_count = _contar_checadas_dia_mexico(db, empleado.id, fecha_mex)
+    completado = nuevo_count >= requeridas
     tipo_label = tipo.value if tipo else "entrada"
-    nombre_emp = f"{empleado.nombre} {empleado.apellido_paterno or ''}".strip()
+    ts_out = to_mexico(timestamp) or timestamp
+    msg = f"Checada registrada: {tipo_label}"
+    if completado:
+        msg = f"Checada registrada: {tipo_label}. ¡Listo! Ya completaste las {requeridas} checadas de hoy."
+
     return ChecadaRemotaResponse(
         ok=True,
-        mensaje=f"Checada registrada: {tipo_label}",
+        mensaje=msg,
         tipo=tipo_label,
-        timestamp=ts_mex.strftime("%Y-%m-%d %H:%M:%S") if ts_mex else None,
+        timestamp=ts_out.strftime("%Y-%m-%d %H:%M:%S") if hasattr(ts_out, "strftime") else None,
         nombre_empleado=nombre_emp or None,
+        checadas_hoy=nuevo_count,
+        requeridas_hoy=requeridas,
+        completado=completado,
+        dia_no_laboral=False,
     )

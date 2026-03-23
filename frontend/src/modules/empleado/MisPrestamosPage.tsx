@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
 import { generarDocumentoPrestamo } from '../prestamos/documentoPrestamo';
 import { useIsMobile } from '../../hooks/useIsMobile';
+import { useAuth } from '../../hooks/useAuth';
 
 interface SolicitudPrestamo {
   id: number;
@@ -15,20 +16,24 @@ interface SolicitudPrestamo {
   comentarios_aprobacion?: string | null;
   created_at: string;
   fecha_aprobacion?: string | null;
+  fecha_deposito?: string | null;
+  referencia_bancaria?: string | null;
+  /** Saldo restante calculado en el servidor (quincenas día 15 y fin de mes). Tiene prioridad si viene. */
+  saldo_restante?: number | string | null;
 }
 
 const ESTADO_LABEL: Record<string, string> = {
   pendiente: 'Pendiente',
-  aprobada_gerente: 'Aprobada por gerente',
-  aprobada: 'Aprobada',
+  aprobada_departamento: 'Autorizada por departamento',
+  depositado: 'Depositado',
   rechazada: 'Rechazada',
   cancelada: 'Cancelada',
 };
 
 const ESTADO_STYLE: Record<string, { bg: string; color: string }> = {
   pendiente: { bg: '#fef3c7', color: '#92400e' },
-  aprobada_gerente: { bg: '#e0f2fe', color: '#0369a1' },
-  aprobada: { bg: '#d1fae5', color: '#065f46' },
+  aprobada_departamento: { bg: '#e0f2fe', color: '#0369a1' },
+  depositado: { bg: '#d1fae5', color: '#065f46' },
   rechazada: { bg: '#fee2e2', color: '#991b1b' },
   cancelada: { bg: '#f3f4f6', color: '#6b7280' },
 };
@@ -52,38 +57,101 @@ const formatMonto = (v: string | number) => {
   return new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(n);
 };
 
-/** Parsea una fecha ISO que puede venir sin zona horaria, tratándola como UTC. */
-const parseUTC = (raw: string): Date => {
-  // Si ya trae zona horaria (Z o +/-HH:mm) la dejamos como está
-  if (raw.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(raw)) return new Date(raw);
-  // Sin zona → el backend envía UTC; forzamos Z para que JS no la interprete como local
-  return new Date(raw + 'Z');
+/** Parsea la fecha de aprobación: usa el día de calendario que envió el servidor (UTC) para evitar desfases por zona horaria. */
+const parseFechaAprobacionLocal = (raw: string): Date | null => {
+  const s = (raw && String(raw).trim()) || '';
+  // Buscar YYYY-MM-DD en cualquier parte (p. ej. "2025-03-10T19:00:00.000Z" o "2025-03-10")
+  const iso = s.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) {
+    const y = parseInt(iso[1], 10);
+    const m = parseInt(iso[2], 10) - 1;
+    const d = parseInt(iso[3], 10);
+    if (m >= 0 && m <= 11 && d >= 1 && d <= 31) {
+      // Usar la misma fecha como día de calendario local (el “día” que ve el usuario)
+      return new Date(Date.UTC(y, m, d));
+    }
+  }
+  const parsed = new Date(s.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(s) ? s : s + 'Z');
+  if (isNaN(parsed.getTime())) return null;
+  // Si el backend envió hora, usar año/mes/día UTC como día de calendario
+  return new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate()));
 };
 
-/** Calcula el saldo restante del préstamo asumiendo descuentos quincenales (cada 15 días).
- *  Retorna null si el préstamo no está en estado 'aprobada' o falta fecha. */
+/** Último día del mes (1-31) en zona local. month es 0-11. */
+const getLastDayOfMonth = (year: number, month: number): number =>
+  new Date(year, month + 1, 0).getDate();
+
+/** Cuenta quincenas de calendario (día 15 y fin de mes) ya pasadas. Usa UTC para coincidir con el servidor. */
+const contarQuincenasCalendario = (fechaAprobacion: Date): number => {
+  const now = new Date();
+  const ay = fechaAprobacion.getUTCFullYear?.() ?? fechaAprobacion.getFullYear();
+  const am = fechaAprobacion.getUTCMonth?.() ?? fechaAprobacion.getMonth();
+  const ad = fechaAprobacion.getUTCDate?.() ?? fechaAprobacion.getDate();
+  const ty = now.getUTCFullYear();
+  const tm = now.getUTCMonth();
+  const td = now.getUTCDate();
+  if (ay > ty || (ay === ty && am > tm) || (ay === ty && am === tm && ad > td)) return 0;
+  let count = 0;
+  for (let y = ay; y <= ty; y++) {
+    const startM = y === ay ? am : 0;
+    const endM = y === ty ? tm : 11;
+    for (let m = startM; m <= endM; m++) {
+      const lastDay = getLastDayOfMonth(y, m);
+      const quincena15YaPaso = y < ty || (y === ty && m < tm) || (y === ty && m === tm && td >= 15);
+      const quincena15DespuesDeAprob = y > ay || (y === ay && m > am) || (y === ay && m === am && 15 >= ad);
+      if (quincena15DespuesDeAprob && quincena15YaPaso) count++;
+      if (lastDay !== 15) {
+        const quincenaFinYaPaso = y < ty || (y === ty && m < tm) || (y === ty && m === tm && td >= lastDay);
+        const quincenaFinDespuesDeAprob = y > ay || (y === ay && m > am) || (y === ay && m === am && lastDay >= ad);
+        if (quincenaFinDespuesDeAprob && quincenaFinYaPaso) count++;
+      }
+    }
+  }
+  return count;
+};
+
+/** Calcula el saldo restante. Usa saldo_restante del API si viene; si no, lo calcula en el cliente. */
 const calcularSaldoRestante = (sol: SolicitudPrestamo): number | null => {
-  if (sol.estado !== 'aprobada') return null;
-  if (!sol.fecha_aprobacion) return null;
-  const monto = parseFloat(sol.monto);
-  const descQuincenal = parseFloat(sol.descuento_quincenal ?? '0');
-  if (isNaN(monto) || isNaN(descQuincenal) || descQuincenal <= 0) return null;
-  const msTranscurridos = Date.now() - parseUTC(sol.fecha_aprobacion).getTime();
-  // Si la fecha quedó en el futuro (diferencia negativa) no se ha pagado nada aún
-  if (msTranscurridos < 0) return monto;
-  const quincenasTranscurridas = Math.floor(msTranscurridos / (15 * 24 * 60 * 60 * 1000));
+  if ((sol.estado || '').toLowerCase() !== 'depositado') return null;
+  const monto = parseFloat(String(sol.monto));
+  if (isNaN(monto) || monto <= 0) return null;
+  const desdeServidor = sol.saldo_restante != null && sol.saldo_restante !== '';
+  if (desdeServidor) {
+    const n = parseFloat(String(sol.saldo_restante));
+    if (!isNaN(n) && n >= 0) return n;
+  }
+  const rawFechaBase = sol.fecha_deposito || sol.fecha_aprobacion;
+  if (!rawFechaBase) return null;
+  const descQuincenal = parseFloat(String(sol.descuento_quincenal ?? '0'));
+  if (isNaN(descQuincenal) || descQuincenal <= 0) return null;
+  const fechaAprobacion = parseFechaAprobacionLocal(rawFechaBase);
+  if (!fechaAprobacion) return null;
+  const now = new Date();
+  const ay = fechaAprobacion.getUTCFullYear();
+  const am = fechaAprobacion.getUTCMonth();
+  const ad = fechaAprobacion.getUTCDate();
+  const ty = now.getUTCFullYear();
+  const tm = now.getUTCMonth();
+  const td = now.getUTCDate();
+  if (ay > ty || (ay === ty && am > tm) || (ay === ty && am === tm && ad > td)) return monto;
+  const quincenasTranscurridas = contarQuincenasCalendario(fechaAprobacion);
   return Math.max(0, monto - quincenasTranscurridas * descQuincenal);
 };
 
-const emptyForm = { monto: '', plazo_meses: '12', motivo: '' };
+/** Política estándar: máx. $6,000 MXN y 8 quincenas */
+const PRESTAMO_MAX_MONTO = 6000;
+const PRESTAMO_MAX_QUINCENAS = 8;
+
+const emptyForm = { monto: '', plazo_meses: '4', motivo: '' };
 
 const calcularDescuentoQuincenal = (monto: number, plazo: number) => {
   if (plazo <= 0 || isNaN(monto) || monto <= 0) return null;
-  return Math.round((monto / (plazo * 2)) * 100) / 100;
+  return Math.round((monto / plazo) * 100) / 100;
 };
 
 export const MisPrestamosPage = () => {
   const isMobile = useIsMobile();
+  const { authMe } = useAuth();
   const [solicitudes, setSolicitudes] = useState<SolicitudPrestamo[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -93,18 +161,25 @@ export const MisPrestamosPage = () => {
   const [cancelando, setCancelando] = useState(false);
 
   const cargar = useCallback(async () => {
+    if (!authMe?.id) {
+      setSolicitudes([]);
+      return;
+    }
     setLoading(true);
     try {
-      const res = await api.get<SolicitudPrestamo[]>('prestamos?limit=200');
+      const res = await api.get<SolicitudPrestamo[]>(`prestamos?limit=200&empleado_id=${authMe.id}`);
       setSolicitudes(Array.isArray(res.data) ? res.data : []);
     } catch {
       setSolicitudes([]);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [authMe?.id]);
 
   useEffect(() => { cargar(); }, [cargar]);
+
+  const estadosPrestamoActivo = ['pendiente', 'aprobada_departamento', 'depositado'];
+  const tienePrestamoActivo = solicitudes.some(s => estadosPrestamoActivo.includes(s.estado));
 
   const abrirNueva = () => {
     setForm(emptyForm);
@@ -116,7 +191,19 @@ export const MisPrestamosPage = () => {
     const monto = parseFloat(form.monto);
     const plazo = parseInt(form.plazo_meses, 10);
     if (isNaN(monto) || monto <= 0) { setError('Monto debe ser mayor a cero'); return; }
-    if (isNaN(plazo) || plazo < 1) { setError('Plazo debe ser al menos 1 mes'); return; }
+    if (monto > PRESTAMO_MAX_MONTO) {
+      setError(`El monto máximo es ${PRESTAMO_MAX_MONTO.toLocaleString('es-MX', { style: 'currency', currency: 'MXN' })}`);
+      return;
+    }
+    if (isNaN(plazo) || plazo < 1) { setError('Plazo debe ser al menos 1 quincena'); return; }
+    if (plazo > PRESTAMO_MAX_QUINCENAS) {
+      setError(`El plazo máximo es ${PRESTAMO_MAX_QUINCENAS} quincenas`);
+      return;
+    }
+    if (tienePrestamoActivo) {
+      setError('Ya tienes un préstamo o solicitud activa. No puedes crear otra hasta finalizar o cancelar la actual.');
+      return;
+    }
     setGuardando(true);
     setError('');
     try {
@@ -164,8 +251,30 @@ export const MisPrestamosPage = () => {
   return (
     <div style={{ padding: isMobile ? '16px' : '24px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
-        <h1 style={{ margin: 0, fontSize: isMobile ? '1.3rem' : '1.4rem' }}>Mis préstamos</h1>
-        <button onClick={abrirNueva} style={{ padding: '9px 18px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem' }}>
+        <div>
+          <h1 style={{ margin: 0, fontSize: isMobile ? '1.3rem' : '1.4rem' }}>Mis préstamos</h1>
+          {tienePrestamoActivo && (
+            <p style={{ margin: '8px 0 0', fontSize: '0.82rem', color: '#b45309', maxWidth: 520 }}>
+              Solo puede haber un préstamo o solicitud activa a la vez. Cuando termine o cancele la actual, podrá solicitar otro.
+            </p>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={abrirNueva}
+          disabled={tienePrestamoActivo}
+          title={tienePrestamoActivo ? 'Ya tienes una solicitud o préstamo activo' : undefined}
+          style={{
+            padding: '9px 18px',
+            backgroundColor: tienePrestamoActivo ? '#94a3b8' : '#0ea5e9',
+            color: 'white',
+            border: 'none',
+            borderRadius: '7px',
+            cursor: tienePrestamoActivo ? 'not-allowed' : 'pointer',
+            fontWeight: 600,
+            fontSize: '0.9rem',
+          }}
+        >
           + Nueva solicitud
         </button>
       </div>
@@ -192,7 +301,7 @@ export const MisPrestamosPage = () => {
                   <div>
                     <div style={{ fontWeight: 700, fontSize: '1.15rem', color: '#1e3a5f' }}>{formatMonto(sol.monto)}</div>
                     <div style={{ fontSize: '0.82rem', color: '#6b7280', marginTop: '2px' }}>
-                      {sol.plazo_meses} meses · {sol.descuento_quincenal ? formatMonto(sol.descuento_quincenal) + '/q' : ''}
+                      {sol.plazo_meses} quincenas · {sol.descuento_quincenal ? formatMonto(sol.descuento_quincenal) + '/q' : ''}
                     </div>
                     {(() => {
                       const saldo = calcularSaldoRestante(sol);
@@ -213,6 +322,11 @@ export const MisPrestamosPage = () => {
                   </span>
                 </div>
                 {sol.motivo && <p style={{ margin: '0 0 8px', fontSize: '0.85rem', color: '#374151' }}>{sol.motivo}</p>}
+                {sol.referencia_bancaria && (
+                  <p style={{ margin: '0 0 8px', fontSize: '0.8rem', color: '#065f46', fontWeight: 600 }}>
+                    Ref. bancaria: <span style={{ fontFamily: 'monospace', fontWeight: 700 }}>{sol.referencia_bancaria}</span>
+                  </p>
+                )}
                 <div style={{ fontSize: '0.78rem', color: '#9ca3af', marginBottom: '10px' }}>
                   {new Date(sol.created_at).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' })}
                   {sol.comentarios_aprobacion && sol.estado !== 'pendiente' && (
@@ -246,6 +360,7 @@ export const MisPrestamosPage = () => {
                 <th style={{ ...th, textAlign: 'right' }}>Saldo restante</th>
                 <th style={th}>Motivo</th>
                 <th style={{ ...th, textAlign: 'center' }}>Estado</th>
+                <th style={th}>Ref. bancaria</th>
                 <th style={th}>Fecha</th>
                 <th style={{ ...th, textAlign: 'center' }}>Acciones</th>
               </tr>
@@ -261,7 +376,7 @@ export const MisPrestamosPage = () => {
                       </span>
                     </td>
                     <td style={{ ...td, fontWeight: 600, textAlign: 'right' }}>{formatMonto(sol.monto)}</td>
-                    <td style={{ ...td, textAlign: 'center' }}>{sol.plazo_meses} meses</td>
+                    <td style={{ ...td, textAlign: 'center' }}>{sol.plazo_meses} quincenas</td>
                     <td style={{ ...td, textAlign: 'right', color: '#0369a1' }}>
                       {sol.descuento_quincenal ? formatMonto(sol.descuento_quincenal) : '—'}
                     </td>
@@ -285,6 +400,7 @@ export const MisPrestamosPage = () => {
                         {ESTADO_LABEL[sol.estado] ?? sol.estado}
                       </span>
                     </td>
+                    <td style={{ ...td, fontSize: '0.8rem', fontFamily: 'monospace' }}>{sol.referencia_bancaria || '—'}</td>
                     <td style={td}>
                       {new Date(sol.created_at).toLocaleString('es-MX', { dateStyle: 'short', timeStyle: 'short' })}
                       {sol.comentarios_aprobacion && sol.estado !== 'pendiente' && (
@@ -317,20 +433,43 @@ export const MisPrestamosPage = () => {
             style={{ backgroundColor: 'white', borderRadius: 12, padding: 28, width: 420, maxWidth: '95vw', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}
           >
             <h3 style={{ margin: '0 0 20px', fontSize: '1.1rem', fontWeight: 700 }}>Nueva solicitud de préstamo</h3>
+            <p style={{ margin: '0 0 14px', fontSize: '0.8rem', color: '#64748b', lineHeight: 1.45 }}>
+              Monto máximo <strong>{PRESTAMO_MAX_MONTO.toLocaleString('es-MX', { style: 'currency', currency: 'MXN' })}</strong>
+              {' · '}plazo máximo <strong>{PRESTAMO_MAX_QUINCENAS} quincenas</strong>.
+            </p>
             {error && <p style={{ color: '#dc3545', marginBottom: 12, fontSize: '0.88rem' }}>{error}</p>}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <div>
                 <label style={{ display: 'block', marginBottom: 4, fontSize: '0.85rem', fontWeight: 600 }}>Monto (MXN) *</label>
-                <input type="number" min="1" step="0.01" value={form.monto} onChange={e => setForm(f => ({ ...f, monto: e.target.value }))} style={inputStyle} placeholder="Ej: 5000" />
+                <input
+                  type="number"
+                  min="0.01"
+                  max={PRESTAMO_MAX_MONTO}
+                  step="0.01"
+                  value={form.monto}
+                  onChange={e => setForm(f => ({ ...f, monto: e.target.value }))}
+                  style={inputStyle}
+                  placeholder={`Hasta ${PRESTAMO_MAX_MONTO.toLocaleString('es-MX')}`}
+                />
               </div>
               <div>
-                <label style={{ display: 'block', marginBottom: 4, fontSize: '0.85rem', fontWeight: 600 }}>Plazo (meses) *</label>
-                <input type="number" min="1" value={form.plazo_meses} onChange={e => setForm(f => ({ ...f, plazo_meses: e.target.value }))} style={inputStyle} />
+                <label style={{ display: 'block', marginBottom: 4, fontSize: '0.85rem', fontWeight: 600 }}>Plazo (quincenas) *</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={PRESTAMO_MAX_QUINCENAS}
+                  value={form.plazo_meses}
+                  onChange={e => setForm(f => ({ ...f, plazo_meses: e.target.value }))}
+                  style={inputStyle}
+                />
+                <span style={{ fontSize: '0.75rem', color: '#94a3b8', display: 'block', marginTop: 4 }}>
+                  Total: {(parseInt(form.plazo_meses, 10) || 0) || '—'} quincenas
+                </span>
               </div>
               {(() => {
                 const plazo = parseInt(form.plazo_meses, 10) || 0;
                 const desc = calcularDescuentoQuincenal(parseFloat(form.monto) || 0, plazo);
-                const quincenas = plazo * 2;
+                const quincenas = plazo;
                 return desc != null && (
                   <div style={{ padding: '10px 12px', backgroundColor: '#f0f9ff', borderRadius: 8, fontSize: '0.88rem', color: '#0369a1' }}>
                     <strong>Descuento quincenal:</strong> {formatMonto(desc)}

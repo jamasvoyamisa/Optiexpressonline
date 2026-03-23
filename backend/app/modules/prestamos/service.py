@@ -1,8 +1,126 @@
-from sqlalchemy.orm import Session, joinedload
-from typing import List, Optional
+import logging
+from calendar import monthrange
+from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
+from typing import List, Optional
+
+from sqlalchemy.orm import Session, joinedload
 
 from . import models, schemas
+from app.modules.personal import models as pm
+
+logger = logging.getLogger(__name__)
+
+# Política estándar (empleados y RH sin excepción): solicitud desde la app / RH.
+PRESTAMO_MONTO_MAX_ESTANDAR = Decimal("6000.00")
+PRESTAMO_PLAZO_MAX_QUINCENAS = 8
+
+
+ESTADOS_PRESTAMO_ACTIVO = (
+    models.EstadoSolicitudPrestamo.PENDIENTE,
+    models.EstadoSolicitudPrestamo.APROBADA_DEPARTAMENTO,
+    models.EstadoSolicitudPrestamo.DEPOSITADO,
+)
+
+
+def _empleado_tiene_prestamo_activo(db: Session, empleado_id: int) -> bool:
+    """Un solo préstamo/solicitud activa: pendiente, autorizada por departamento o depositada (en curso)."""
+    return (
+        db.query(models.SolicitudPrestamo.id)
+        .filter(
+            models.SolicitudPrestamo.empleado_id == empleado_id,
+            models.SolicitudPrestamo.estado.in_(ESTADOS_PRESTAMO_ACTIVO),
+        )
+        .first()
+        is not None
+    )
+
+
+def _validar_limites_prestamo(monto: Decimal, plazo_quincenas: int, permitir_excepcion: bool) -> None:
+    """
+    Monto máximo $6,000 y plazo máximo 8 quincenas, salvo excepción
+    autorizada (Gerente General, Director, Administrador al crear desde RH).
+    """
+    if permitir_excepcion:
+        return
+    if monto > PRESTAMO_MONTO_MAX_ESTANDAR:
+        raise ValueError(
+            f"El monto máximo permitido es ${PRESTAMO_MONTO_MAX_ESTANDAR:,.2f} MXN. "
+            "Para montos mayores, un Gerente General, Director o Administrador puede registrar la solicitud "
+            "desde Recursos Humanos marcando «excepción a la política»."
+        )
+    if plazo_quincenas > PRESTAMO_PLAZO_MAX_QUINCENAS:
+        raise ValueError(
+            f"El plazo máximo es {PRESTAMO_PLAZO_MAX_QUINCENAS} quincenas. "
+            "Para plazos mayores, use una excepción autorizada (Gerente General, Director o Administrador) en el módulo RH."
+        )
+
+
+def _notificar_jefe_departamento_solicitud(
+    db: Session,
+    empleado_solicitante_id: int,
+    titulo: str,
+    mensaje: str,
+    tipo: str,
+    referencia_id: int,
+) -> None:
+    """Notifica al jefe del departamento del solicitante; si no hay jefe, avisa a GG/Director/Admin."""
+    try:
+        from app.modules.notificaciones import service as noti_service
+        from app.modules.personal.models import Empleado, Departamento
+
+        emp = db.query(Empleado).filter(Empleado.id == empleado_solicitante_id).first()
+        if emp and emp.departamento_id:
+            dept = (
+                db.query(Departamento)
+                .filter(Departamento.id == emp.departamento_id)
+                .first()
+            )
+            if dept and dept.jefe_id:
+                noti_service.crear_notificacion(
+                    db,
+                    dept.jefe_id,
+                    titulo=titulo,
+                    tipo=tipo,
+                    mensaje=mensaje,
+                    referencia_id=referencia_id,
+                )
+                return
+        _notificar_gerentes(db, titulo, mensaje, tipo, referencia_id)
+    except Exception:
+        logger.exception(
+            "Notificación préstamo (jefe/GG) no enviada: referencia_id=%s", referencia_id
+        )
+
+
+def _notificar_empleado_prestamo(
+    db: Session,
+    empleado_id: int,
+    *,
+    titulo: str,
+    mensaje: str,
+    tipo: str,
+    referencia_id: int,
+) -> None:
+    """Crea notificación para el empleado; registra error en log si falla."""
+    try:
+        from app.modules.notificaciones import service as noti_service
+
+        noti_service.crear_notificacion(
+            db,
+            empleado_id,
+            titulo=titulo,
+            tipo=tipo,
+            mensaje=mensaje,
+            referencia_id=referencia_id,
+        )
+    except Exception:
+        logger.exception(
+            "Notificación al empleado no enviada: empleado_id=%s tipo=%s solicitud_id=%s",
+            empleado_id,
+            tipo,
+            referencia_id,
+        )
 
 
 def _notificar_gerentes(
@@ -50,32 +168,83 @@ def _notificar_gerentes(
                 mensaje=mensaje, referencia_id=referencia_id,
             )
     except Exception:
-        pass  # No interrumpir el flujo principal si falla la notificación
+        logger.exception(
+            "Notificación a gerentes no enviada: referencia_id=%s", referencia_id
+        )
 
 
-def _calcular_descuento_quincenal(monto: Decimal, plazo_meses: int) -> Decimal:
-    """Calcula el descuento quincenal: monto / (plazo_meses * 2 quincenas por mes)."""
-    if plazo_meses <= 0:
+def _calcular_descuento_quincenal(monto: Decimal, plazo_quincenas: int) -> Decimal:
+    """Calcula el descuento quincenal: monto / plazo_quincenas."""
+    if plazo_quincenas <= 0:
         return Decimal("0")
-    quincenas = plazo_meses * 2
-    return (monto / quincenas).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    return (monto / plazo_quincenas).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def _contar_quincenas_calendario_utc(desde: datetime) -> int:
+    """Cuenta quincenas de calendario (día 15 y fin de mes) ya pasadas desde desde hasta hoy, en UTC."""
+    if desde.tzinfo is None:
+        desde = desde.replace(tzinfo=timezone.utc)
+    d = desde.astimezone(timezone.utc).date()
+    hoy = datetime.now(timezone.utc).date()
+    ay, am, ad = d.year, d.month - 1, d.day
+    ty, tm, td = hoy.year, hoy.month - 1, hoy.day
+    if ay > ty or (ay == ty and am > tm) or (ay == ty and am == tm and ad > td):
+        return 0
+    count = 0
+    for y in range(ay, ty + 1):
+        start_m = am if y == ay else 0
+        end_m = tm if y == ty else 11
+        for m in range(start_m, end_m + 1):
+            last_day = monthrange(y, m + 1)[1]
+            q15_ok = (y > ay or (y == ay and m > am) or (y == ay and m == am and 15 >= ad)) and (
+                y < ty or (y == ty and m < tm) or (y == ty and m == tm and td >= 15)
+            )
+            if q15_ok:
+                count += 1
+            if last_day != 15:
+                qfin_ok = (y > ay or (y == ay and m > am) or (y == ay and m == am and last_day >= ad)) and (
+                    y < ty or (y == ty and m < tm) or (y == ty and m == tm and td >= last_day)
+                )
+                if qfin_ok:
+                    count += 1
+    return count
+
+
+def calcular_saldo_restante(sol: models.SolicitudPrestamo) -> Optional[Decimal]:
+    """Saldo restante para préstamos depositados: monto - (quincenas pasadas * descuento_quincenal). None si no aplica."""
+    if sol.estado != models.EstadoSolicitudPrestamo.DEPOSITADO:
+        return None
+    fecha_base = sol.fecha_deposito or sol.fecha_aprobacion
+    if not fecha_base:
+        return None
+    monto = sol.monto
+    desc = sol.descuento_quincenal or Decimal("0")
+    if desc <= 0:
+        return None
+    n = _contar_quincenas_calendario_utc(fecha_base)
+    saldo = monto - (n * desc)
+    return max(Decimal("0"), saldo)
 
 
 def listar_solicitudes(
     db: Session,
     empleado_id: Optional[int] = None,
     estado: Optional[str] = None,
+    include_canceladas: bool = False,
     skip: int = 0,
     limit: int = 200,
 ) -> List[models.SolicitudPrestamo]:
     q = db.query(models.SolicitudPrestamo).options(
-        joinedload(models.SolicitudPrestamo.empleado),
+        joinedload(models.SolicitudPrestamo.empleado).joinedload(pm.Empleado.empresa),
+        joinedload(models.SolicitudPrestamo.empleado).joinedload(pm.Empleado.departamento_rel),
         joinedload(models.SolicitudPrestamo.aprobador),
     )
     if empleado_id:
         q = q.filter(models.SolicitudPrestamo.empleado_id == empleado_id)
     if estado:
         q = q.filter(models.SolicitudPrestamo.estado == models.EstadoSolicitudPrestamo(estado))
+    if not include_canceladas:
+        q = q.filter(models.SolicitudPrestamo.estado != models.EstadoSolicitudPrestamo.CANCELADA)
     return q.order_by(models.SolicitudPrestamo.created_at.desc()).offset(skip).limit(limit).all()
 
 
@@ -91,6 +260,12 @@ def crear_solicitud(
     data: schemas.SolicitudPrestamoCreate,
     empleado_id: int,
 ) -> models.SolicitudPrestamo:
+    _validar_limites_prestamo(data.monto, data.plazo_meses, permitir_excepcion=False)
+    if _empleado_tiene_prestamo_activo(db, empleado_id):
+        raise ValueError(
+            "Ya tiene un préstamo o solicitud activa (pendiente, en aprobación o aprobado). "
+            "No puede solicitar otro hasta cancelar la solicitud pendiente o cuando el préstamo actual deje de estar vigente."
+        )
     descuento = _calcular_descuento_quincenal(data.monto, data.plazo_meses)
     sol = models.SolicitudPrestamo(
         empleado_id=empleado_id,
@@ -104,15 +279,16 @@ def crear_solicitud(
     db.refresh(sol)
     _asignar_numero_solicitud(db, sol)
     resultado = _con_relaciones(db, sol.id)
-    # Notificar a gerentes de la nueva solicitud
+    # Notificar al jefe del departamento (o GG si no hay jefe)
     nombre_emp = ""
     if resultado and resultado.empleado:
         nombre_emp = f"{resultado.empleado.nombre} {resultado.empleado.apellido_paterno or ''}".strip()
     monto_fmt = f"${float(data.monto):,.2f}"
-    _notificar_gerentes(
+    _notificar_jefe_departamento_solicitud(
         db,
+        empleado_id,
         titulo=f"Nueva solicitud de préstamo — {nombre_emp}",
-        mensaje=f"Monto: {monto_fmt} · Plazo: {data.plazo_meses} meses",
+        mensaje=f"Monto: {monto_fmt} · Plazo: {data.plazo_meses} quincenas",
         tipo="nueva_solicitud",
         referencia_id=sol.id,
     )
@@ -122,7 +298,13 @@ def crear_solicitud(
 def crear_solicitud_rh(
     db: Session,
     data: schemas.SolicitudPrestamoCreateRH,
+    permitir_excepcion: bool = False,
 ) -> models.SolicitudPrestamo:
+    _validar_limites_prestamo(data.monto, data.plazo_meses, permitir_excepcion=permitir_excepcion)
+    if _empleado_tiene_prestamo_activo(db, data.empleado_id):
+        raise ValueError(
+            "Este empleado ya tiene un préstamo o solicitud activa. No se puede registrar otra hasta finalizar o cancelar la actual."
+        )
     descuento = _calcular_descuento_quincenal(data.monto, data.plazo_meses)
     sol = models.SolicitudPrestamo(
         empleado_id=data.empleado_id,
@@ -141,10 +323,11 @@ def crear_solicitud_rh(
     if resultado and resultado.empleado:
         nombre_emp = f"{resultado.empleado.nombre} {resultado.empleado.apellido_paterno or ''}".strip()
     monto_fmt = f"${float(data.monto):,.2f}"
-    _notificar_gerentes(
+    _notificar_jefe_departamento_solicitud(
         db,
+        data.empleado_id,
         titulo=f"Nueva solicitud de préstamo — {nombre_emp}",
-        mensaje=f"Monto: {monto_fmt} · Plazo: {data.plazo_meses} meses",
+        mensaje=f"Monto: {monto_fmt} · Plazo: {data.plazo_meses} quincenas",
         tipo="nueva_solicitud",
         referencia_id=sol.id,
     )
@@ -171,55 +354,238 @@ def actualizar_solicitud(
         sol.plazo_meses = data.plazo_meses
     if data.motivo is not None:
         sol.motivo = data.motivo
+    # Empleado editando su solicitud: siempre límites estándar
+    _validar_limites_prestamo(sol.monto, sol.plazo_meses, permitir_excepcion=False)
     # Recalcular descuento quincenal en base a monto y plazo
     sol.descuento_quincenal = _calcular_descuento_quincenal(sol.monto, sol.plazo_meses)
     db.commit()
     return _con_relaciones(db, sol.id)
 
 
-def aprobar_gerente(
+def _empleado_es_jefe_departamento_del_solicitante(
+    db: Session, jefe_id: int, solicitante_empleado_id: int
+) -> bool:
+    emp = db.query(pm.Empleado).filter(pm.Empleado.id == solicitante_empleado_id).first()
+    if not emp or not emp.departamento_id:
+        return False
+    dept = (
+        db.query(pm.Departamento)
+        .filter(pm.Departamento.id == emp.departamento_id)
+        .first()
+    )
+    if not dept or not dept.jefe_id:
+        return False
+    return dept.jefe_id == jefe_id
+
+
+def listar_pendientes_departamento(
+    db: Session, jefe_id: int, skip: int = 0, limit: int = 200
+) -> List[models.SolicitudPrestamo]:
+    """Solicitudes pendientes donde el solicitante pertenece a un departamento cuyo jefe es jefe_id."""
+    q = (
+        db.query(models.SolicitudPrestamo)
+        .join(pm.Empleado, models.SolicitudPrestamo.empleado_id == pm.Empleado.id)
+        .join(pm.Departamento, pm.Empleado.departamento_id == pm.Departamento.id)
+        .filter(
+            pm.Departamento.jefe_id == jefe_id,
+            models.SolicitudPrestamo.estado == models.EstadoSolicitudPrestamo.PENDIENTE,
+        )
+        .options(
+            joinedload(models.SolicitudPrestamo.empleado).joinedload(pm.Empleado.empresa),
+            joinedload(models.SolicitudPrestamo.empleado).joinedload(pm.Empleado.departamento_rel),
+            joinedload(models.SolicitudPrestamo.aprobador),
+        )
+    )
+    return q.order_by(models.SolicitudPrestamo.created_at.desc()).offset(skip).limit(limit).all()
+
+
+def listar_pendientes_gerente_general(
+    db: Session, skip: int = 0, limit: int = 200
+) -> List[models.SolicitudPrestamo]:
+    """Solicitudes pendientes cuyo solicitante tiene puesto 'Gerente General'."""
+    q = (
+        db.query(models.SolicitudPrestamo)
+        .join(pm.Empleado, models.SolicitudPrestamo.empleado_id == pm.Empleado.id)
+        .join(pm.Puesto, pm.Empleado.puesto_id == pm.Puesto.id)
+        .filter(
+            models.SolicitudPrestamo.estado == models.EstadoSolicitudPrestamo.PENDIENTE,
+            pm.Puesto.nombre == "Gerente General",
+        )
+        .options(
+            joinedload(models.SolicitudPrestamo.empleado).joinedload(pm.Empleado.empresa),
+            joinedload(models.SolicitudPrestamo.empleado).joinedload(pm.Empleado.departamento_rel),
+            joinedload(models.SolicitudPrestamo.aprobador),
+        )
+    )
+    return q.order_by(models.SolicitudPrestamo.created_at.desc()).offset(skip).limit(limit).all()
+
+
+def empleado_es_gerente_general(db: Session, empleado_id: int) -> bool:
+    """Valida si el empleado tiene puesto Gerente General."""
+    emp = db.query(pm.Empleado).options(joinedload(pm.Empleado.puesto_rel)).filter(pm.Empleado.id == empleado_id).first()
+    if not emp or not emp.puesto_rel:
+        return False
+    return (emp.puesto_rel.nombre or "").strip().lower() == "gerente general"
+
+
+def listar_solicitudes_mi_area(
+    db: Session,
+    departamento_ids: List[int],
+    estado: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 200,
+) -> List[models.SolicitudPrestamo]:
+    """Solicitudes de préstamo del personal de los departamentos administrados por el usuario."""
+    if not departamento_ids:
+        return []
+    q = (
+        db.query(models.SolicitudPrestamo)
+        .join(pm.Empleado, models.SolicitudPrestamo.empleado_id == pm.Empleado.id)
+        .filter(pm.Empleado.departamento_id.in_(departamento_ids))
+        .options(
+            joinedload(models.SolicitudPrestamo.empleado).joinedload(pm.Empleado.empresa),
+            joinedload(models.SolicitudPrestamo.empleado).joinedload(pm.Empleado.departamento_rel),
+            joinedload(models.SolicitudPrestamo.aprobador),
+        )
+    )
+    if estado:
+        q = q.filter(models.SolicitudPrestamo.estado == estado)
+    else:
+        q = q.filter(models.SolicitudPrestamo.estado != models.EstadoSolicitudPrestamo.CANCELADA)
+    return q.order_by(models.SolicitudPrestamo.created_at.desc()).offset(skip).limit(limit).all()
+
+
+def listar_pendientes_deposito(
+    db: Session, skip: int = 0, limit: int = 200
+) -> List[models.SolicitudPrestamo]:
+    """Aprobadas por gerente de departamento; pendientes de depósito por Gerente General."""
+    q = db.query(models.SolicitudPrestamo).options(
+        joinedload(models.SolicitudPrestamo.empleado).joinedload(pm.Empleado.empresa),
+        joinedload(models.SolicitudPrestamo.empleado).joinedload(pm.Empleado.departamento_rel),
+        joinedload(models.SolicitudPrestamo.aprobador),
+    ).filter(
+        models.SolicitudPrestamo.estado == models.EstadoSolicitudPrestamo.APROBADA_DEPARTAMENTO,
+    )
+    return q.order_by(models.SolicitudPrestamo.created_at.desc()).offset(skip).limit(limit).all()
+
+
+def aprobar_departamento(
     db: Session,
     solicitud_id: int,
     aprobado: bool,
     aprobador_id: int,
     comentarios: Optional[str] = None,
+    es_superuser: bool = False,
+    es_director: bool = False,
 ) -> Optional[models.SolicitudPrestamo]:
-    """Gerente General/Director/Admin aprueba o rechaza. Aprobado → aprobada_gerente (pendiente RH)."""
-    from datetime import datetime, timezone
+    """Gerente del departamento del solicitante aprueba o rechaza. Aprobado → aprobada_departamento (pendiente depósito GG)."""
     sol = db.query(models.SolicitudPrestamo).filter(models.SolicitudPrestamo.id == solicitud_id).first()
     if not sol:
         return None
     if sol.estado != models.EstadoSolicitudPrestamo.PENDIENTE:
         return None
-    sol.estado = models.EstadoSolicitudPrestamo.APROBADA_GERENTE if aprobado else models.EstadoSolicitudPrestamo.RECHAZADA
+    # Regla especial: si el solicitante es Gerente General, solo Director o Admin pueden autorizar.
+    if empleado_es_gerente_general(db, sol.empleado_id) and not (es_superuser or es_director):
+        raise ValueError("Las solicitudes del Gerente General solo pueden ser autorizadas por Director o Administrador.")
+    if not es_superuser and not _empleado_es_jefe_departamento_del_solicitante(
+        db, aprobador_id, sol.empleado_id
+    ):
+        raise ValueError(
+            "Solo el gerente del departamento del solicitante puede autorizar esta solicitud."
+        )
+    sol.estado = (
+        models.EstadoSolicitudPrestamo.APROBADA_DEPARTAMENTO
+        if aprobado
+        else models.EstadoSolicitudPrestamo.RECHAZADA
+    )
     sol.aprobado_por_id = aprobador_id
     sol.fecha_aprobacion = datetime.now(timezone.utc)
     sol.comentarios_aprobacion = comentarios
     db.commit()
     resultado = _con_relaciones(db, sol.id)
-    # Notificar al empleado
-    try:
-        from app.modules.notificaciones import service as noti_service
-        monto_fmt = f"${float(sol.monto):,.2f}"
-        if aprobado:
-            noti_service.crear_notificacion(
-                db, sol.empleado_id,
-                titulo="Tu solicitud de préstamo fue aprobada",
-                mensaje=f"Monto: {monto_fmt} · Pendiente de confirmación por RH",
-                tipo="solicitud_aprobada_jefe",
-                referencia_id=sol.id,
-            )
-        else:
-            noti_service.crear_notificacion(
-                db, sol.empleado_id,
-                titulo="Tu solicitud de préstamo fue rechazada",
-                mensaje=comentarios or f"Monto: {monto_fmt}",
-                tipo="solicitud_rechazada",
-                referencia_id=sol.id,
-            )
-    except Exception:
-        pass
+    monto_fmt = f"${float(sol.monto):,.2f}"
+    if aprobado:
+        _notificar_empleado_prestamo(
+            db,
+            sol.empleado_id,
+            titulo="Tu préstamo fue aprobado",
+            mensaje=f"Tu departamento autorizó la solicitud. Monto: {monto_fmt} · Plazo: {sol.plazo_meses} quincenas. "
+            "Siguiente paso: depósito por Gerencia General.",
+            tipo="prestamo_aprobado_departamento",
+            referencia_id=sol.id,
+        )
+        _notificar_gerentes(
+            db,
+            titulo=f"Préstamo aprobado por departamento — solicitud #{sol.id}",
+            mensaje=f"Monto: {monto_fmt} · Pendiente registrar depósito y referencia bancaria",
+            tipo="prestamo_pendiente_deposito",
+            referencia_id=sol.id,
+        )
+    else:
+        _notificar_empleado_prestamo(
+            db,
+            sol.empleado_id,
+            titulo="Tu solicitud de préstamo fue rechazada",
+            mensaje=comentarios or f"Monto: {monto_fmt}",
+            tipo="solicitud_rechazada",
+            referencia_id=sol.id,
+        )
     return resultado
+
+
+def marcar_depositado(
+    db: Session,
+    solicitud_id: int,
+    referencia_bancaria: str,
+    _depositador_id: int,
+    comentarios: Optional[str] = None,
+) -> Optional[models.SolicitudPrestamo]:
+    """Gerente General registra depósito: aprobada_departamento → depositado."""
+    ref = (referencia_bancaria or "").strip()
+    if len(ref) < 3:
+        raise ValueError("La referencia bancaria es obligatoria (mínimo 3 caracteres).")
+
+    sol = db.query(models.SolicitudPrestamo).filter(models.SolicitudPrestamo.id == solicitud_id).first()
+    if not sol:
+        return None
+    if sol.estado != models.EstadoSolicitudPrestamo.APROBADA_DEPARTAMENTO:
+        return None
+    sol.estado = models.EstadoSolicitudPrestamo.DEPOSITADO
+    sol.referencia_bancaria = ref
+    sol.fecha_deposito = datetime.now(timezone.utc)
+    if comentarios:
+        prev = sol.comentarios_aprobacion or ""
+        sol.comentarios_aprobacion = (
+            (prev + f"\n[Depósito] {comentarios}").strip() if prev else f"[Depósito] {comentarios}"
+        )
+    db.commit()
+    resultado = _con_relaciones(db, sol.id)
+    monto_fmt = f"${float(sol.monto):,.2f}"
+    _notificar_empleado_prestamo(
+        db,
+        sol.empleado_id,
+        titulo="Tu préstamo fue depositado",
+        mensaje=f"Gerencia General registró el depósito. Monto: {monto_fmt} · Ref. bancaria: {ref} · "
+        "Recursos Humanos confirmará el registro en nómina.",
+        tipo="prestamo_depositado",
+        referencia_id=sol.id,
+    )
+    return resultado
+
+
+def listar_pendientes_confirmacion_rh(
+    db: Session, skip: int = 0, limit: int = 200
+) -> List[models.SolicitudPrestamo]:
+    """Préstamos depositados pendientes de confirmación por RH (registro en nómina)."""
+    q = db.query(models.SolicitudPrestamo).options(
+        joinedload(models.SolicitudPrestamo.empleado).joinedload(pm.Empleado.empresa),
+        joinedload(models.SolicitudPrestamo.empleado).joinedload(pm.Empleado.departamento_rel),
+        joinedload(models.SolicitudPrestamo.aprobador),
+    ).filter(
+        models.SolicitudPrestamo.estado == models.EstadoSolicitudPrestamo.DEPOSITADO,
+        models.SolicitudPrestamo.fecha_confirmacion_rh.is_(None),
+    )
+    return q.order_by(models.SolicitudPrestamo.fecha_deposito.desc()).offset(skip).limit(limit).all()
 
 
 def confirmar_rh(
@@ -227,31 +593,42 @@ def confirmar_rh(
     solicitud_id: int,
     comentarios: Optional[str] = None,
 ) -> Optional[models.SolicitudPrestamo]:
-    """RH confirma una solicitud ya aprobada por el gerente. aprobada_gerente → aprobada."""
+    """
+    RH confirma el registro en nómina del préstamo ya depositado.
+    Envía notificación al empleado (antes el endpoint estaba obsoleto y no notificaba).
+    """
     sol = db.query(models.SolicitudPrestamo).filter(models.SolicitudPrestamo.id == solicitud_id).first()
     if not sol:
         return None
-    if sol.estado != models.EstadoSolicitudPrestamo.APROBADA_GERENTE:
+    if sol.estado != models.EstadoSolicitudPrestamo.DEPOSITADO:
         return None
-    sol.estado = models.EstadoSolicitudPrestamo.APROBADA
+    if sol.fecha_confirmacion_rh is not None:
+        return _con_relaciones(db, solicitud_id)
+
+    sol.fecha_confirmacion_rh = datetime.now(timezone.utc)
     if comentarios:
         prev = sol.comentarios_aprobacion or ""
-        sol.comentarios_aprobacion = (prev + f"\n[RH] {comentarios}").strip() if prev else f"[RH] {comentarios}"
+        sol.comentarios_aprobacion = (
+            (prev + f"\n[RH] {comentarios}").strip() if prev else f"[RH] {comentarios}"
+        )
     db.commit()
     resultado = _con_relaciones(db, sol.id)
-    # Notificar al empleado que RH confirmó
-    try:
-        from app.modules.notificaciones import service as noti_service
-        monto_fmt = f"${float(sol.monto):,.2f}"
-        noti_service.crear_notificacion(
-            db, sol.empleado_id,
-            titulo="Tu solicitud de préstamo fue confirmada por RH",
-            mensaje=f"Monto: {monto_fmt} · {sol.plazo_meses} meses",
-            tipo="solicitud_aprobada",
-            referencia_id=sol.id,
-        )
-    except Exception:
-        pass
+    monto_fmt = f"${float(sol.monto):,.2f}"
+    ref = sol.referencia_bancaria or "—"
+    msg = (
+        f"Tu préstamo quedó registrado en nómina. Monto: {monto_fmt} · Ref. bancaria: {ref} · "
+        f"{sol.plazo_meses} quincenas de descuento."
+    )
+    if comentarios:
+        msg += f" Comentario RH: {comentarios}"
+    _notificar_empleado_prestamo(
+        db,
+        sol.empleado_id,
+        titulo="RH confirmó tu préstamo",
+        mensaje=msg,
+        tipo="prestamo_confirmado_rh",
+        referencia_id=sol.id,
+    )
     return resultado
 
 
@@ -268,6 +645,7 @@ def cancelar_solicitud(db: Session, solicitud_id: int) -> Optional[models.Solici
 
 def _con_relaciones(db: Session, solicitud_id: int) -> Optional[models.SolicitudPrestamo]:
     return db.query(models.SolicitudPrestamo).options(
-        joinedload(models.SolicitudPrestamo.empleado),
+        joinedload(models.SolicitudPrestamo.empleado).joinedload(pm.Empleado.empresa),
+        joinedload(models.SolicitudPrestamo.empleado).joinedload(pm.Empleado.departamento_rel),
         joinedload(models.SolicitudPrestamo.aprobador),
     ).filter(models.SolicitudPrestamo.id == solicitud_id).first()

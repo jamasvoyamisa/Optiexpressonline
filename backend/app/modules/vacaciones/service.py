@@ -176,12 +176,17 @@ class VacacionesService:
         dias_pendientes = sum(s.dias_solicitados for s in solicitudes_pendientes)
         
         def _periodo_a_dict(p: models.BalancePeriodoVacaciones) -> dict:
-            disp = max(Decimal("0"), Decimal(p.dias_derecho) - (p.dias_tomados or Decimal("0")))
+            der = Decimal(p.dias_derecho)
+            tom = p.dias_tomados or Decimal("0")
+            disp_raw = der - tom
+            disp = max(Decimal("0"), disp_raw)
+            adelanto = float(max(Decimal("0"), -disp_raw))  # consumo por encima del derecho (próximo periodo)
             return {
                 "anios_antiguedad": p.anios_antiguedad,
                 "dias_derecho": p.dias_derecho,
-                "dias_tomados": float(p.dias_tomados or 0),
+                "dias_tomados": float(tom),
                 "dias_disponibles": float(disp),
+                "dias_adelantados": adelanto,
                 "fecha_aniversario": p.fecha_aniversario.isoformat() if p.fecha_aniversario else None,
                 "fecha_limite_goce": p.fecha_limite_goce.isoformat() if p.fecha_limite_goce else None,
             }
@@ -204,19 +209,34 @@ class VacacionesService:
         }
     
     @staticmethod
-    def _descontar_dias_de_periodos(db: Session, empleado_id: int, dias_a_descontar: int) -> None:
-        """Descuenta días de los periodos: primero del anterior (por vencer), luego del actual."""
+    def _descontar_dias_de_periodos(
+        db: Session,
+        empleado_id: int,
+        dias_a_descontar: Decimal,
+        *,
+        estrategia: str = "vence_primero",
+        permitir_adelanto: bool = False,
+    ) -> Decimal:
+        """
+        Descuenta días de los periodos no prescritos.
+        - vence_primero: primero el periodo cuya fecha límite de goce vence antes (comportamiento solicitudes RH).
+        - vigente_primero: primero el periodo más reciente (mayor antigüedad), luego anteriores; si falta saldo,
+          se puede adelantar del mismo periodo (tomados > derecho) con permitir_adelanto.
+        Devuelve días que no se pudieron descontar (0 si todo aplicado o adelantado).
+        """
         restante = Decimal(str(dias_a_descontar))
+        if restante <= 0:
+            return Decimal("0")
         hoy = date.today()
-        periodos = (
-            db.query(models.BalancePeriodoVacaciones)
-            .filter(
-                models.BalancePeriodoVacaciones.empleado_id == empleado_id,
-                models.BalancePeriodoVacaciones.fecha_limite_goce >= hoy,
-            )
-            .order_by(models.BalancePeriodoVacaciones.fecha_limite_goce.asc())
-            .all()
+        q = db.query(models.BalancePeriodoVacaciones).filter(
+            models.BalancePeriodoVacaciones.empleado_id == empleado_id,
+            models.BalancePeriodoVacaciones.fecha_limite_goce >= hoy,
         )
+        if estrategia == "vigente_primero":
+            q = q.order_by(models.BalancePeriodoVacaciones.anios_antiguedad.desc())
+        else:
+            q = q.order_by(models.BalancePeriodoVacaciones.fecha_limite_goce.asc())
+        periodos = q.all()
         for p in periodos:
             if restante <= 0:
                 break
@@ -226,7 +246,13 @@ class VacacionesService:
             a_descontar = min(restante, disp)
             p.dias_tomados = (p.dias_tomados or Decimal("0")) + a_descontar
             restante -= a_descontar
+        if restante > 0 and permitir_adelanto and periodos:
+            # Adelanto sobre el periodo más reciente (mayor años de antigüedad)
+            target = max(periodos, key=lambda x: x.anios_antiguedad)
+            target.dias_tomados = (target.dias_tomados or Decimal("0")) + restante
+            restante = Decimal("0")
         db.commit()
+        return restante
     
     @staticmethod
     def aplicar_prescription_si_corresponde(db: Session, balance: models.BalanceVacaciones) -> None:
@@ -395,7 +421,8 @@ class VacacionesService:
         limit: int = 100,
         empleado_id: Optional[int] = None,
         estado: Optional[str] = None,
-        jefe_id: Optional[int] = None
+        jefe_id: Optional[int] = None,
+        include_canceladas: bool = False,
     ) -> List[models.SolicitudVacaciones]:
         """Listar solicitudes con filtros"""
         query = db.query(models.SolicitudVacaciones).options(
@@ -415,6 +442,8 @@ class VacacionesService:
                     estado_enum = None
             if estado_enum is not None:
                 query = query.filter(models.SolicitudVacaciones.estado == estado_enum)
+        if not include_canceladas:
+            query = query.filter(models.SolicitudVacaciones.estado != models.EstadoSolicitud.CANCELADA)
         if jefe_id:
             # Solicitudes pendientes: área del jefe/gerente/supervisor, o (si es Director/Gerente General) de empleados con puesto gerente/supervisor
             es_gerente_o_director = personal_service.PersonalService.get_es_gerente_o_director(db, jefe_id)
@@ -532,9 +561,15 @@ class VacacionesService:
         if solicitud.estado != models.EstadoSolicitud.APROBADA_JEFE:
             raise ValueError("La solicitud no está en estado 'aprobada por jefe' — no puede ser procesada por RH")
 
-        # Aprobación final: descontar días del balance
+        # Aprobación final: descontar días del balance (primero el que vence antes)
         solicitud.estado = models.EstadoSolicitud.APROBADA
-        VacacionesService._descontar_dias_de_periodos(db, solicitud.empleado_id, solicitud.dias_solicitados)
+        VacacionesService._descontar_dias_de_periodos(
+            db,
+            solicitud.empleado_id,
+            Decimal(str(solicitud.dias_solicitados)),
+            estrategia="vence_primero",
+            permitir_adelanto=False,
+        )
         balance = VacacionesService.get_or_create_balance(db, solicitud.empleado_id)
         balance.dias_pendientes = max(
             Decimal("0"),
@@ -663,3 +698,159 @@ class VacacionesService:
         db.commit()
         db.refresh(balance)
         return balance
+
+    # --- Vacaciones generales (empresa / departamento / global) ---
+
+    @staticmethod
+    def listar_empleados_ids_alcance(
+        db: Session,
+        alcance: str,
+        empresa_id: Optional[int],
+        departamento_id: Optional[int],
+    ) -> List[int]:
+        q = db.query(personal_models.Empleado.id).filter(
+            personal_models.Empleado.estado == personal_models.EstadoEmpleado.ACTIVO
+        )
+        a = (alcance or "").strip().lower()
+        if a == "global":
+            pass
+        elif a == "empresa":
+            if not empresa_id:
+                raise ValueError("empresa_id es obligatorio para alcance empresa")
+            q = q.filter(personal_models.Empleado.empresa_id == empresa_id)
+        elif a == "departamento":
+            if not departamento_id:
+                raise ValueError("departamento_id es obligatorio para alcance departamento")
+            q = q.filter(personal_models.Empleado.departamento_id == departamento_id)
+        else:
+            raise ValueError("alcance debe ser global, empresa o departamento")
+        return [row[0] for row in q.all()]
+
+    @staticmethod
+    def crear_vacacion_general(db: Session, data: schemas.VacacionGeneralCreate) -> models.VacacionGeneral:
+        a = str(data.alcance)
+        if a == "empresa" and not data.empresa_id:
+            raise ValueError("empresa_id requerido")
+        if a == "departamento" and not data.departamento_id:
+            raise ValueError("departamento_id requerido")
+        if data.fecha_fin < data.fecha_inicio:
+            raise ValueError("fecha_fin debe ser >= fecha_inicio")
+        vg = models.VacacionGeneral(
+            nombre=data.nombre.strip(),
+            fecha_inicio=data.fecha_inicio,
+            fecha_fin=data.fecha_fin,
+            alcance=a,
+            empresa_id=data.empresa_id,
+            departamento_id=data.departamento_id,
+            dias_cuenta_ley=Decimal(str(data.dias_cuenta_ley)),
+            dias_regalo_empresa=Decimal(str(data.dias_regalo_empresa or 0)),
+            activo=data.activo if data.activo is not None else True,
+            notas=data.notas,
+        )
+        db.add(vg)
+        db.commit()
+        db.refresh(vg)
+        return vg
+
+    @staticmethod
+    def listar_vacaciones_generales(db: Session, solo_activos: bool = False) -> List[models.VacacionGeneral]:
+        q = db.query(models.VacacionGeneral).order_by(models.VacacionGeneral.fecha_inicio.desc())
+        if solo_activos:
+            q = q.filter(models.VacacionGeneral.activo == True)
+        return q.all()
+
+    @staticmethod
+    def aplicar_vacacion_general(db: Session, vacacion_general_id: int) -> dict:
+        """
+        Descuenta días LFT (estrategia vigente_primero; permite adelanto en el periodo más reciente).
+        Registra días regalo por empleado sin tocar balance LFT.
+        Idempotente: no vuelve a aplicar si ya existe registro.
+        """
+        vg = (
+            db.query(models.VacacionGeneral)
+            .filter(models.VacacionGeneral.id == vacacion_general_id)
+            .first()
+        )
+        if not vg:
+            raise ValueError("Vacación general no encontrada")
+        if not vg.activo:
+            raise ValueError("La vacación general está inactiva")
+        ley = Decimal(str(vg.dias_cuenta_ley))
+        regalo = Decimal(str(vg.dias_regalo_empresa or 0))
+        if ley < 0 or regalo < 0:
+            raise ValueError("Los días no pueden ser negativos")
+
+        empleados_ids = VacacionesService.listar_empleados_ids_alcance(
+            db, vg.alcance, vg.empresa_id, vg.departamento_id
+        )
+        aplicados: List[int] = []
+        omitidos: List[dict] = []
+        errores: List[dict] = []
+
+        for eid in empleados_ids:
+            ya = (
+                db.query(models.VacacionGeneralAplicacion)
+                .filter(
+                    models.VacacionGeneralAplicacion.vacacion_general_id == vg.id,
+                    models.VacacionGeneralAplicacion.empleado_id == eid,
+                )
+                .first()
+            )
+            if ya:
+                omitidos.append({"empleado_id": eid, "motivo": "ya_aplicada"})
+                continue
+            try:
+                VacacionesService.ensure_periodos_empleado(db, eid)
+                periodos_count = (
+                    db.query(models.BalancePeriodoVacaciones)
+                    .filter(
+                        models.BalancePeriodoVacaciones.empleado_id == eid,
+                        models.BalancePeriodoVacaciones.fecha_limite_goce >= date.today(),
+                    )
+                    .count()
+                )
+                if ley > 0 and periodos_count == 0:
+                    errores.append(
+                        {
+                            "empleado_id": eid,
+                            "error": "Sin periodos de vacaciones vigentes (p. ej. menos de 1 año de antigüedad)",
+                        }
+                    )
+                    continue
+                restante = Decimal("0")
+                if ley > 0:
+                    restante = VacacionesService._descontar_dias_de_periodos(
+                        db,
+                        eid,
+                        ley,
+                        estrategia="vigente_primero",
+                        permitir_adelanto=True,
+                    )
+                if ley > 0 and restante > 0:
+                    errores.append(
+                        {
+                            "empleado_id": eid,
+                            "error": f"No se pudieron descontar todos los días (restante {restante})",
+                        }
+                    )
+                    continue
+                ap = models.VacacionGeneralAplicacion(
+                    vacacion_general_id=vg.id,
+                    empleado_id=eid,
+                    dias_ley_descontados=ley,
+                    dias_regalo=regalo,
+                )
+                db.add(ap)
+                db.commit()
+                aplicados.append(eid)
+            except Exception as ex:
+                db.rollback()
+                errores.append({"empleado_id": eid, "error": str(ex)})
+
+        return {
+            "vacacion_general_id": vg.id,
+            "empleados_totales": len(empleados_ids),
+            "aplicados": len(aplicados),
+            "omitidos": omitidos,
+            "errores": errores,
+        }

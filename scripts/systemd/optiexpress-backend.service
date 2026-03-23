@@ -1,0 +1,17 @@
+[Unit]
+Description=Optiexpress API (FastAPI)
+After=network.target mariadb.service
+Wants=mariadb.service
+
+[Service]
+Type=simple
+User=marco
+WorkingDirectory=/home/marco/optiexpress/backend
+ExecStart=/home/marco/optiexpress/backend/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 9081
+Restart=on-failure
+RestartSec=5
+StandardOutput=append:/home/marco/optiexpress/backend.log
+StandardError=append:/home/marco/optiexpress/backend.log
+
+[Install]
+WantedBy=multi-user.target

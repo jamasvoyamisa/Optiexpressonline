@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import logoGrupo from '../assets/GPOCristal.png';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
@@ -119,7 +120,7 @@ export const Login = () => {
       }}>
         <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '1.5rem' }}>
           <img
-            src="/GPOCristal.png"
+            src={logoGrupo}
             alt="Grupo Cristal"
             style={{ maxWidth: '180px', height: 'auto', objectFit: 'contain', filter: 'brightness(0) invert(1)' }}
           />

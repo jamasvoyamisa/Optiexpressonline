@@ -45,6 +45,8 @@ export interface EmpresaResponse {
   telefono?: string | null;
   activo: boolean;
   checadas_remotas?: boolean;
+  dias_laborales?: 'lun-sab' | 'lun-dom';
+  trabaja_festivos?: boolean;
   rango_inicio?: number | null;
   rango_fin?: number | null;
   created_at?: string;
@@ -57,6 +59,8 @@ export interface EmpresaCreate {
   direccion?: string;
   telefono?: string;
   checadas_remotas?: boolean;
+  dias_laborales?: 'lun-sab' | 'lun-dom';
+  trabaja_festivos?: boolean;
 }
 
 export interface EmpresaUpdate {
@@ -66,6 +70,8 @@ export interface EmpresaUpdate {
   telefono?: string;
   activo?: boolean;
   checadas_remotas?: boolean;
+  dias_laborales?: 'lun-sab' | 'lun-dom';
+  trabaja_festivos?: boolean;
 }
 
 // ========== PUESTO ==========
@@ -181,4 +187,44 @@ export interface EmpleadoCreate {
   registrar_en_checador?: boolean;
   dispositivo_ids?: number[];
   password?: string;
+}
+
+// ========== VACACIONES GENERALES (calendario / empresa) ==========
+export type AlcanceVacacionGeneral = 'global' | 'empresa' | 'departamento';
+
+export interface VacacionGeneralCreate {
+  nombre: string;
+  fecha_inicio: string;
+  fecha_fin: string;
+  alcance: AlcanceVacacionGeneral;
+  empresa_id?: number | null;
+  departamento_id?: number | null;
+  dias_cuenta_ley: number;
+  dias_regalo_empresa?: number;
+  activo?: boolean;
+  notas?: string | null;
+}
+
+export interface VacacionGeneralResponse {
+  id: number;
+  nombre: string;
+  fecha_inicio: string;
+  fecha_fin: string;
+  alcance: string;
+  empresa_id?: number | null;
+  departamento_id?: number | null;
+  dias_cuenta_ley: string;
+  dias_regalo_empresa: string;
+  activo: boolean;
+  notas?: string | null;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface AplicarVacacionGeneralResultado {
+  vacacion_general_id: number;
+  empleados_totales: number;
+  aplicados: number;
+  omitidos: { empleado_id: number; motivo: string }[];
+  errores: { empleado_id: number; error: string }[];
 }

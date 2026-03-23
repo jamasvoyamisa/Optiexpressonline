@@ -106,6 +106,9 @@ const generarDocumento = (sol: SolicitudVacaciones, emp: EmpleadoResumen | null)
 
   const esBorrador = sol.estado === 'pendiente';
 
+  const logoGrupo = new URL('../../assets/GPOCristal.png', import.meta.url).pathname;
+  const logoRaiz = new URL('../../assets/Raiz.png', import.meta.url).pathname;
+
   const html = `<!DOCTYPE html>
 <html lang="es">
 <head>
@@ -158,8 +161,8 @@ const generarDocumento = (sol: SolicitudVacaciones, emp: EmpleadoResumen | null)
 <div class="page">
   <div class="doc-header">
     <div class="logo-area" style="display:flex;align-items:center;gap:24px;">
-      <img src="/GPOCristal.png" alt="Grupo Cristal" style="height:48px;max-width:140px;object-fit:contain;" onerror="this.style.display='none'"/>
-      <img src="/Raiz.png" alt="Raiz" style="height:44px;max-width:120px;object-fit:contain;" onerror="this.style.display='none'"/>
+      <img src="${logoGrupo}" alt="Grupo Cristal" style="height:48px;max-width:140px;object-fit:contain;" onerror="this.style.display='none'"/>
+      <img src="${logoRaiz}" alt="Raiz" style="height:44px;max-width:120px;object-fit:contain;" onerror="this.style.display='none'"/>
     </div>
     <div class="doc-title">Solicitud de vacaciones</div>
   </div>

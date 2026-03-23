@@ -39,6 +39,13 @@ class PersonalService:
     BLOCK_SIZE = 1000  # Cada empresa obtiene un bloque de 1000 PINs
 
     @staticmethod
+    def _validar_dias_laborales_empresa(valor: Optional[str]) -> str:
+        v = (valor or "lun-sab").strip().lower()
+        if v not in ("lun-sab", "lun-dom"):
+            raise ValueError("dias_laborales debe ser 'lun-sab' o 'lun-dom'")
+        return v
+
+    @staticmethod
     def _assign_rango(db: Session) -> tuple:
         """Calcula el siguiente rango libre en bloques de 1000.
         Empresa 1 → 1-1000, Empresa 2 → 1001-2000, etc."""
@@ -50,7 +57,9 @@ class PersonalService:
     @staticmethod
     def create_empresa(db: Session, empresa: schemas.EmpresaCreate) -> models.Empresa:
         inicio, fin = PersonalService._assign_rango(db)
-        db_empresa = models.Empresa(**empresa.dict(), rango_inicio=inicio, rango_fin=fin)
+        payload = empresa.dict()
+        payload["dias_laborales"] = PersonalService._validar_dias_laborales_empresa(payload.get("dias_laborales"))
+        db_empresa = models.Empresa(**payload, rango_inicio=inicio, rango_fin=fin)
         db.add(db_empresa)
         db.commit()
         db.refresh(db_empresa)
@@ -72,7 +81,10 @@ class PersonalService:
         db_empresa = db.query(models.Empresa).filter(models.Empresa.id == empresa_id).first()
         if not db_empresa:
             return None
-        for field, value in empresa.dict(exclude_unset=True).items():
+        update_data = empresa.dict(exclude_unset=True)
+        if "dias_laborales" in update_data:
+            update_data["dias_laborales"] = PersonalService._validar_dias_laborales_empresa(update_data.get("dias_laborales"))
+        for field, value in update_data.items():
             setattr(db_empresa, field, value)
         db.commit()
         db.refresh(db_empresa)

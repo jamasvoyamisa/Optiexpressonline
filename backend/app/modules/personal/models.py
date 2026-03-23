@@ -22,6 +22,12 @@ class Empresa(Base):
     telefono = Column(String(20), nullable=True)
     activo = Column(Boolean, default=True)
     checadas_remotas = Column(Boolean, default=False)  # Si True, empleados pueden checar por portal web
+    # Política laboral semanal base de la empresa:
+    # - lun-sab: domingo no laborable
+    # - lun-dom: domingo laborable
+    dias_laborales = Column(String(20), nullable=False, default="lun-sab")
+    # Si True, la empresa labora en días festivos del calendario global.
+    trabaja_festivos = Column(Boolean, nullable=False, default=False)
     rango_inicio = Column(Integer, nullable=True)
     rango_fin = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

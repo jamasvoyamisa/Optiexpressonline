@@ -31,12 +31,32 @@ class IncapacidadUpdate(BaseModel):
     estado: Optional[str] = None
 
 
+class EmpresaMini(BaseModel):
+    id: int
+    nombre: str
+
+    class Config:
+        from_attributes = True
+
+
+class DepartamentoMini(BaseModel):
+    id: int
+    nombre: str
+    empresa_id: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
+
 class EmpleadoResumen(BaseModel):
     id: int
     nombre: str
     apellido_paterno: Optional[str] = None
     apellido_materno: Optional[str] = None
     numero_empleado: str
+    departamento_id: Optional[int] = None
+    empresa: Optional[EmpresaMini] = None
+    departamento: Optional[DepartamentoMini] = None
 
     class Config:
         from_attributes = True

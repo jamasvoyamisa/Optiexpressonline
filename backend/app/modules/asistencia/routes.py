@@ -1414,7 +1414,7 @@ def reporte_resumen_asistencia(
     from app.modules.incapacidades import models as inc_models
     incapacidades_rows = db.query(inc_models.Incapacidad).filter(
         inc_models.Incapacidad.empleado_id.in_(emp_ids),
-        inc_models.Incapacidad.estado == inc_models.EstadoIncapacidad.ACTIVA,
+        inc_models.Incapacidad.estado != inc_models.EstadoIncapacidad.CANCELADA,
         inc_models.Incapacidad.fecha_inicio <= ff,
         inc_models.Incapacidad.fecha_fin >= fi,
     ).all()
@@ -1425,6 +1425,26 @@ def reporte_resumen_asistencia(
         fin_real = min(inc.fecha_fin, ff)
         dias_incapacidad[inc.empleado_id] = (
             dias_incapacidad.get(inc.empleado_id, 0)
+            + dias_laborables(inicio_real, fin_real)
+        )
+
+    # ── Vacaciones aprobadas en el período ──
+    from app.modules.vacaciones import models as vac_models
+    vacaciones_rows = db.query(vac_models.SolicitudVacaciones).filter(
+        vac_models.SolicitudVacaciones.empleado_id.in_(emp_ids),
+        vac_models.SolicitudVacaciones.estado == vac_models.EstadoSolicitud.APROBADA,
+        vac_models.SolicitudVacaciones.fecha_inicio <= dt(ff.year, ff.month, ff.day, 23, 59, 59),
+        vac_models.SolicitudVacaciones.fecha_fin >= dt(fi.year, fi.month, fi.day),
+    ).all()
+
+    dias_vacaciones: dict[int, int] = {e.id: 0 for e in empleados}
+    for vac in vacaciones_rows:
+        vac_fi = vac.fecha_inicio.date() if hasattr(vac.fecha_inicio, "date") else vac.fecha_inicio
+        vac_ff = vac.fecha_fin.date() if hasattr(vac.fecha_fin, "date") else vac.fecha_fin
+        inicio_real = max(vac_fi, fi)
+        fin_real = min(vac_ff, ff)
+        dias_vacaciones[vac.empleado_id] = (
+            dias_vacaciones.get(vac.empleado_id, 0)
             + dias_laborables(inicio_real, fin_real)
         )
 
@@ -1450,8 +1470,10 @@ def reporte_resumen_asistencia(
         r = retardos.get(emp.id, 0)
         sa = salidas_anticipadas.get(emp.id, 0)
         di = dias_incapacidad.get(emp.id, 0)
+        dv = dias_vacaciones.get(emp.id, 0)
         dc = dias_completos.get(emp.id, 0)
 
+        denominador = total_dias - di - dv - f - fj
         resultado.append({
             "empleado_id": emp.id,
             "numero_empleado": emp.numero_empleado,
@@ -1469,9 +1491,10 @@ def reporte_resumen_asistencia(
             "retardos": r,
             "salidas_anticipadas": sa,
             "dias_incapacidad": di,
+            "dias_vacaciones": dv,
             "puntualidad_pct": round(
-                (dc / max(1, total_dias - di - f - fj)) * 100, 1
-            ) if (total_dias - di - f - fj) > 0 else 0,
+                (dc / max(1, denominador)) * 100, 1
+            ) if denominador > 0 else 0,
         })
 
     return resultado
@@ -1532,11 +1555,26 @@ def reporte_detalle_empleado(
     # Incapacidades
     incapacidades = db.query(inc_models.Incapacidad).filter(
         inc_models.Incapacidad.empleado_id == empleado_id,
-        inc_models.Incapacidad.estado == inc_models.EstadoIncapacidad.ACTIVA,
+        inc_models.Incapacidad.estado != inc_models.EstadoIncapacidad.CANCELADA,
         inc_models.Incapacidad.fecha_inicio <= ff,
         inc_models.Incapacidad.fecha_fin >= fi,
     ).all()
     incap_ranges = [(i.fecha_inicio, i.fecha_fin, i.tipo) for i in incapacidades]
+
+    # Vacaciones aprobadas
+    from app.modules.vacaciones import models as vac_models
+    from datetime import datetime as dt_vac
+    vacaciones = db.query(vac_models.SolicitudVacaciones).filter(
+        vac_models.SolicitudVacaciones.empleado_id == empleado_id,
+        vac_models.SolicitudVacaciones.estado == vac_models.EstadoSolicitud.APROBADA,
+        vac_models.SolicitudVacaciones.fecha_inicio <= dt_vac(ff.year, ff.month, ff.day, 23, 59, 59),
+        vac_models.SolicitudVacaciones.fecha_fin >= dt_vac(fi.year, fi.month, fi.day),
+    ).all()
+    vac_ranges = []
+    for v in vacaciones:
+        v_fi = v.fecha_inicio.date() if hasattr(v.fecha_inicio, "date") else v.fecha_inicio
+        v_ff = v.fecha_fin.date() if hasattr(v.fecha_fin, "date") else v.fecha_fin
+        vac_ranges.append((v_fi, v_ff))
 
     # Construir vista diaria
     festivos_bd = db.query(models.DiaFestivo).filter(
@@ -1578,6 +1616,7 @@ def reporte_detalle_empleado(
         es_domingo = d.weekday() == 6
         festivo = festivos_map.get(d)
         en_incapacidad = any(i[0] <= d <= i[1] for i in incap_ranges)
+        en_vacaciones = any(v[0] <= d <= v[1] for v in vac_ranges)
         dias.append({
             "fecha": dia_str,
             "dia_semana": ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"][d.weekday()],
@@ -1585,9 +1624,695 @@ def reporte_detalle_empleado(
             "es_festivo": festivo is not None,
             "festivo_nombre": festivo,
             "en_incapacidad": en_incapacidad,
+            "en_vacaciones": en_vacaciones,
             "checadas": checadas_por_dia.get(dia_str, []),
             "incidencias": incidencias_por_dia.get(dia_str, []),
         })
         d += timedelta(days=1)
 
     return {"empleado_id": empleado_id, "fecha_inicio": fecha_inicio, "fecha_fin": fecha_fin, "dias": dias}
+
+
+@router.get("/reporte-export-detalle")
+def reporte_export_detalle(
+    fecha_inicio: str = Query(..., description="YYYY-MM-DD"),
+    fecha_fin: str = Query(..., description="YYYY-MM-DD"),
+    empresa_id: Optional[int] = None,
+    departamento_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    _current: dict = Depends(get_current_user),
+):
+    """
+    Detalle día a día de TODOS los empleados del período, para exportar XLSX completo.
+    Devuelve una lista de empleados con info + array de días con checadas/incidencias.
+    """
+    from datetime import date, timedelta
+    from app.modules.personal import models as pm
+    from app.modules.incapacidades import models as inc_models
+    from app.core.timezone_utils import to_mexico, mexico_date_to_utc_range
+
+    try:
+        fi = date.fromisoformat(fecha_inicio)
+        ff = date.fromisoformat(fecha_fin)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Formato de fecha inválido")
+
+    if (ff - fi).days > 45:
+        raise HTTPException(status_code=400, detail="Máximo 45 días para el export detallado")
+
+    q = db.query(pm.Empleado).filter(
+        pm.Empleado.estado == pm.EstadoEmpleado.ACTIVO,
+        pm.Empleado.empresa_id.isnot(None),
+        pm.Empleado.exento_incidencias == False,
+    )
+    if departamento_id:
+        q = q.filter(pm.Empleado.departamento_id == departamento_id)
+    elif empresa_id:
+        q = q.filter(pm.Empleado.empresa_id == empresa_id)
+
+    empleados = q.order_by(pm.Empleado.apellido_paterno, pm.Empleado.nombre).all()
+    if not empleados:
+        return []
+
+    emp_ids = [e.id for e in empleados]
+
+    dep_ids = {e.departamento_id for e in empleados if e.departamento_id}
+    emp_empresa_ids = {e.empresa_id for e in empleados if e.empresa_id}
+    deptos_map = {
+        d.id: d.nombre
+        for d in db.query(pm.Departamento).filter(pm.Departamento.id.in_(dep_ids)).all()
+    } if dep_ids else {}
+    empresas_map = {
+        em.id: em.nombre
+        for em in db.query(pm.Empresa).filter(pm.Empresa.id.in_(emp_empresa_ids)).all()
+    } if emp_empresa_ids else {}
+
+    dt_inicio_utc, _ = mexico_date_to_utc_range(fi)
+    ff_end_utc, _ = mexico_date_to_utc_range(ff + timedelta(days=1))
+
+    checadas_all = db.query(models.Asistencia).filter(
+        models.Asistencia.empleado_id.in_(emp_ids),
+        models.Asistencia.timestamp >= dt_inicio_utc,
+        models.Asistencia.timestamp < ff_end_utc,
+    ).order_by(models.Asistencia.timestamp).all()
+
+    incidencias_all = db.query(models.Incidencia).filter(
+        models.Incidencia.empleado_id.in_(emp_ids),
+        models.Incidencia.fecha >= dt_inicio_utc,
+        models.Incidencia.fecha < ff_end_utc,
+    ).order_by(models.Incidencia.fecha).all()
+
+    incapacidades_all = db.query(inc_models.Incapacidad).filter(
+        inc_models.Incapacidad.empleado_id.in_(emp_ids),
+        inc_models.Incapacidad.estado != inc_models.EstadoIncapacidad.CANCELADA,
+        inc_models.Incapacidad.fecha_inicio <= ff,
+        inc_models.Incapacidad.fecha_fin >= fi,
+    ).all()
+
+    from app.modules.vacaciones import models as vac_models
+    from datetime import datetime as dt_vac
+    vacaciones_all = db.query(vac_models.SolicitudVacaciones).filter(
+        vac_models.SolicitudVacaciones.empleado_id.in_(emp_ids),
+        vac_models.SolicitudVacaciones.estado == vac_models.EstadoSolicitud.APROBADA,
+        vac_models.SolicitudVacaciones.fecha_inicio <= dt_vac(ff.year, ff.month, ff.day, 23, 59, 59),
+        vac_models.SolicitudVacaciones.fecha_fin >= dt_vac(fi.year, fi.month, fi.day),
+    ).all()
+
+    festivos_bd = db.query(models.DiaFestivo).filter(
+        models.DiaFestivo.activo == True,
+        models.DiaFestivo.fecha >= fi,
+        models.DiaFestivo.fecha <= ff,
+    ).all()
+    festivos_map = {f.fecha: f.nombre for f in festivos_bd}
+
+    checadas_idx: dict[int, dict[str, list]] = {eid: {} for eid in emp_ids}
+    for c in checadas_all:
+        ts_mex = to_mexico(c.timestamp) or c.timestamp
+        dia = ts_mex.strftime("%Y-%m-%d")
+        checadas_idx[c.empleado_id].setdefault(dia, []).append({
+            "hora": ts_mex.strftime("%H:%M"),
+            "tipo": c.tipo.value if hasattr(c.tipo, "value") else str(c.tipo),
+        })
+
+    incidencias_idx: dict[int, dict[str, list]] = {eid: {} for eid in emp_ids}
+    for inc in incidencias_all:
+        ts_mex = to_mexico(inc.fecha) or inc.fecha
+        dia = ts_mex.strftime("%Y-%m-%d")
+        incidencias_idx[inc.empleado_id].setdefault(dia, []).append({
+            "tipo": inc.tipo.value if hasattr(inc.tipo, "value") else str(inc.tipo),
+            "justificada": inc.justificada,
+        })
+
+    incap_idx: dict[int, list] = {}
+    for ic in incapacidades_all:
+        incap_idx.setdefault(ic.empleado_id, []).append((ic.fecha_inicio, ic.fecha_fin))
+
+    vac_idx: dict[int, list] = {}
+    for v in vacaciones_all:
+        v_fi = v.fecha_inicio.date() if hasattr(v.fecha_inicio, "date") else v.fecha_inicio
+        v_ff = v.fecha_fin.date() if hasattr(v.fecha_fin, "date") else v.fecha_fin
+        vac_idx.setdefault(v.empleado_id, []).append((v_fi, v_ff))
+
+    all_dias = []
+    d = fi
+    while d <= ff:
+        all_dias.append(d)
+        d += timedelta(days=1)
+
+    resultado = []
+    for emp in empleados:
+        emp_checadas = checadas_idx.get(emp.id, {})
+        emp_incidencias = incidencias_idx.get(emp.id, {})
+        emp_incap = incap_idx.get(emp.id, [])
+        emp_vac = vac_idx.get(emp.id, [])
+
+        dias = []
+        for d in all_dias:
+            dia_str = d.isoformat()
+            es_domingo = d.weekday() == 6
+            festivo = festivos_map.get(d)
+            en_incapacidad = any(i[0] <= d <= i[1] for i in emp_incap)
+            en_vacaciones = any(v[0] <= d <= v[1] for v in emp_vac)
+            dias.append({
+                "fecha": dia_str,
+                "dia_semana": ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"][d.weekday()],
+                "es_domingo": es_domingo,
+                "es_festivo": festivo is not None,
+                "festivo_nombre": festivo,
+                "en_incapacidad": en_incapacidad,
+                "en_vacaciones": en_vacaciones,
+                "checadas": emp_checadas.get(dia_str, []),
+                "incidencias": emp_incidencias.get(dia_str, []),
+            })
+
+        resultado.append({
+            "empleado_id": emp.id,
+            "numero_empleado": emp.numero_empleado,
+            "nombre": f"{emp.nombre} {emp.apellido_paterno or ''}".strip(),
+            "empresa": empresas_map.get(emp.empresa_id, "") if emp.empresa_id else "",
+            "departamento": deptos_map.get(emp.departamento_id, "") if emp.departamento_id else "",
+            "dias": dias,
+        })
+
+    return resultado
+
+
+@router.get("/reporte-export-xlsx")
+def reporte_export_xlsx(
+    fecha_inicio: str = Query(..., description="YYYY-MM-DD"),
+    fecha_fin: str = Query(..., description="YYYY-MM-DD"),
+    empresa_id: Optional[int] = None,
+    departamento_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    _current: dict = Depends(get_current_user),
+):
+    """Genera XLSX: hoja 1 = resumen, luego una hoja por empresa con detalle de checadas."""
+    from io import BytesIO
+    from collections import defaultdict
+    from datetime import date, timedelta
+    from datetime import datetime as dt_cls
+    from fastapi.responses import StreamingResponse
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    from app.modules.personal import models as pm
+    from app.modules.incapacidades import models as inc_models
+    from app.core.timezone_utils import to_mexico, mexico_date_to_utc_range
+
+    try:
+        fi = date.fromisoformat(fecha_inicio)
+        ff = date.fromisoformat(fecha_fin)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Formato de fecha inválido")
+
+    if (ff - fi).days > 45:
+        raise HTTPException(status_code=400, detail="Máximo 45 días")
+
+    # ── Empleados ──
+    q = db.query(pm.Empleado).filter(
+        pm.Empleado.estado == pm.EstadoEmpleado.ACTIVO,
+        pm.Empleado.empresa_id.isnot(None),
+        pm.Empleado.exento_incidencias == False,
+    )
+    if departamento_id:
+        q = q.filter(pm.Empleado.departamento_id == departamento_id)
+    elif empresa_id:
+        q = q.filter(pm.Empleado.empresa_id == empresa_id)
+    empleados = q.order_by(pm.Empleado.apellido_paterno, pm.Empleado.nombre).all()
+    if not empleados:
+        raise HTTPException(status_code=404, detail="No hay empleados")
+
+    emp_ids = [e.id for e in empleados]
+    dep_ids = {e.departamento_id for e in empleados if e.departamento_id}
+    emp_empresa_ids = {e.empresa_id for e in empleados if e.empresa_id}
+    deptos_map = {d.id: d.nombre for d in db.query(pm.Departamento).filter(pm.Departamento.id.in_(dep_ids)).all()} if dep_ids else {}
+    empresas_map = {em.id: em.nombre for em in db.query(pm.Empresa).filter(pm.Empresa.id.in_(emp_empresa_ids)).all()} if emp_empresa_ids else {}
+
+    # ── Datos ──
+    dt_inicio_utc, _ = mexico_date_to_utc_range(fi)
+    ff_end_utc, _ = mexico_date_to_utc_range(ff + timedelta(days=1))
+
+    checadas_all = db.query(models.Asistencia).filter(
+        models.Asistencia.empleado_id.in_(emp_ids),
+        models.Asistencia.timestamp >= dt_inicio_utc,
+        models.Asistencia.timestamp < ff_end_utc,
+    ).order_by(models.Asistencia.timestamp).all()
+
+    incidencias_all = db.query(models.Incidencia).filter(
+        models.Incidencia.empleado_id.in_(emp_ids),
+        models.Incidencia.fecha >= dt_inicio_utc,
+        models.Incidencia.fecha < ff_end_utc,
+    ).order_by(models.Incidencia.fecha).all()
+
+    incapacidades_all = db.query(inc_models.Incapacidad).filter(
+        inc_models.Incapacidad.empleado_id.in_(emp_ids),
+        inc_models.Incapacidad.estado != inc_models.EstadoIncapacidad.CANCELADA,
+        inc_models.Incapacidad.fecha_inicio <= ff,
+        inc_models.Incapacidad.fecha_fin >= fi,
+    ).all()
+
+    from app.modules.vacaciones import models as vac_models
+    vacaciones_all = db.query(vac_models.SolicitudVacaciones).filter(
+        vac_models.SolicitudVacaciones.empleado_id.in_(emp_ids),
+        vac_models.SolicitudVacaciones.estado == vac_models.EstadoSolicitud.APROBADA,
+        vac_models.SolicitudVacaciones.fecha_inicio <= dt_cls(ff.year, ff.month, ff.day, 23, 59, 59),
+        vac_models.SolicitudVacaciones.fecha_fin >= dt_cls(fi.year, fi.month, fi.day),
+    ).all()
+
+    festivos_bd = db.query(models.DiaFestivo).filter(
+        models.DiaFestivo.activo == True,
+        models.DiaFestivo.fecha >= fi,
+        models.DiaFestivo.fecha <= ff,
+    ).all()
+    festivos_set = {f.fecha for f in festivos_bd}
+    festivos_map_local = {f.fecha: f.nombre for f in festivos_bd}
+
+    def dias_laborables(inicio: date, fin: date) -> int:
+        count = 0
+        d = inicio
+        while d <= fin:
+            if d.weekday() != 6 and d not in festivos_set:
+                count += 1
+            d += timedelta(days=1)
+        return count
+
+    total_dias_lab = dias_laborables(fi, ff)
+
+    # Indexar checadas
+    checadas_idx: dict = {eid: {} for eid in emp_ids}
+    dias_con_checada: dict = {eid: set() for eid in emp_ids}
+    checadas_por_emp_dia: dict = {}
+    for c in checadas_all:
+        ts_mex = to_mexico(c.timestamp) or c.timestamp
+        dia = ts_mex.strftime("%Y-%m-%d")
+        checadas_idx[c.empleado_id].setdefault(dia, []).append({
+            "hora": ts_mex.strftime("%H:%M"),
+            "tipo": c.tipo.value if hasattr(c.tipo, "value") else str(c.tipo),
+        })
+        dias_con_checada[c.empleado_id].add(dia)
+        key = (c.empleado_id, dia)
+        checadas_por_emp_dia[key] = checadas_por_emp_dia.get(key, 0) + 1
+
+    dias_completos: dict = {eid: 0 for eid in emp_ids}
+    for (eid, _), n in checadas_por_emp_dia.items():
+        if n >= 4:
+            dias_completos[eid] += 1
+
+    # Indexar incidencias
+    incidencias_idx: dict = {eid: {} for eid in emp_ids}
+    faltas: dict = {eid: 0 for eid in emp_ids}
+    faltas_just: dict = {eid: 0 for eid in emp_ids}
+    incompletas: dict = {eid: 0 for eid in emp_ids}
+    retardos: dict = {eid: 0 for eid in emp_ids}
+    sal_antic: dict = {eid: 0 for eid in emp_ids}
+    for inc in incidencias_all:
+        ts_mex = to_mexico(inc.fecha) or inc.fecha
+        dia = ts_mex.strftime("%Y-%m-%d")
+        incidencias_idx[inc.empleado_id].setdefault(dia, []).append({
+            "tipo": inc.tipo.value if hasattr(inc.tipo, "value") else str(inc.tipo),
+            "justificada": inc.justificada,
+            "comentarios": (inc.comentarios or "").strip() if hasattr(inc, "comentarios") else "",
+        })
+        eid = inc.empleado_id
+        if inc.tipo == models.TipoIncidencia.FALTA:
+            if inc.justificada:
+                faltas_just[eid] = faltas_just.get(eid, 0) + 1
+            else:
+                faltas[eid] = faltas.get(eid, 0) + 1
+        elif inc.tipo == models.TipoIncidencia.INCOMPLETA:
+            incompletas[eid] = incompletas.get(eid, 0) + 1
+        elif inc.tipo == models.TipoIncidencia.RETARDO:
+            retardos[eid] = retardos.get(eid, 0) + 1
+        elif inc.tipo == models.TipoIncidencia.SALIDA_ANTICIPADA:
+            sal_antic[eid] = sal_antic.get(eid, 0) + 1
+
+    # Indexar incapacidades
+    incap_idx: dict = {}
+    dias_incap: dict = {eid: 0 for eid in emp_ids}
+    for ic in incapacidades_all:
+        incap_idx.setdefault(ic.empleado_id, []).append((ic.fecha_inicio, ic.fecha_fin))
+        inicio_real = max(ic.fecha_inicio, fi)
+        fin_real = min(ic.fecha_fin, ff)
+        dias_incap[ic.empleado_id] = dias_incap.get(ic.empleado_id, 0) + dias_laborables(inicio_real, fin_real)
+
+    # Indexar vacaciones
+    vac_idx: dict = {}
+    dias_vac: dict = {eid: 0 for eid in emp_ids}
+    for v in vacaciones_all:
+        v_fi = v.fecha_inicio.date() if hasattr(v.fecha_inicio, "date") else v.fecha_inicio
+        v_ff = v.fecha_fin.date() if hasattr(v.fecha_fin, "date") else v.fecha_fin
+        vac_idx.setdefault(v.empleado_id, []).append((v_fi, v_ff))
+        inicio_real = max(v_fi, fi)
+        fin_real = min(v_ff, ff)
+        dias_vac[v.empleado_id] = dias_vac.get(v.empleado_id, 0) + dias_laborables(inicio_real, fin_real)
+
+    all_dias = []
+    dd = fi
+    while dd <= ff:
+        all_dias.append(dd)
+        dd += timedelta(days=1)
+
+    TIPO_INC = {"falta": "Falta", "incompleta": "Incompleta", "retardo": "Retardo",
+                "salida_anticipada": "Sal. Anticipada", "horas_extra": "Hrs Extra"}
+    DIAS_SEM = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
+    MESES_ES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"]
+    periodo_txt = f"{fi.day} de {MESES_ES[fi.month-1]} al {ff.day} de {MESES_ES[ff.month-1]} de {ff.year}"
+
+    # Agrupar empleados en hojas según el filtro solicitado:
+    #  - Filtro por departamento  → una sola hoja con ese departamento
+    #  - Filtro por empresa       → una hoja por departamento de esa empresa
+    #  - Global (sin filtro)      → una hoja por empresa
+    grupos_detalle: dict = defaultdict(list)
+    if departamento_id:
+        depto_name = deptos_map.get(departamento_id, "Departamento")
+        for emp in empleados:
+            grupos_detalle[depto_name].append(emp)
+    elif empresa_id:
+        for emp in empleados:
+            key = deptos_map.get(emp.departamento_id, "Sin Depto") if emp.departamento_id else "Sin Depto"
+            grupos_detalle[key].append(emp)
+    else:
+        for emp in empleados:
+            key = empresas_map.get(emp.empresa_id, "Sin Empresa") if emp.empresa_id else "Sin Empresa"
+            grupos_detalle[key].append(emp)
+
+    # ── Estilos ──
+    thin = Side(style="thin", color="B0B0B0")
+    border_all = Border(left=thin, right=thin, top=thin, bottom=thin)
+
+    font_title = Font(name="Calibri", size=14, bold=True, color="1A365D")
+    font_subtitle = Font(name="Calibri", size=11, bold=True, color="2D3748")
+    font_periodo = Font(name="Calibri", size=10, color="4A5568")
+    font_emp_name = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    font_emp_info = Font(name="Calibri", size=10, color="E2E8F0")
+    font_header = Font(name="Calibri", size=9, bold=True, color="FFFFFF")
+    font_data = Font(name="Calibri", size=9)
+    font_data_num = Font(name="Calibri", size=9)
+    font_data_zero = Font(name="Calibri", size=9, color="A0AEC0")
+    font_inc_falta = Font(name="Calibri", size=9, bold=True, color="C53030")
+    font_inc_retardo = Font(name="Calibri", size=9, color="B7791F")
+    font_inc_vacaciones = Font(name="Calibri", size=9, bold=True, color="166534")
+    font_total_lbl = Font(name="Calibri", size=10, bold=True, color="1A365D")
+    font_total_val = Font(name="Calibri", size=10, bold=True, color="1A365D")
+    font_footer = Font(name="Calibri", size=8, italic=True, color="718096")
+    font_resumen_header = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+    font_resumen_data = Font(name="Calibri", size=10)
+    font_resumen_name = Font(name="Calibri", size=10, bold=True, color="1A365D")
+
+    fill_emp_bg = PatternFill(start_color="2D3748", end_color="2D3748", fill_type="solid")
+    fill_col_header = PatternFill(start_color="4A90D9", end_color="4A90D9", fill_type="solid")
+    fill_row_even = PatternFill(start_color="F7FAFC", end_color="F7FAFC", fill_type="solid")
+    fill_row_odd = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+    fill_domingo = PatternFill(start_color="EDF2F7", end_color="EDF2F7", fill_type="solid")
+    fill_festivo = PatternFill(start_color="FFFBEB", end_color="FFFBEB", fill_type="solid")
+    fill_incap_fill = PatternFill(start_color="EBF8FF", end_color="EBF8FF", fill_type="solid")
+    fill_vacaciones = PatternFill(start_color="F0FDF4", end_color="F0FDF4", fill_type="solid")
+    fill_falta = PatternFill(start_color="FFF5F5", end_color="FFF5F5", fill_type="solid")
+    fill_total_row = PatternFill(start_color="E2E8F0", end_color="E2E8F0", fill_type="solid")
+    fill_resumen_hdr = PatternFill(start_color="2B6CB0", end_color="2B6CB0", fill_type="solid")
+    fill_resumen_even = PatternFill(start_color="EBF4FF", end_color="EBF4FF", fill_type="solid")
+
+    align_c = Alignment(horizontal="center", vertical="center")
+    align_l = Alignment(horizontal="left", vertical="center")
+    align_r = Alignment(horizontal="right", vertical="center")
+    align_wrap = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+    def to_min(h: str) -> int:
+        hh, mm = h.split(":")
+        return int(hh) * 60 + int(mm)
+
+    wb = Workbook()
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    #  HOJA 1: RESUMEN
+    # ═══════════════════════════════════════════════════════════════════════════
+    ws_res = wb.active
+    ws_res.title = "Resumen"
+    RES_COLS = 13
+    res_widths = [6, 10, 28, 20, 18, 10, 10, 10, 10, 10, 10, 11, 10]
+    for i, w in enumerate(res_widths, 1):
+        ws_res.column_dimensions[get_column_letter(i)].width = w
+
+    row = 1
+    ws_res.merge_cells(start_row=row, start_column=1, end_row=row, end_column=RES_COLS)
+    ws_res.cell(row=row, column=1, value="INFORME DE ASISTENCIA — RESUMEN GENERAL").font = font_title
+    ws_res.cell(row=row, column=1).alignment = align_c
+    ws_res.row_dimensions[row].height = 30
+
+    row = 2
+    ws_res.merge_cells(start_row=row, start_column=1, end_row=row, end_column=RES_COLS)
+    ws_res.cell(row=row, column=1, value=f"Período: {periodo_txt}   |   Días laborables: {total_dias_lab}").font = font_periodo
+    ws_res.cell(row=row, column=1).alignment = align_c
+
+    row = 4
+    res_headers = ["#", "No. Emp", "Nombre", "Empresa", "Departamento", "Asistencias",
+                   "Completos", "Faltas", "Faltas Just.", "Retardos", "Incapacidad", "Vacaciones", "% Punt."]
+    for ci, h in enumerate(res_headers, 1):
+        cell = ws_res.cell(row=row, column=ci, value=h)
+        cell.font = font_resumen_header
+        cell.fill = fill_resumen_hdr
+        cell.alignment = align_c
+        cell.border = border_all
+    ws_res.row_dimensions[row].height = 22
+
+    for idx, emp in enumerate(empleados, 1):
+        row += 1
+        f_val = faltas.get(emp.id, 0)
+        fj_val = faltas_just.get(emp.id, 0)
+        di_val = dias_incap.get(emp.id, 0)
+        dv_val = dias_vac.get(emp.id, 0)
+        dc_val = dias_completos.get(emp.id, 0)
+        denominador = total_dias_lab - di_val - dv_val - f_val - fj_val
+        pct = round((dc_val / max(1, denominador)) * 100, 1) if denominador > 0 else 0
+
+        vals = [
+            idx,
+            emp.numero_empleado,
+            f"{emp.nombre} {emp.apellido_paterno or ''}".strip(),
+            empresas_map.get(emp.empresa_id, "") if emp.empresa_id else "",
+            deptos_map.get(emp.departamento_id, "") if emp.departamento_id else "",
+            len(dias_con_checada.get(emp.id, set())),
+            dc_val,
+            f_val,
+            fj_val,
+            retardos.get(emp.id, 0),
+            di_val,
+            dv_val,
+            f"{pct}%",
+        ]
+        fill = fill_resumen_even if idx % 2 == 0 else fill_row_odd
+        for ci, v in enumerate(vals, 1):
+            cell = ws_res.cell(row=row, column=ci, value=v)
+            cell.border = border_all
+            cell.fill = fill
+            cell.alignment = align_c if ci not in (3, 4, 5) else align_l
+            if ci == 3:
+                cell.font = font_resumen_name
+            elif isinstance(v, int) and v == 0:
+                cell.font = font_data_zero
+            else:
+                cell.font = font_resumen_data
+
+    row += 2
+    ws_res.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+    ws_res.cell(row=row, column=1, value=f"Generado: {dt_cls.now().strftime('%d/%m/%Y %H:%M')}").font = font_footer
+    ws_res.merge_cells(start_row=row, start_column=7, end_row=row, end_column=RES_COLS)
+    ws_res.cell(row=row, column=7, value=f"Total: {len(empleados)} empleados").font = font_footer
+    ws_res.cell(row=row, column=7).alignment = align_r
+
+    ws_res.freeze_panes = "A5"
+    ws_res.auto_filter.ref = f"A4:{get_column_letter(RES_COLS)}{4 + len(empleados)}"
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    #  HOJAS DE DETALLE (agrupadas según filtro)
+    #  - Filtro departamento → 1 hoja con ese departamento
+    #  - Filtro empresa      → 1 hoja por departamento
+    #  - Global              → 1 hoja por empresa
+    # ═══════════════════════════════════════════════════════════════════════════
+    DET_COLS = 9
+    det_widths = [14, 7, 10, 12, 12, 10, 22, 14, 13]
+
+    for grupo_nombre in sorted(grupos_detalle.keys()):
+        emp_list = grupos_detalle[grupo_nombre]
+        sheet_name = grupo_nombre[:31]
+        ws = wb.create_sheet(title=sheet_name)
+
+        for i, w in enumerate(det_widths, 1):
+            ws.column_dimensions[get_column_letter(i)].width = w
+
+        row = 1
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=DET_COLS)
+        ws.cell(row=row, column=1, value=grupo_nombre.upper()).font = font_title
+        ws.cell(row=row, column=1).alignment = align_c
+        ws.row_dimensions[row].height = 30
+
+        row = 2
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=DET_COLS)
+        ws.cell(row=row, column=1, value="Detalle de Checadas por Empleado").font = font_subtitle
+        ws.cell(row=row, column=1).alignment = align_c
+
+        row = 3
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=DET_COLS)
+        ws.cell(row=row, column=1, value=f"Período: {periodo_txt}   |   {len(emp_list)} empleados").font = font_periodo
+        ws.cell(row=row, column=1).alignment = align_c
+
+        row = 4
+
+        for emp in emp_list:
+            emp_name = f"{emp.nombre} {emp.apellido_paterno or ''}".strip()
+            emp_depto = deptos_map.get(emp.departamento_id, "") if emp.departamento_id else ""
+            emp_empresa = empresas_map.get(emp.empresa_id, "") if emp.empresa_id else ""
+            emp_ch = checadas_idx.get(emp.id, {})
+            emp_inc = incidencias_idx.get(emp.id, {})
+            emp_icap = incap_idx.get(emp.id, [])
+            emp_vacaciones = vac_idx.get(emp.id, [])
+
+            row += 1
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
+            ws.merge_cells(start_row=row, start_column=5, end_row=row, end_column=6)
+            ws.merge_cells(start_row=row, start_column=7, end_row=row, end_column=DET_COLS)
+            ws.cell(row=row, column=1, value=emp_name).font = font_emp_name
+            ws.cell(row=row, column=5, value=f"No. {emp.numero_empleado}").font = font_emp_info
+            info_col7 = emp_depto if not departamento_id else emp_empresa
+            ws.cell(row=row, column=7, value=info_col7).font = font_emp_info
+            for col in range(1, DET_COLS + 1):
+                cell = ws.cell(row=row, column=col)
+                cell.fill = fill_emp_bg
+                cell.border = border_all
+                cell.alignment = align_c if col >= 5 else align_l
+            ws.row_dimensions[row].height = 24
+
+            row += 1
+            for ci, h in enumerate(["Fecha", "Día", "Entrada", "Sal. Comer", "Reg. Comer", "Salida", "Incidencia", "Justificación", "Tiempo"], 1):
+                cell = ws.cell(row=row, column=ci, value=h)
+                cell.font = font_header
+                cell.fill = fill_col_header
+                cell.alignment = align_c
+                cell.border = border_all
+            ws.row_dimensions[row].height = 20
+
+            total_min = 0
+            for idx_d, d_date in enumerate(all_dias):
+                dia_str = d_date.isoformat()
+                es_dom = d_date.weekday() == 6
+                festivo = festivos_map_local.get(d_date)
+                en_incap = any(i[0] <= d_date <= i[1] for i in emp_icap)
+                en_vac = any(v[0] <= d_date <= v[1] for v in emp_vacaciones)
+                dc = emp_ch.get(dia_str, [])
+                di = emp_inc.get(dia_str, [])
+
+                cmap: dict = {}
+                for cc in dc:
+                    cmap[cc["tipo"]] = cc["hora"]
+
+                inc_text = ""
+                just_texts: list[str] = []
+                if es_dom:
+                    inc_text = "Descanso"
+                elif en_vac:
+                    inc_text = "Vacaciones"
+                elif en_incap:
+                    inc_text = "Incapacidad"
+                elif festivo:
+                    inc_text = f"Festivo: {festivo}"
+                else:
+                    parts = []
+                    for ii in di:
+                        lbl = TIPO_INC.get(ii["tipo"], ii["tipo"])
+                        if ii["justificada"]:
+                            obs = (ii.get("comentarios") or "").strip()
+                            if obs:
+                                if obs not in just_texts:
+                                    just_texts.append(obs)
+                            else:
+                                if "Sí" not in just_texts:
+                                    just_texts.append("Sí")
+                            lbl += " (J)"
+                        else:
+                            if "No" not in just_texts:
+                                just_texts.append("No")
+                        parts.append(lbl)
+                    inc_text = ", ".join(parts)
+                just_text = "\n".join(just_texts)
+
+                tiempo_str = ""
+                if cmap.get("entrada") and cmap.get("salida"):
+                    t = to_min(cmap["salida"]) - to_min(cmap["entrada"])
+                    if cmap.get("salida_comer") and cmap.get("regreso_comer"):
+                        t -= to_min(cmap["regreso_comer"]) - to_min(cmap["salida_comer"])
+                    if t > 0:
+                        total_min += t
+                        tiempo_str = f"{t // 60}:{t % 60:02d}"
+
+                row += 1
+                vals = [d_date.strftime("%d/%m/%Y"), DIAS_SEM[d_date.weekday()],
+                        cmap.get("entrada", ""), cmap.get("salida_comer", ""),
+                        cmap.get("regreso_comer", ""), cmap.get("salida", ""),
+                        inc_text, just_text, tiempo_str]
+
+                if es_dom:
+                    fill = fill_domingo
+                elif en_vac:
+                    fill = fill_vacaciones
+                elif en_incap:
+                    fill = fill_incap_fill
+                elif festivo:
+                    fill = fill_festivo
+                elif any(ii["tipo"] == "falta" and not ii.get("justificada") for ii in di):
+                    fill = fill_falta
+                else:
+                    fill = fill_row_even if idx_d % 2 == 0 else fill_row_odd
+
+                for ci, v in enumerate(vals, 1):
+                    cell = ws.cell(row=row, column=ci, value=v)
+                    cell.font = font_data
+                    cell.fill = fill
+                    cell.border = border_all
+                    cell.alignment = align_wrap if ci == 8 else (align_c if ci >= 2 else align_l)
+
+                inc_cell = ws.cell(row=row, column=7)
+                if inc_text == "Vacaciones":
+                    inc_cell.font = font_inc_vacaciones
+                elif "Falta" in inc_text and "(J)" not in inc_text:
+                    inc_cell.font = font_inc_falta
+                elif "Retardo" in inc_text:
+                    inc_cell.font = font_inc_retardo
+
+                # Si hay observaciones largas (varias líneas), subimos la altura para que se vea.
+                just_lines = (just_text.count("\n") + 1) if just_text else 1
+                ws.row_dimensions[row].height = int(min(18 + (just_lines - 1) * 12, 80))
+
+            row += 1
+            th_val = total_min // 60
+            tm_val = total_min % 60
+            ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+            for col in range(1, DET_COLS + 1):
+                cell = ws.cell(row=row, column=col)
+                cell.fill = fill_total_row
+                cell.border = border_all
+            ws.cell(row=row, column=7, value="TOTAL HORAS").font = font_total_lbl
+            ws.cell(row=row, column=7).alignment = align_r
+            ws.cell(row=row, column=9, value=f"{th_val}:{tm_val:02d}").font = font_total_val
+            ws.cell(row=row, column=9).alignment = align_c
+            ws.row_dimensions[row].height = 22
+
+        row += 2
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=5)
+        ws.cell(row=row, column=1, value=f"Generado: {dt_cls.now().strftime('%d/%m/%Y %H:%M')}").font = font_footer
+        ws.merge_cells(start_row=row, start_column=6, end_row=row, end_column=DET_COLS)
+        ws.cell(row=row, column=6, value=f"Total: {len(emp_list)} empleados").font = font_footer
+        ws.cell(row=row, column=6).alignment = align_r
+
+        ws.freeze_panes = "A5"
+
+    # ── Guardar ──
+    output = BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    filename = f"reporte_asistencia_{fecha_inicio}_{fecha_fin}.xlsx"
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

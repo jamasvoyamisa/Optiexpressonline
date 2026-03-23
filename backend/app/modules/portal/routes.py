@@ -27,3 +27,14 @@ def registrar_checada(data: schemas.ChecadaRemotaRequest, db: Session = Depends(
         numero_empleado=data.numero_empleado,
         password=data.password,
     )
+
+
+@router.post("/estado-hoy", response_model=schemas.EstadoChecadaRemotaResponse)
+def estado_hoy(data: schemas.ChecadaRemotaRequest, db: Session = Depends(get_db)):
+    """Consulta checadas de hoy vs requeridas (4 lun–vie, 2 sábado si aplica) sin registrar."""
+    return service.estado_checada_remota(
+        db,
+        empresa_id=data.empresa_id,
+        numero_empleado=data.numero_empleado,
+        password=data.password,
+    )

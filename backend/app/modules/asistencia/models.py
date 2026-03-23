@@ -38,11 +38,14 @@ class Dispositivo(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
-    # Relaciones
-    agentes = relationship("Agente", back_populates="dispositivo")
-    checadas = relationship("Asistencia", back_populates="dispositivo")
-    usuarios_pendientes = relationship("UsuarioPendienteDispositivo", back_populates="dispositivo")
-    pending_enrolls = relationship("PendingEnroll", back_populates="dispositivo")
+    # Relaciones – cascade delete para poder eliminar dispositivos sin error de FK
+    agentes = relationship("Agente", back_populates="dispositivo", cascade="all, delete-orphan", passive_deletes=True)
+    checadas = relationship("Asistencia", back_populates="dispositivo", cascade="all, delete-orphan", passive_deletes=True)
+    usuarios_pendientes = relationship("UsuarioPendienteDispositivo", back_populates="dispositivo", cascade="all, delete-orphan", passive_deletes=True)
+    pending_enrolls = relationship("PendingEnroll", back_populates="dispositivo", cascade="all, delete-orphan", passive_deletes=True)
+    pending_deletes = relationship("PendingDelete", back_populates="dispositivo", cascade="all, delete-orphan", passive_deletes=True)
+    pending_replicates = relationship("PendingReplicate", back_populates="dispositivo", cascade="all, delete-orphan", passive_deletes=True)
+    fingerprint_templates = relationship("FingerprintTemplate", back_populates="source_device", cascade="all, delete-orphan", passive_deletes=True)
 
 
 class UsuarioPendienteDispositivo(Base):
@@ -50,7 +53,7 @@ class UsuarioPendienteDispositivo(Base):
     __tablename__ = "usuarios_pendientes_dispositivo"
 
     id = Column(Integer, primary_key=True, index=True)
-    dispositivo_id = Column(Integer, ForeignKey("dispositivos.id"), nullable=False)
+    dispositivo_id = Column(Integer, ForeignKey("dispositivos.id", ondelete="CASCADE"), nullable=False)
     numero_empleado = Column(String(50), nullable=False)
     pin_checador = Column(String(20), nullable=True)
     nombre = Column(String(255), nullable=False)
@@ -67,7 +70,7 @@ class PendingEnroll(Base):
     __tablename__ = "pending_enroll"
 
     id = Column(Integer, primary_key=True, index=True)
-    dispositivo_id = Column(Integer, ForeignKey("dispositivos.id"), nullable=False)
+    dispositivo_id = Column(Integer, ForeignKey("dispositivos.id", ondelete="CASCADE"), nullable=False)
     numero_empleado = Column(String(50), nullable=False)
     pin_checador = Column(String(20), nullable=True)
     nombre = Column(String(120), nullable=True)
@@ -84,14 +87,14 @@ class PendingDelete(Base):
     __tablename__ = "pending_delete"
 
     id = Column(Integer, primary_key=True, index=True)
-    dispositivo_id = Column(Integer, ForeignKey("dispositivos.id"), nullable=False)
+    dispositivo_id = Column(Integer, ForeignKey("dispositivos.id", ondelete="CASCADE"), nullable=False)
     numero_empleado = Column(String(50), nullable=False)
     procesado = Column(Boolean, default=False)
     procesado_at = Column(DateTime(timezone=True), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    dispositivo = relationship("Dispositivo")
+    dispositivo = relationship("Dispositivo", back_populates="pending_deletes")
 
 
 class PendingReplicate(Base):
@@ -102,13 +105,13 @@ class PendingReplicate(Base):
     )
 
     id = Column(Integer, primary_key=True, index=True)
-    dispositivo_id = Column(Integer, ForeignKey("dispositivos.id"), nullable=False)
+    dispositivo_id = Column(Integer, ForeignKey("dispositivos.id", ondelete="CASCADE"), nullable=False)
     numero_empleado = Column(String(50), nullable=False)
     procesado = Column(Boolean, default=False)
     procesado_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
-    dispositivo = relationship("Dispositivo")
+    dispositivo = relationship("Dispositivo", back_populates="pending_replicates")
 
 
 class FingerprintTemplate(Base):
@@ -122,18 +125,18 @@ class FingerprintTemplate(Base):
     numero_empleado = Column(String(50), nullable=False, index=True)
     finger_index = Column(Integer, default=0)
     template_data = Column(Text, nullable=False)
-    source_device_id = Column(Integer, ForeignKey("dispositivos.id"), nullable=True)
+    source_device_id = Column(Integer, ForeignKey("dispositivos.id", ondelete="SET NULL"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    source_device = relationship("Dispositivo")
+    source_device = relationship("Dispositivo", back_populates="fingerprint_templates")
 
 
 class Agente(Base):
     __tablename__ = "agentes"
     
     id = Column(Integer, primary_key=True, index=True)
-    dispositivo_id = Column(Integer, ForeignKey("dispositivos.id"), nullable=False)
+    dispositivo_id = Column(Integer, ForeignKey("dispositivos.id", ondelete="CASCADE"), nullable=False)
     version = Column(String(50))
     ultima_sincronizacion = Column(DateTime(timezone=True))
     estado = Column(String(50), default="activo")  # activo, inactivo, error
@@ -193,7 +196,7 @@ class Asistencia(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     empleado_id = Column(Integer, ForeignKey("empleados.id"), nullable=False, index=True)
-    dispositivo_id = Column(Integer, ForeignKey("dispositivos.id"), nullable=False)
+    dispositivo_id = Column(Integer, ForeignKey("dispositivos.id", ondelete="CASCADE"), nullable=False)
     timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
     tipo = Column(Enum(TipoChecada), nullable=False)
     es_tiempo_extra = Column(Boolean, default=False)

@@ -182,6 +182,10 @@ export const PersonalPage = () => {
   const [usernameManual, setUsernameManual] = useState(false);
   const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle');
   const [numeroManual, setNumeroManual] = useState(false);
+  const [showImport, setShowImport] = useState(false);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<any>(null);
 
   // Modal departamento (crear / editar)
   const [showDeptoModal, setShowDeptoModal] = useState(false);
@@ -297,6 +301,36 @@ export const PersonalPage = () => {
         : [...prev.dispositivo_ids, deviceId];
       return { ...prev, dispositivo_ids: ids };
     });
+  };
+
+  const descargarPlantilla = async () => {
+    try {
+      const res = await api.get('/personal/importar/plantilla', { responseType: 'blob' });
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'plantilla_empleados.xlsx';
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch { alert('Error al descargar plantilla'); }
+  };
+
+  const handleImport = async () => {
+    if (!importFile) return;
+    setImporting(true);
+    setImportResult(null);
+    const fd = new FormData();
+    fd.append('file', importFile);
+    try {
+      const res = await api.post('/personal/importar/xlsx', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      setImportResult(res.data);
+      if (res.data.creados > 0) loadData();
+    } catch (e: any) {
+      const msg = e.response?.data?.detail || 'Error al importar';
+      setImportResult({ error: msg });
+    } finally {
+      setImporting(false);
+    }
   };
 
   const openNewForm = () => {
@@ -730,7 +764,7 @@ export const PersonalPage = () => {
               <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '10px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
                 <thead>
                   <tr style={{ backgroundColor: '#f8f9fa' }}>
-                    {['Nombre', 'Empresa', 'Jefe', 'Empleados', 'Estado', 'Acciones'].map(h => (
+                    {['Nombre', 'Empresa', 'Gerente', 'Empleados', 'Estado', 'Acciones'].map(h => (
                       <th key={h} style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>{h}</th>
                     ))}
                   </tr>
@@ -867,7 +901,10 @@ export const PersonalPage = () => {
                 <div style={{ fontSize: '1.4rem', fontWeight: 'bold', color: s.color }}>{s.value}</div>
               </div>
             ))}
-            <button onClick={openNewForm} style={{ ...btnSuccess, marginLeft: 'auto' }}>+ Nuevo Empleado</button>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+              <button onClick={() => setShowImport(true)} style={{ ...btnSuccess, backgroundColor: '#6366f1' }}>⬆ Importar XLSX</button>
+              <button onClick={openNewForm} style={btnSuccess}>+ Nuevo Empleado</button>
+            </div>
           </div>
 
           {/* Search + Filters */}
@@ -1082,8 +1119,13 @@ export const PersonalPage = () => {
                         onChange={e => { setNumeroManual(true); handleChange('numero_empleado', e.target.value); }}
                         required
                         disabled={!!editingId}
-                        placeholder={form.empresa_id ? 'Auto-asignado' : 'Seleccione empresa primero'}
+                        placeholder={form.empresa_id ? 'Siguiente al último en la empresa' : 'Seleccione empresa primero'}
                       />
+                      {!editingId && form.empresa_id ? (
+                        <p style={{ margin: '6px 0 0', fontSize: '0.75rem', color: '#6b7280' }}>
+                          Se propone el número inmediato al último registrado en esta empresa; puede editarlo si lo necesita.
+                        </p>
+                      ) : null}
                     </div>
                     <div>
                       <label style={labelStyle}>Departamento *</label>
@@ -1962,10 +2004,10 @@ export const PersonalPage = () => {
                   </select>
                 </div>
                 <div>
-                  <label style={labelStyle}>Jefe del departamento</label>
+                  <label style={labelStyle}>Gerente del departamento</label>
                   <select style={inputStyle} value={deptoForm.jefe_id ?? ''}
                     onChange={e => setDeptoForm(p => ({ ...p, jefe_id: e.target.value ? Number(e.target.value) : null }))}>
-                    <option value="">-- Sin jefe asignado --</option>
+                    <option value="">-- Sin gerente asignado --</option>
                     {empleadosForEmpresa(deptoForm.empresa_id).map(emp => (
                       <option key={emp.id} value={emp.id}>
                         {emp.numero_empleado} - {emp.nombre} {emp.apellido_paterno || ''}
@@ -2052,6 +2094,64 @@ export const PersonalPage = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* ── Modal Importar XLSX ── */}
+      {showImport && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+          onClick={() => { setShowImport(false); setImportFile(null); setImportResult(null); }}>
+          <div style={{ background: '#fff', borderRadius: 14, padding: 28, minWidth: 420, maxWidth: 600, maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 8px 30px rgba(0,0,0,0.18)' }}
+            onClick={e => e.stopPropagation()}>
+            <h3 style={{ margin: '0 0 16px', fontSize: '1.15rem' }}>Importar Empleados desde XLSX</h3>
+
+            <button onClick={descargarPlantilla} style={{ background: 'none', border: '1px solid #6366f1', color: '#6366f1', borderRadius: 7, padding: '6px 14px', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem', marginBottom: 16 }}>
+              ⬇ Descargar Plantilla
+            </button>
+
+            <div style={{ border: '2px dashed #cbd5e1', borderRadius: 10, padding: 20, textAlign: 'center', marginBottom: 16, background: '#f8fafc' }}>
+              <input type="file" accept=".xlsx" onChange={e => { setImportFile(e.target.files?.[0] || null); setImportResult(null); }} />
+              {importFile && <p style={{ margin: '8px 0 0', fontSize: '0.85rem', color: '#475569' }}>{importFile.name}</p>}
+            </div>
+
+            <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
+              <button onClick={() => { setShowImport(false); setImportFile(null); setImportResult(null); }} style={btnSecondary}>Cerrar</button>
+              <button onClick={handleImport} disabled={!importFile || importing}
+                style={!importFile || importing ? { ...btnSuccess, backgroundColor: '#6366f1', opacity: 0.6, cursor: 'not-allowed' } : { ...btnSuccess, backgroundColor: '#6366f1' }}>
+                {importing ? 'Importando...' : 'Importar'}
+              </button>
+            </div>
+
+            {importResult && !importResult.error && (
+              <div style={{ marginTop: 16, fontSize: '0.88rem', lineHeight: 1.7 }}>
+                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
+                  <span style={{ background: '#dcfce7', color: '#166534', padding: '3px 10px', borderRadius: 6, fontWeight: 600 }}>Creados: {importResult.creados}</span>
+                  <span style={{ background: '#fef3c7', color: '#92400e', padding: '3px 10px', borderRadius: 6, fontWeight: 600 }}>Omitidos: {importResult.omitidos}</span>
+                  <span style={{ background: '#fee2e2', color: '#991b1b', padding: '3px 10px', borderRadius: 6, fontWeight: 600 }}>Errores: {importResult.errores_count}</span>
+                </div>
+                {importResult.detalle_errores?.length > 0 && (
+                  <div style={{ background: '#fef2f2', borderRadius: 8, padding: 10, maxHeight: 200, overflowY: 'auto' }}>
+                    <strong style={{ color: '#991b1b', fontSize: '0.82rem' }}>Errores:</strong>
+                    {importResult.detalle_errores.map((err: any, i: number) => (
+                      <div key={i} style={{ fontSize: '0.8rem', color: '#7f1d1d', padding: '2px 0' }}>Fila {err.fila}: {err.error}</div>
+                    ))}
+                  </div>
+                )}
+                {importResult.detalle_omitidos?.length > 0 && (
+                  <div style={{ background: '#fffbeb', borderRadius: 8, padding: 10, maxHeight: 150, overflowY: 'auto', marginTop: 8 }}>
+                    <strong style={{ color: '#92400e', fontSize: '0.82rem' }}>Omitidos (ya existen):</strong>
+                    {importResult.detalle_omitidos.map((o: any, i: number) => (
+                      <div key={i} style={{ fontSize: '0.8rem', color: '#78350f', padding: '2px 0' }}>Fila {o.fila}: {o.numero_empleado} – {o.nombre}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {importResult?.error && (
+              <div style={{ marginTop: 16, background: '#fef2f2', borderRadius: 8, padding: 12, color: '#991b1b', fontSize: '0.88rem' }}>
+                {importResult.error}
+              </div>
+            )}
           </div>
         </div>
       )}
