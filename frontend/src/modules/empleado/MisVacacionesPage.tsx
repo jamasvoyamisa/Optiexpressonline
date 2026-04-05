@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
+import { Navigate } from 'react-router-dom';
 import api from '../../services/api';
+import { toMexicoDateString } from '../../utils/date';
 import { useIsMobile } from '../../hooks/useIsMobile';
+import { useAuth } from '../../hooks/useAuth';
 
 interface Solicitud {
   id: number;
@@ -31,6 +34,10 @@ interface Balance {
   dias_disponibles: number;
   dias_tomados: number;
   dias_pendientes: number;
+  /** Suma de días disponibles en periodos vigentes menos adeudo por vacaciones generales sin periodo (puede ser negativo). */
+  saldo_dias_lft_neto?: number;
+  /** Días adeudados por vacaciones generales aplicadas antes de tener periodo LFT vigente. */
+  dias_deuda_vacaciones_ley?: number;
   periodo_actual?: PeriodoVacaciones | null;
   periodo_anterior?: PeriodoVacaciones | null;
   fecha_limite_goce?: string | null;
@@ -79,6 +86,10 @@ interface DiaFestivo {
 }
 
 export const MisVacacionesPage = () => {
+  const { authMe } = useAuth();
+  if (authMe?.exento_incidencias) {
+    return <Navigate to="/" replace />;
+  }
   const isMobile = useIsMobile();
   const [solicitudes, setSolicitudes] = useState<Solicitud[]>([]);
   const [balance, setBalance] = useState<Balance | null>(null);
@@ -132,34 +143,6 @@ export const MisVacacionesPage = () => {
     loadFestivos(new Date().getFullYear());
   }, []);
 
-
-  const submitDesdeModal = () => {
-    const start = rangeStart || rangeEnd;
-    const end = rangeEnd || rangeStart;
-    if (!start || !end) return;
-    if (isPast(start)) {
-      alert('La fecha de inicio no puede ser anterior al día de hoy.');
-      return;
-    }
-    setSending(true);
-    api
-      .post('/vacaciones/mis-solicitudes', {
-        fecha_inicio: new Date(start + 'T12:00:00').toISOString(),
-        fecha_fin: new Date(end + 'T12:00:00').toISOString(),
-        motivo: motivo.trim() || null,
-      })
-      .then(() => {
-        setModalSolicitar(false);
-        setRangeStart(null);
-        setRangeEnd(null);
-        setMotivo('');
-        load();
-        setActiveTab('pendientes');
-      })
-      .catch((err) => alert(err.response?.data?.detail || 'Error al crear la solicitud'))
-      .finally(() => setSending(false));
-  };
-
   // Calendario: lunes = 0, domingo = 6 (no elegible)
   const weekDaysFull = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
   const weekDaysShort = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
@@ -171,12 +154,29 @@ export const MisVacacionesPage = () => {
   void Math.ceil(totalCells / 7); // rows — no se usa actualmente
 
   const toISO = (d: Date) => d.toISOString().slice(0, 10);
-  const todayLocal = (() => {
-    const n = new Date();
-    return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`;
-  })();
+  const todayLocal = toMexicoDateString(new Date());
   const isSunday = (y: number, m: number, day: number) => new Date(y, m, day).getDay() === 0;
   const isPast = (iso: string) => iso < todayLocal;
+
+  const saldoNetoLft = balance
+    ? Number(balance.saldo_dias_lft_neto ?? balance.dias_disponibles)
+    : 0;
+  const diasDisponiblesParaSolicitar = balance
+    ? saldoNetoLft - Number(balance.dias_pendientes)
+    : 0;
+  /** Saldo rojo (negativo) o sin cupo neto: no se puede elegir fechas ni enviar solicitud. */
+  const puedeElegirFechasEnCalendario =
+    !loading && balance != null && diasDisponiblesParaSolicitar > 0;
+
+  useEffect(() => {
+    if (!puedeElegirFechasEnCalendario && (rangeStart || rangeEnd)) {
+      setRangeStart(null);
+      setRangeEnd(null);
+    }
+    if (!puedeElegirFechasEnCalendario && modalSolicitar) {
+      setModalSolicitar(false);
+    }
+  }, [puedeElegirFechasEnCalendario, rangeStart, rangeEnd, modalSolicitar]);
 
   const registros = solicitudes.filter((s) => s.estado === 'aprobada');
   // Incluye: pendiente de jefe, pendiente de RH (aprobada_jefe) y rechazadas
@@ -191,6 +191,7 @@ export const MisVacacionesPage = () => {
     });
 
   const handleDayClick = (iso: string, isSundayDay: boolean, isPastDay: boolean, isTomado: boolean) => {
+    if (!puedeElegirFechasEnCalendario) return;
     if (isSundayDay || isPastDay || isTomado) return;
     if (!rangeStart) {
       setRangeStart(iso);
@@ -241,6 +242,47 @@ export const MisVacacionesPage = () => {
     return count;
   })();
 
+  const submitDesdeModal = () => {
+    const start = rangeStart || rangeEnd;
+    const end = rangeEnd || rangeStart;
+    if (!start || !end) return;
+    if (isPast(start)) {
+      alert('La fecha de inicio no puede ser anterior al día de hoy.');
+      return;
+    }
+    if (loading || !balance || diasDisponiblesParaSolicitar <= 0) {
+      alert(
+        balance && saldoNetoLft < 0
+          ? 'No puedes solicitar vacaciones mientras tu saldo LFT neto sea negativo. El adeudo se descuenta automáticamente cuando tengas periodos de vacaciones vigentes.'
+          : 'No puedes solicitar vacaciones: no tienes días disponibles netos (revisa saldo y solicitudes pendientes).',
+      );
+      return;
+    }
+    if (selectedCount > diasDisponiblesParaSolicitar) {
+      alert(
+        `No puedes solicitar más de ${diasDisponiblesParaSolicitar} día(s). Ajusta el periodo en el calendario.`,
+      );
+      return;
+    }
+    setSending(true);
+    api
+      .post('/vacaciones/mis-solicitudes', {
+        fecha_inicio: new Date(start + 'T12:00:00').toISOString(),
+        fecha_fin: new Date(end + 'T12:00:00').toISOString(),
+        motivo: motivo.trim() || null,
+      })
+      .then(() => {
+        setModalSolicitar(false);
+        setRangeStart(null);
+        setRangeEnd(null);
+        setMotivo('');
+        load();
+        setActiveTab('pendientes');
+      })
+      .catch((err) => alert(err.response?.data?.detail || 'Error al crear la solicitud'))
+      .finally(() => setSending(false));
+  };
+
   const cancelarSolicitud = () => {
     if (!modalCancelar) return;
     setCancelando(true);
@@ -261,8 +303,22 @@ export const MisVacacionesPage = () => {
       {balance && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '16px', marginBottom: '24px' }}>
           <div style={{ padding: '18px', backgroundColor: 'white', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
-            <div style={{ color: '#666', fontSize: '0.85rem', marginBottom: '4px' }}>Días disponibles</div>
-            <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: '#15803d' }}>{Number(balance.dias_disponibles)}</div>
+            <div style={{ color: '#666', fontSize: '0.85rem', marginBottom: '4px' }}>Saldo LFT (neto)</div>
+            <div
+              style={{
+                fontSize: '1.8rem',
+                fontWeight: 'bold',
+                color: saldoNetoLft < 0 ? '#b91c1c' : saldoNetoLft > 0 ? '#15803d' : '#6b7280',
+              }}
+            >
+              {saldoNetoLft}
+            </div>
+            {Number(balance.dias_deuda_vacaciones_ley ?? 0) > 0 && (
+              <div style={{ fontSize: '0.78rem', color: '#6b7280', marginTop: '8px', lineHeight: 1.35 }}>
+                Días en periodos: {Number(balance.dias_disponibles)} · Adeudo por vacaciones de ley:{' '}
+                {Number(balance.dias_deuda_vacaciones_ley)} (se descuenta al tener periodo vigente)
+              </div>
+            )}
           </div>
           <div style={{ padding: '18px', backgroundColor: 'white', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
             <div style={{ color: '#666', fontSize: '0.85rem', marginBottom: '4px' }}>Días tomados</div>
@@ -489,12 +545,14 @@ export const MisVacacionesPage = () => {
           {/* Barra superior: título + botón Solicitar (solo si hay selección) */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', marginBottom: '16px' }}>
             <h2 style={{ margin: 0, fontSize: '1.1rem' }}>Selecciona el período de vacaciones</h2>
-            {balance && Number(balance.dias_disponibles) - Number(balance.dias_pendientes) <= 0 && (
-              <span style={{ color: '#b91c1c', fontWeight: 600, fontSize: '0.9rem' }}>
-                No tienes días disponibles para solicitar
+            {balance && !puedeElegirFechasEnCalendario && (
+              <span style={{ color: '#b91c1c', fontWeight: 600, fontSize: '0.9rem', maxWidth: 420, textAlign: 'right', lineHeight: 1.35 }}>
+                {saldoNetoLft < 0
+                  ? 'Saldo negativo: no puedes solicitar vacaciones hasta regularizar el adeudo (el calendario está bloqueado).'
+                  : 'No tienes días netos disponibles para nuevas solicitudes (el calendario está bloqueado).'}
               </span>
             )}
-            {rangeStart && Number(balance?.dias_disponibles ?? 0) - Number(balance?.dias_pendientes ?? 0) > 0 && (
+            {rangeStart && diasDisponiblesParaSolicitar > 0 && (
               <button
                 type="button"
                 onClick={() => setModalSolicitar(true)}
@@ -582,7 +640,7 @@ export const MisVacacionesPage = () => {
                 const esFestivo = festivosSet.has(iso);
                 const festivoNombre = festivosNombre[iso] ?? null;
                 // Festivos y domingos son no elegibles (no se pueden seleccionar)
-                const noElegible = sun || past || yaTomado || esFestivo;
+                const noElegible = sun || past || yaTomado || esFestivo || !puedeElegirFechasEnCalendario;
                 const inRange = isInRange(iso);
                 const mexicoLabel = festivoNombre ?? getMexicoLabel(calMonth, day);
 
@@ -698,9 +756,9 @@ export const MisVacacionesPage = () => {
                 <dt style={{ color: '#666', fontWeight: 500 }}>Días a tomar</dt>
                 <dd style={{ margin: 0, fontWeight: 600, color: '#15803d' }}>{selectedCount} día{selectedCount !== 1 ? 's' : ''}</dd>
               </div>
-              {balance && selectedCount > Number(balance.dias_disponibles) - Number(balance.dias_pendientes) && (
+              {balance && selectedCount > diasDisponiblesParaSolicitar && (
                 <div style={{ marginBottom: '12px', padding: '10px', backgroundColor: '#fef2f2', color: '#b91c1c', borderRadius: '6px', fontSize: '0.9rem', fontWeight: 500 }}>
-                  No puedes solicitar más de {Number(balance.dias_disponibles) - Number(balance.dias_pendientes)} días. Tienes {Number(balance.dias_disponibles)} disponibles y {Number(balance.dias_pendientes)} ya en solicitudes pendientes.
+                  No puedes solicitar más de {diasDisponiblesParaSolicitar} días. Saldo neto {saldoNetoLft} y {Number(balance.dias_pendientes)} ya en solicitudes pendientes.
                 </div>
               )}
             </dl>
@@ -725,8 +783,8 @@ export const MisVacacionesPage = () => {
               <button
                 type="button"
                 onClick={submitDesdeModal}
-                disabled={sending || (!!balance && selectedCount > Number(balance.dias_disponibles) - Number(balance.dias_pendientes))}
-                style={{ padding: '10px 20px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: '6px', cursor: sending ? 'not-allowed' : 'pointer', fontWeight: 600, opacity: (!!balance && selectedCount > Number(balance.dias_disponibles) - Number(balance.dias_pendientes)) ? 0.6 : 1 }}
+                disabled={sending || (!!balance && selectedCount > diasDisponiblesParaSolicitar)}
+                style={{ padding: '10px 20px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: '6px', cursor: sending ? 'not-allowed' : 'pointer', fontWeight: 600, opacity: (!!balance && selectedCount > diasDisponiblesParaSolicitar) ? 0.6 : 1 }}
               >
                 {sending ? 'Enviando...' : 'Confirmar solicitud'}
               </button>

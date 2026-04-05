@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
+import { toMexicoDateString } from '../../utils/date';
+import { fmtNombreEmpleado } from '../../utils/format';
 
 interface Empresa {
   id: number;
@@ -81,7 +83,7 @@ const filterControlStyle: React.CSSProperties = {
   height: 36,
 };
 
-const today = new Date().toISOString().slice(0, 10);
+const today = toMexicoDateString(new Date());
 
 const emptyForm = {
   empleado_id: '',
@@ -256,7 +258,7 @@ export const IncapacidadesPage = () => {
 
   const nombreEmpleado = (e?: Empleado | null) => {
     if (!e) return '—';
-    return `${e.nombre} ${e.apellido_paterno ?? ''}`.trim();
+    return fmtNombreEmpleado(e);
   };
 
   const filtradas = incapacidades.filter(inc => {
@@ -512,7 +514,7 @@ export const IncapacidadesPage = () => {
                 </option>
                 {empleadosPorDepto.map(e => (
                   <option key={e.id} value={e.id}>
-                    {`${e.nombre} ${e.apellido_paterno ?? ''}`.trim()} — No. {e.numero_empleado}
+                    {fmtNombreEmpleado(e)} — No. {e.numero_empleado}
                   </option>
                 ))}
               </select>

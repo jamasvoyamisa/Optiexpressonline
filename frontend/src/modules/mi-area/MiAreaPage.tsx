@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { parseTimestampForMexico, toMexicoDateString } from '../../utils/date';
+import { fmtNombreEmpleado } from '../../utils/format';
 import { useSearchParams } from 'react-router-dom';
 
 type TipoIncidencia = 'retardo' | 'falta' | 'completa' | 'horas_extra' | 'salida_anticipada' | 'incompleta';
@@ -111,7 +112,7 @@ const tipoIncidenciasColores: Record<string, { backgroundColor: string; color: s
 
 type TabKey = 'personal' | 'asistencia' | 'incidencias' | 'vacaciones' | 'prestamos';
 
-const ITEMS_PER_PAGE = 15;
+const ITEMS_PER_PAGE = 30;
 
 const tabStyle = (active: boolean): React.CSSProperties => ({
   padding: '12px 24px',
@@ -213,6 +214,10 @@ export const MiAreaPage = () => {
   const puedeVerMiArea = (authMe?.puede_ver_mi_area ?? authMe?.is_jefe ?? false) || (authMe?.is_superuser === true);
   const deptos = authMe?.departamentos_que_administro ?? authMe?.departamentos ?? [];
 
+  /** Superadmin: null = todos; número = filtrar por ese departamento. Gerentes/jefes no lo usan. */
+  const [areaFiltroAdmin, setAreaFiltroAdmin] = useState<number | null>(null);
+  const [listaDeptosCat, setListaDeptosCat] = useState<{ id: number; nombre: string; empresa?: { nombre: string } | null }[]>([]);
+
   // Cargar authMe
   useEffect(() => {
     let cancelled = false;
@@ -234,6 +239,32 @@ export const MiAreaPage = () => {
     }
   }, [searchParams]);
 
+  // Catálogo de departamentos para el selector del administrador en Mi Área
+  useEffect(() => {
+    if (!authMe?.is_superuser) return;
+    let cancelled = false;
+    api
+      .get<{ id: number; nombre: string; empresa?: { nombre: string } | null }[]>('/personal/departamentos', { params: { limit: 500 } })
+      .then((res) => {
+        if (cancelled) return;
+        const list = Array.isArray(res.data)
+          ? res.data
+          : (res.data as { results?: { id: number; nombre: string; empresa?: { nombre: string } | null }[] })?.results ?? [];
+        const sorted = [...list].sort((a, b) => {
+          const empA = (a.empresa?.nombre || '').localeCompare(b.empresa?.nombre || '', 'es');
+          if (empA !== 0) return empA;
+          return (a.nombre || '').localeCompare(b.nombre || '', 'es');
+        });
+        setListaDeptosCat(sorted);
+      })
+      .catch(() => {
+        if (!cancelled) setListaDeptosCat([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authMe?.is_superuser]);
+
   // Cargar mapa de empleados
   useEffect(() => {
     api.get<EmpleadoArea[]>('/personal/empleados', { params: { limit: 500 } })
@@ -241,52 +272,65 @@ export const MiAreaPage = () => {
         const list = Array.isArray(res.data) ? res.data : (res.data as any)?.results ?? [];
         const map: Record<number, string> = {};
         list.forEach((e: EmpleadoArea) => {
-          map[e.id] = `${e.nombre} ${e.apellido_paterno || ''}`.trim();
+          map[e.id] = fmtNombreEmpleado(e);
         });
         setEmpleadosMap(map);
       })
       .catch(() => {});
   }, []);
 
-  // Personal del área (superadmin ve todos; gerente/supervisor solo su área)
+  // Personal del área (superadmin: todos o departamento elegido; gerente/supervisor solo su área)
   const loadPersonal = () => {
     if (!puedeVerMiArea) return;
     setLoadingPersonal(true);
     const deptosAdmin = authMe?.departamentos_que_administro ?? authMe?.departamentos ?? [];
     const isSuperuser = authMe?.is_superuser === true;
-    if (deptosAdmin.length === 0 && !isSuperuser) {
-      setLoadingPersonal(false);
-      return;
-    }
-    if (isSuperuser && deptosAdmin.length === 0) {
-      api.get<EmpleadoArea[]>('/personal/empleados', { params: { limit: 1000 } })
-        .then(r => {
-          const list = Array.isArray(r.data) ? r.data : (r.data as any)?.results ?? [];
+    if (isSuperuser) {
+      const params: Record<string, string | number> = { limit: 1000 };
+      if (areaFiltroAdmin != null) params.departamento_id = areaFiltroAdmin;
+      api
+        .get<EmpleadoArea[]>('/personal/empleados', { params })
+        .then((r) => {
+          const list = Array.isArray(r.data) ? r.data : (r.data as { results?: EmpleadoArea[] })?.results ?? [];
           setPersonal(list);
         })
         .catch(() => setPersonal([]))
         .finally(() => setLoadingPersonal(false));
       return;
     }
+    if (deptosAdmin.length === 0) {
+      setLoadingPersonal(false);
+      return;
+    }
     Promise.all(
-      deptosAdmin.map(d =>
-        api.get<EmpleadoArea[]>('/personal/empleados', { params: { departamento_id: d.id, limit: 200 } })
-          .then(r => Array.isArray(r.data) ? r.data : (r.data as any)?.results ?? [])
+      deptosAdmin.map((d) =>
+        api
+          .get<EmpleadoArea[]>('/personal/empleados', { params: { departamento_id: d.id, limit: 200 } })
+          .then((r) => (Array.isArray(r.data) ? r.data : (r.data as { results?: EmpleadoArea[] })?.results ?? []))
           .catch(() => [] as EmpleadoArea[])
       )
-    ).then(arrays => {
-      const merged: EmpleadoArea[] = [];
-      const seen = new Set<number>();
-      arrays.flat().forEach(e => { if (!seen.has(e.id)) { seen.add(e.id); merged.push(e); } });
-      setPersonal(merged);
-    }).finally(() => setLoadingPersonal(false));
+    )
+      .then((arrays) => {
+        const merged: EmpleadoArea[] = [];
+        const seen = new Set<number>();
+        arrays.flat().forEach((e) => {
+          if (!seen.has(e.id)) {
+            seen.add(e.id);
+            merged.push(e);
+          }
+        });
+        setPersonal(merged);
+      })
+      .finally(() => setLoadingPersonal(false));
   };
 
   // Checadas del área (por quincena)
   const loadChecadas = () => {
     setLoadingChecadas(true);
     const { inicio, fin } = getQuincenaRango(quincena.year, quincena.month, quincena.num);
-    api.get<Checada[]>('/asistencia/checadas/mi-area', { params: { fecha_inicio: inicio, fecha_fin: fin, limit: 2000 } })
+    const params: Record<string, string | number> = { fecha_inicio: inicio, fecha_fin: fin, limit: 2000 };
+    if (authMe?.is_superuser === true && areaFiltroAdmin != null) params.departamento_id = areaFiltroAdmin;
+    api.get<Checada[]>('/asistencia/checadas/mi-area', { params })
       .then(res => setChecadas(Array.isArray(res.data) ? res.data : []))
       .catch(() => setChecadas([]))
       .finally(() => setLoadingChecadas(false));
@@ -296,7 +340,9 @@ export const MiAreaPage = () => {
   const loadIncidencias = () => {
     setLoadingIncidencias(true);
     const { inicio, fin } = getQuincenaRango(quincena.year, quincena.month, quincena.num);
-    api.get<Incidencia[]>('/asistencia/incidencias/mi-area', { params: { fecha_inicio: inicio, fecha_fin: fin } })
+    const params: Record<string, string | number> = { fecha_inicio: inicio, fecha_fin: fin };
+    if (authMe?.is_superuser === true && areaFiltroAdmin != null) params.departamento_id = areaFiltroAdmin;
+    api.get<Incidencia[]>('/asistencia/incidencias/mi-area', { params })
       .then(res => setIncidencias(Array.isArray(res.data) ? res.data : []))
       .catch(() => setIncidencias([]))
       .finally(() => setLoadingIncidencias(false));
@@ -308,6 +354,7 @@ export const MiAreaPage = () => {
     setLoadingVacaciones(true);
     const params: Record<string, string | number> = { limit: 500 };
     if (authMe?.is_superuser) {
+      if (areaFiltroAdmin != null) params.departamento_id = areaFiltroAdmin;
       if (filtroEstadoVacaciones === 'pendientes') params.estado = 'pendiente';
       else if (filtroEstadoVacaciones !== 'todas') params.estado = filtroEstadoVacaciones;
     } else {
@@ -323,6 +370,7 @@ export const MiAreaPage = () => {
   const loadSolicitudesPrestamos = () => {
     setLoadingPrestamos(true);
     const params: Record<string, string | number> = { limit: 500 };
+    if (authMe?.is_superuser === true && areaFiltroAdmin != null) params.departamento_id = areaFiltroAdmin;
     if (filtroEstadoPrestamos !== 'todas') params.estado = filtroEstadoPrestamos;
     api.get<SolicitudPrestamo[]>('/prestamos/mi-area', { params })
       .then(res => setSolicitudesPrestamos(Array.isArray(res.data) ? res.data : []))
@@ -337,7 +385,7 @@ export const MiAreaPage = () => {
     if (activeTab === 'incidencias') loadIncidencias();
     if (activeTab === 'vacaciones') loadSolicitudesVacaciones();
     if (activeTab === 'prestamos') loadSolicitudesPrestamos();
-  }, [puedeVerMiArea, activeTab]);
+  }, [puedeVerMiArea, activeTab, areaFiltroAdmin]);
 
   useEffect(() => {
     if (activeTab === 'vacaciones' && puedeVerMiArea) loadSolicitudesVacaciones();
@@ -351,6 +399,11 @@ export const MiAreaPage = () => {
     if (activeTab === 'asistencia' && puedeVerMiArea) loadChecadas();
     if (activeTab === 'incidencias' && puedeVerMiArea) loadIncidencias();
   }, [quincena.year, quincena.month, quincena.num]);
+
+  useEffect(() => {
+    setPagChecadas(1);
+    setPagIncidencias(1);
+  }, [areaFiltroAdmin]);
 
   useEffect(() => { setPagChecadas(1); }, [quincena.year, quincena.month, quincena.num]);
   useEffect(() => { setPagIncidencias(1); }, [filtroJustificada, quincena.year, quincena.month, quincena.num, busquedaIncidencias]);
@@ -420,11 +473,61 @@ export const MiAreaPage = () => {
     <div style={{ padding: '24px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
         <h1 style={{ margin: 0 }}>{authMe?.is_superuser && deptos.length === 0 ? 'Asistencia y solicitudes' : 'Mi Área'}</h1>
-        {(deptos.length > 0 || authMe?.is_superuser) && (
-          <span style={{ color: '#555', fontSize: '0.9rem', backgroundColor: '#f0f9ff', padding: '4px 12px', borderRadius: '20px', border: '1px solid #bae6fd' }}>
-            {authMe?.is_superuser && deptos.length === 0 ? 'Todos los departamentos' : deptos.map(d => d.nombre).join(' · ')}
-          </span>
-        )}
+        {(deptos.length > 0 || authMe?.is_superuser) &&
+          (authMe?.is_superuser ? (
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                color: '#555',
+                fontSize: '0.9rem',
+                backgroundColor: '#f0f9ff',
+                padding: '6px 14px',
+                borderRadius: '20px',
+                border: '1px solid #bae6fd',
+                cursor: 'pointer',
+              }}
+            >
+              <span style={{ fontWeight: 600 }}>Área:</span>
+              <select
+                value={areaFiltroAdmin === null ? '' : String(areaFiltroAdmin)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setAreaFiltroAdmin(v === '' ? null : Number(v));
+                }}
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: 8,
+                  border: '1px solid #bae6fd',
+                  backgroundColor: '#fff',
+                  fontSize: '0.9rem',
+                  maxWidth: 340,
+                  cursor: 'pointer',
+                }}
+              >
+                <option value="">Todos los departamentos</option>
+                {listaDeptosCat.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.nombre}{d.empresa?.nombre ? ` (${d.empresa.nombre})` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <span
+              style={{
+                color: '#555',
+                fontSize: '0.9rem',
+                backgroundColor: '#f0f9ff',
+                padding: '4px 12px',
+                borderRadius: '20px',
+                border: '1px solid #bae6fd',
+              }}
+            >
+              {deptos.map((d) => d.nombre).join(' · ')}
+            </span>
+          ))}
       </div>
 
       {/* Pestañas */}
@@ -464,7 +567,7 @@ export const MiAreaPage = () => {
             const q = busquedaPersonal.trim().toLowerCase();
             const personalFiltrado = q
               ? personal.filter(emp => {
-                  const nombreCompleto = `${emp.nombre} ${emp.apellido_paterno || ''} ${emp.apellido_materno || ''}`.toLowerCase();
+                  const nombreCompleto = fmtNombreEmpleado(emp).toLowerCase();
                   const num = (emp.numero_empleado || '').toLowerCase();
                   const email = (emp.email || '').toLowerCase();
                   const tel = (emp.telefono || '').toLowerCase();
@@ -495,7 +598,7 @@ export const MiAreaPage = () => {
                   {personalFiltrado.map(emp => (
                     <tr key={emp.id} style={{ transition: 'background 0.1s' }} onMouseEnter={e => (e.currentTarget.style.background = '#f8f9fa')} onMouseLeave={e => (e.currentTarget.style.background = '')}>
                       <td style={{ ...td, fontWeight: 600, color: '#374151' }}>{emp.numero_empleado}</td>
-                      <td style={td}>{`${emp.nombre} ${emp.apellido_paterno || ''} ${emp.apellido_materno || ''}`.trim()}</td>
+                      <td style={td}>{fmtNombreEmpleado(emp)}</td>
                       <td style={td}>{emp.telefono ? <a href={`tel:${emp.telefono}`} style={{ color: '#0369a1', textDecoration: 'none' }}>{emp.telefono}</a> : <span style={{ color: '#aaa' }}>—</span>}</td>
                       <td style={td}>{emp.email ? <a href={`mailto:${emp.email}`} style={{ color: '#0369a1', textDecoration: 'none' }}>{emp.email}</a> : <span style={{ color: '#aaa' }}>—</span>}</td>
                       <td style={td}>
@@ -1047,7 +1150,7 @@ export const MiAreaPage = () => {
                 <tbody>
                   {solicitudesPrestamos.map((s) => {
                     const empleadoNombre = s.empleado
-                      ? `${s.empleado.nombre} ${s.empleado.apellido_paterno || ''} ${s.empleado.apellido_materno || ''}`.trim()
+                      ? fmtNombreEmpleado(s.empleado)
                       : (empleadosMap[s.empleado_id] || `#${s.empleado_id}`);
                     const montoNum = Number(s.monto || 0);
                     const estadoLabel: Record<string, string> = {
@@ -1165,7 +1268,7 @@ export const MiAreaPage = () => {
             <h2 style={{ marginTop: 0, marginBottom: '12px' }}>Autorizar o rechazar préstamo</h2>
             <p style={{ color: '#555', marginBottom: '6px', fontWeight: 500 }}>
               {modalAprobarPrestamo.empleado
-                ? `${modalAprobarPrestamo.empleado.nombre} ${modalAprobarPrestamo.empleado.apellido_paterno || ''} ${modalAprobarPrestamo.empleado.apellido_materno || ''}`.trim()
+                ? fmtNombreEmpleado(modalAprobarPrestamo.empleado)
                 : (empleadosMap[modalAprobarPrestamo.empleado_id] || `#${modalAprobarPrestamo.empleado_id}`)}
             </p>
             <p style={{ color: '#555', marginBottom: '14px', fontSize: '0.9rem' }}>

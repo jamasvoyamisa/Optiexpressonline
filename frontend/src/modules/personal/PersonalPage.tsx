@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
 import { parseTimestampForMexico } from '../../utils/date';
+import { fmtNombreEmpleado, cmpNombreEmpleado } from '../../utils/format';
 import { useAuth } from '../../hooks/useAuth';
 import { Empleado, EmpleadoCreate, Dispositivo, Asistencia, EmpresaResponse, DepartamentoResponse, PuestoResponse } from '../../types';
 
@@ -52,7 +53,7 @@ const estadoBadge = (estado: string) => {
 
 const inputStyle: React.CSSProperties = {
   width: '100%', height: '38px', padding: '0 12px', border: '1px solid #d1d5db', borderRadius: '6px',
-  fontSize: '0.9rem', lineHeight: '38px', outline: 'none', boxSizing: 'border-box',
+  fontSize: '0.9rem', lineHeight: '38px', outline: 'none', boxSizing: 'border-box', backgroundColor: '#fff',
 };
 
 const labelStyle: React.CSSProperties = {
@@ -153,8 +154,12 @@ function PermisosEspecialesPanel({ emp, onUpdated }: { emp: Empleado; onUpdated:
 export const PersonalPage = () => {
   const { authMe } = useAuth();
   const isAdmin = authMe?.is_superuser === true;
+  const isRH = authMe?.is_rh === true;
+  const canExport = isAdmin || isRH;
   const [mainTab, setMainTab] = useState<'empleados' | 'departamentos' | 'puestos'>('empleados');
   const [empleados, setEmpleados] = useState<Empleado[]>([]);
+  /** Incluye usuarios especiales (p. ej. directores) para asignar gerente de departamento. */
+  const [empleadosCandidatosGerente, setEmpleadosCandidatosGerente] = useState<Empleado[]>([]);
   const [empresas, setEmpresas] = useState<EmpresaResponse[]>([]);
   const [departamentos, setDepartamentos] = useState<DepartamentoResponse[]>([]);
   const [puestos, setPuestos] = useState<PuestoResponse[]>([]);
@@ -184,6 +189,7 @@ export const PersonalPage = () => {
   const [numeroManual, setNumeroManual] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
+  const [importEmpresaId, setImportEmpresaId] = useState<number | ''>('');
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<any>(null);
 
@@ -196,6 +202,9 @@ export const PersonalPage = () => {
   const [showPuestoModal, setShowPuestoModal] = useState(false);
   const [editingPuestoId, setEditingPuestoId] = useState<number | null>(null);
   const [puestoForm, setPuestoForm] = useState({ empresa_id: undefined as number | undefined, departamento_id: undefined as number | undefined, nombre: '', orden: 0, activo: true });
+  const [filtroEmpresaDepto, setFiltroEmpresaDepto] = useState('');
+  const [filtroEstadoDepto, setFiltroEstadoDepto] = useState<'todos' | 'activos' | 'inactivos'>('todos');
+  const [filtroBusquedaDepto, setFiltroBusquedaDepto] = useState('');
   const [filtroEmpresaPuesto, setFiltroEmpresaPuesto] = useState('');
   const [filtroDeptoPuesto, setFiltroDeptoPuesto] = useState('');
 
@@ -224,8 +233,13 @@ export const PersonalPage = () => {
       if (search) params.append('search', search);
       if (filtroEstado) params.append('estado', filtroEstado);
       params.append('limit', '500');
-      const [empRes, devRes, emprsRes, deptosRes, puestosRes, horRes] = await Promise.all([
+      const candidatosParams = new URLSearchParams();
+      candidatosParams.append('limit', '2000');
+      candidatosParams.append('estado', 'activo');
+      candidatosParams.append('incluir_exentos', 'true');
+      const [empRes, empGerRes, devRes, emprsRes, deptosRes, puestosRes, horRes] = await Promise.all([
         api.get(`/personal/empleados?${params.toString()}`),
+        api.get(`/personal/empleados?${candidatosParams.toString()}`),
         api.get('/asistencia/devices'),
         api.get('/personal/empresas?limit=500'),
         api.get('/personal/departamentos?limit=500'),
@@ -233,6 +247,7 @@ export const PersonalPage = () => {
         api.get('/asistencia/horarios?activo=true'),
       ]);
       setEmpleados(empRes.data);
+      setEmpleadosCandidatosGerente(Array.isArray(empGerRes.data) ? empGerRes.data : []);
       setDispositivos(devRes.data);
       setEmpresas(emprsRes.data);
       setDepartamentos(deptosRes.data);
@@ -315,12 +330,37 @@ export const PersonalPage = () => {
     } catch { alert('Error al descargar plantilla'); }
   };
 
+  const exportarEmpleadosXlsx = async () => {
+    try {
+      const params = new URLSearchParams();
+      if (filtroEmpresa) params.append('empresa_id', filtroEmpresa);
+      if (filtroEstado) params.append('estado', filtroEstado);
+      const qs = params.toString();
+      const res = await api.get(`/personal/exportar/empleados${qs ? `?${qs}` : ''}`, { responseType: 'blob' });
+      const cd = res.headers['content-disposition'] as string | undefined;
+      let fname = 'empleados_export.xlsx';
+      if (cd) {
+        const m = cd.match(/filename="?([^";]+)"?/i);
+        if (m) fname = m[1];
+      }
+      const url = window.URL.createObjectURL(new Blob([res.data]));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fname;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch {
+      alert('Error al exportar empleados (solo administradores).');
+    }
+  };
+
   const handleImport = async () => {
-    if (!importFile) return;
+    if (!importFile || !importEmpresaId) return;
     setImporting(true);
     setImportResult(null);
     const fd = new FormData();
     fd.append('file', importFile);
+    fd.append('empresa_id', String(importEmpresaId));
     try {
       const res = await api.post('/personal/importar/xlsx', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       setImportResult(res.data);
@@ -526,7 +566,7 @@ export const PersonalPage = () => {
   };
 
   // ---- Puesto CRUD ----
-  const PUESTOS_RESERVADOS = ['director', 'gerente general', 'rh'];
+  const PUESTOS_RESERVADOS = ['director', 'gerente general', 'rh', 'gerente', 'supervisor'];
   const isPuestoReservado = (nombre: string) => PUESTOS_RESERVADOS.includes((nombre || '').trim().toLowerCase());
 
   const openNewPuesto = () => {
@@ -555,7 +595,7 @@ export const PersonalPage = () => {
     if (!puestoForm.nombre.trim()) { alert('Nombre es obligatorio'); return; }
     if (!editingPuestoId) {
       if (isPuestoReservado(puestoForm.nombre)) {
-        alert('No se puede crear: Director, Gerente General y RH son asignados por el Administrador.');
+        alert('No se puede crear: Director, Gerente General, RH, Gerente y Supervisor son asignados por el Administrador.');
         return;
       }
       if (!puestoForm.empresa_id || !puestoForm.departamento_id) {
@@ -587,7 +627,7 @@ export const PersonalPage = () => {
   };
 
   const togglePuestoActivo = async (p: PuestoResponse) => {
-    if (isPuestoReservado(p.nombre)) { alert('No se puede desactivar: Director, Gerente General y RH son puestos del sistema.'); return; }
+    if (isPuestoReservado(p.nombre)) { alert('No se puede desactivar: Director, Gerente General, RH, Gerente y Supervisor son puestos del sistema.'); return; }
     try {
       await api.put(`/personal/puestos/${p.id}`, { activo: !p.activo });
       loadData();
@@ -598,7 +638,7 @@ export const PersonalPage = () => {
   };
 
   const deletePuesto = async (p: PuestoResponse) => {
-    if (isPuestoReservado(p.nombre)) { alert('No se puede eliminar: Director, Gerente General y RH son puestos del sistema.'); return; }
+    if (isPuestoReservado(p.nombre)) { alert('No se puede eliminar: Director, Gerente General, RH, Gerente y Supervisor son puestos del sistema.'); return; }
     if (!confirm(`¿Eliminar el puesto "${p.nombre}"?`)) return;
     try {
       await api.delete(`/personal/puestos/${p.id}`);
@@ -614,16 +654,30 @@ export const PersonalPage = () => {
     return departamentos.filter(d => d.empresa_id === empresaId && d.activo);
   };
 
-  const empleadosForEmpresa = (empresaId?: number) => {
-    if (!empresaId) return empleados.filter(e => e.estado === 'activo');
-    return empleados.filter(e => e.empresa_id === empresaId && e.estado === 'activo');
+  const directorRelacionadoConEmpresa = (emp: Empleado, empresaId: number) => {
+    const pn = (emp.puesto?.nombre || '').trim().toLowerCase();
+    if (pn !== 'director') return false;
+    if (emp.empresa_id === empresaId) return true;
+    return (emp.empresas_supervisadas_ids || []).includes(empresaId);
   };
 
-  const filteredEmpleados = empleados.filter(e => {
-    if (filtroEmpresa && String(e.empresa_id) !== filtroEmpresa) return false;
-    if (filtroDepto && String(e.departamento_id) !== filtroDepto) return false;
-    return true;
-  });
+  const empleadosParaGerenteDepto = (empresaId: number | undefined) => {
+    const activos = empleadosCandidatosGerente.filter(e => e.estado === 'activo');
+    if (!empresaId) return activos;
+    const dirs = activos.filter(e => directorRelacionadoConEmpresa(e, empresaId));
+    const dirIds = new Set(dirs.map(d => d.id));
+    const rest = activos.filter(e => !dirIds.has(e.id));
+    dirs.sort(cmpNombreEmpleado);
+    return [...dirs, ...rest];
+  };
+
+  const filteredEmpleados = empleados
+    .filter(e => {
+      if (filtroEmpresa && String(e.empresa_id) !== filtroEmpresa) return false;
+      if (filtroDepto && String(e.departamento_id) !== filtroDepto) return false;
+      return true;
+    })
+    .sort(cmpNombreEmpleado);
 
   const loadChecadas = async (empleadoId: number) => {
     setLoadingChecadas(true);
@@ -701,8 +755,18 @@ export const PersonalPage = () => {
     setShowDetalle(true);
   };
 
-  const nombreCompleto = (emp: Empleado) =>
-    `${emp.nombre} ${emp.apellido_paterno || ''} ${emp.apellido_materno || ''}`.trim();
+  const nombreCompleto = (emp: Empleado) => fmtNombreEmpleado(emp);
+
+  /** Jefe directo (empleado.jefe) o, si no hay, gerente del departamento (incluye usuarios especiales). */
+  const nombreJefeInmediato = (emp: Empleado) => {
+    if (emp.jefe) {
+      return fmtNombreEmpleado(emp.jefe);
+    }
+    const desdeApi = emp.departamento?.jefe_nombre?.trim();
+    if (desdeApi) return desdeApi;
+    const d = departamentos.find(x => x.id === emp.departamento_id);
+    return (d?.jefe_nombre && d.jefe_nombre.trim()) || '—';
+  };
 
   if (loading && empleados.length === 0) return <div style={{ padding: '20px' }}>Cargando...</div>;
 
@@ -727,6 +791,19 @@ export const PersonalPage = () => {
       return !isPuestoReservado(p.nombre);
     }
     return false;
+  });
+  const filteredDepartamentos = departamentos.filter(d => {
+    if (filtroEmpresaDepto && d.empresa_id !== Number(filtroEmpresaDepto)) return false;
+    if (filtroEstadoDepto === 'activos' && !d.activo) return false;
+    if (filtroEstadoDepto === 'inactivos' && d.activo) return false;
+    if (filtroBusquedaDepto.trim()) {
+      const q = filtroBusquedaDepto.trim().toLowerCase();
+      const nombre = (d.nombre || '').toLowerCase();
+      const empresa = (d.empresa?.nombre || getEmpresaNombre(d.empresa_id) || '').toLowerCase();
+      const gerente = (d.jefe_nombre || '').toLowerCase();
+      if (!nombre.includes(q) && !empresa.includes(q) && !gerente.includes(q)) return false;
+    }
+    return true;
   });
 
   const mainTabStyle = (active: boolean): React.CSSProperties => ({
@@ -753,11 +830,39 @@ export const PersonalPage = () => {
       {/* ====== TAB: DEPARTAMENTOS ====== */}
       {mainTab === 'departamentos' && (
         <>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-            <p style={{ margin: 0, color: '#555' }}>{departamentos.length} departamento(s) registrado(s)</p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'nowrap', overflowX: 'auto' }}>
+              <p style={{ margin: 0, color: '#555' }}>{filteredDepartamentos.length} departamento(s) registrado(s)</p>
+              <input
+                type="text"
+                value={filtroBusquedaDepto}
+                onChange={e => setFiltroBusquedaDepto(e.target.value)}
+                placeholder="Buscar departamento..."
+                style={{ ...inputStyle, width: '220px' }}
+              />
+              <select
+                value={filtroEmpresaDepto}
+                onChange={e => setFiltroEmpresaDepto(e.target.value)}
+                style={{ ...inputStyle, maxWidth: '220px' }}
+              >
+                <option value="">Todas las empresas</option>
+                {activeEmpresas.map(emp => (
+                  <option key={emp.id} value={String(emp.id)}>{emp.nombre}</option>
+                ))}
+              </select>
+              <select
+                value={filtroEstadoDepto}
+                onChange={e => setFiltroEstadoDepto(e.target.value as 'todos' | 'activos' | 'inactivos')}
+                style={{ ...inputStyle, maxWidth: '160px' }}
+              >
+                <option value="todos">Todos</option>
+                <option value="activos">Activos</option>
+                <option value="inactivos">Inactivos</option>
+              </select>
+            </div>
             <button onClick={openNewDepto} style={btnSuccess}>+ Nuevo Departamento</button>
           </div>
-          {departamentos.length === 0 ? (
+          {filteredDepartamentos.length === 0 ? (
             <p style={{ textAlign: 'center', color: '#888', padding: '40px 0' }}>No hay departamentos registrados.</p>
           ) : (
             <div style={{ overflowX: 'auto' }}>
@@ -770,7 +875,7 @@ export const PersonalPage = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {departamentos.map(d => {
+                  {filteredDepartamentos.map(d => {
                     const count = empleados.filter(e => e.departamento_id === d.id).length;
                     return (
                       <tr key={d.id} style={{ borderBottom: '1px solid #eee' }}>
@@ -808,7 +913,7 @@ export const PersonalPage = () => {
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
               <p style={{ margin: 0, color: '#555' }}>
                 {puestos.filter(p => {
-                  if (filtroEmpresaPuesto && (p.empresa_id !== Number(filtroEmpresaPuesto))) return false;
+                  if (filtroEmpresaPuesto && p.empresa_id != null && (p.empresa_id !== Number(filtroEmpresaPuesto))) return false;
                   if (filtroDeptoPuesto && (p.departamento_id !== Number(filtroDeptoPuesto))) return false;
                   return true;
                 }).length} puesto(s) registrado(s)
@@ -843,7 +948,7 @@ export const PersonalPage = () => {
                 <tbody>
                   {puestos
                     .filter(p => {
-                      if (filtroEmpresaPuesto && (p.empresa_id !== Number(filtroEmpresaPuesto))) return false;
+                      if (filtroEmpresaPuesto && p.empresa_id != null && (p.empresa_id !== Number(filtroEmpresaPuesto))) return false;
                       if (filtroDeptoPuesto && (p.departamento_id !== Number(filtroDeptoPuesto))) return false;
                       return true;
                     })
@@ -901,8 +1006,17 @@ export const PersonalPage = () => {
                 <div style={{ fontSize: '1.4rem', fontWeight: 'bold', color: s.color }}>{s.value}</div>
               </div>
             ))}
-            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-              <button onClick={() => setShowImport(true)} style={{ ...btnSuccess, backgroundColor: '#6366f1' }}>⬆ Importar XLSX</button>
+            <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {canExport && (
+                <>
+                  <button type="button" onClick={exportarEmpleadosXlsx} style={{ ...btnSuccess, backgroundColor: '#0d9488' }}>⬇ Exportar XLSX</button>
+                </>
+              )}
+              {isAdmin && (
+                <>
+                  <button type="button" onClick={() => setShowImport(true)} style={{ ...btnSuccess, backgroundColor: '#6366f1' }}>⬆ Importar XLSX</button>
+                </>
+              )}
               <button onClick={openNewForm} style={btnSuccess}>+ Nuevo Empleado</button>
             </div>
           </div>
@@ -977,7 +1091,7 @@ export const PersonalPage = () => {
                           <td style={{ padding: '11px 14px', color: '#555' }}>{emp.empresa?.nombre || getEmpresaNombre(emp.empresa_id)}</td>
                           <td style={{ padding: '11px 14px', color: '#555' }}>{emp.departamento?.nombre || getDeptoNombre(emp.departamento_id)}</td>
                           <td style={{ padding: '11px 14px', color: '#555' }}>{emp.puesto?.nombre || '-'}</td>
-                          <td style={{ padding: '11px 14px', color: '#555' }}>{emp.jefe ? `${emp.jefe.nombre} ${emp.jefe.apellido_paterno || ''} ${emp.jefe.apellido_materno || ''}`.trim() : '-'}</td>
+                          <td style={{ padding: '11px 14px', color: '#555' }}>{nombreJefeInmediato(emp)}</td>
                           <td style={{ padding: '11px 14px', color: '#555' }}>{emp.telefono || '-'}</td>
                           <td style={{ padding: '11px 14px' }}>{estadoBadge(emp.estado)}</td>
                           <td style={{ padding: '11px 14px' }}>
@@ -1351,10 +1465,13 @@ export const PersonalPage = () => {
             rows: [
               ['Empresa', emp.empresa?.nombre || getEmpresaNombre(emp.empresa_id)],
               ['Departamento', emp.departamento?.nombre || getDeptoNombre(emp.departamento_id)],
+              ['Jefe inmediato', nombreJefeInmediato(emp)],
               ['Puesto', emp.puesto?.nombre],
               ['Estado', emp.estado],
-              ['Fecha de Ingreso', emp.fecha_ingreso ? new Date(emp.fecha_ingreso).toLocaleDateString('es-MX') : undefined],
+              ['Fecha de ingreso (empresa)', emp.fecha_ingreso ? new Date(emp.fecha_ingreso).toLocaleDateString('es-MX') : undefined],
               ['Fecha de Baja', emp.fecha_baja ? new Date(emp.fecha_baja).toLocaleDateString('es-MX') : undefined],
+              ['Alta en este sistema (expediente)', emp.created_at ? new Date(emp.created_at).toLocaleString('es-MX') : undefined],
+              ['Última modificación del expediente', emp.updated_at ? new Date(emp.updated_at).toLocaleString('es-MX') : undefined],
             ],
           },
         ];
@@ -1457,9 +1574,8 @@ export const PersonalPage = () => {
                       </div>
                     ))}
                   </div>
-                  <div style={{ marginTop: '16px', fontSize: '0.8rem', color: '#aaa' }}>
-                    Creado: {emp.created_at ? new Date(emp.created_at).toLocaleString('es-MX') : '-'}
-                    {emp.updated_at && <> &middot; Actualizado: {new Date(emp.updated_at).toLocaleString('es-MX')}</>}
+                  <div style={{ marginTop: '16px', fontSize: '0.78rem', color: '#6b7280', lineHeight: 1.5 }}>
+                    <strong>Nota:</strong> la fecha de ingreso es la laboral (contrato / nómina). “Alta en este sistema” es cuando se creó el expediente en esta aplicación; las checadas del reloj no deben ser anteriores a ninguna de las dos.
                   </div>
                 </>
               )}
@@ -2008,12 +2124,15 @@ export const PersonalPage = () => {
                   <select style={inputStyle} value={deptoForm.jefe_id ?? ''}
                     onChange={e => setDeptoForm(p => ({ ...p, jefe_id: e.target.value ? Number(e.target.value) : null }))}>
                     <option value="">-- Sin gerente asignado --</option>
-                    {empleadosForEmpresa(deptoForm.empresa_id).map(emp => (
+                    {empleadosParaGerenteDepto(deptoForm.empresa_id).map(emp => (
                       <option key={emp.id} value={emp.id}>
-                        {emp.numero_empleado} - {emp.nombre} {emp.apellido_paterno || ''}
+                        {(deptoForm.empresa_id && directorRelacionadoConEmpresa(emp, deptoForm.empresa_id) ? '★ Director — ' : '')}{emp.numero_empleado} - {emp.nombre} {emp.apellido_paterno || ''} ({getEmpresaNombre(emp.empresa_id)} / {getDeptoNombre(emp.departamento_id)})
                       </option>
                     ))}
                   </select>
+                  <p style={{ margin: '6px 0 0', fontSize: '0.78rem', color: '#6b7280' }}>
+                    Los directores con alcance en esta empresa aparecen primero (★). Puedes asignar gerente de cualquier empresa.
+                  </p>
                 </div>
               </div>
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
@@ -2073,7 +2192,7 @@ export const PersonalPage = () => {
                     onChange={e => setPuestoForm(p => ({ ...p, nombre: e.target.value }))}
                     placeholder="Ej: Operador, Vendedor" required disabled={!!editingPuestoId && isPuestoReservado(puestoForm.nombre)} />
                   {!editingPuestoId && (
-                    <p style={{ fontSize: '0.78rem', color: '#666', margin: '4px 0 0' }}>No se pueden crear: Director, Gerente General, RH</p>
+                    <p style={{ fontSize: '0.78rem', color: '#666', margin: '4px 0 0' }}>No se pueden crear: Director, Gerente General, RH, Gerente y Supervisor</p>
                   )}
                 </div>
                 <div>
@@ -2083,7 +2202,8 @@ export const PersonalPage = () => {
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                   <input type="checkbox" id="puesto-activo" checked={puestoForm.activo}
-                    onChange={e => setPuestoForm(p => ({ ...p, activo: e.target.checked }))} />
+                    onChange={e => setPuestoForm(p => ({ ...p, activo: e.target.checked }))}
+                    disabled={!!editingPuestoId && isPuestoReservado(puestoForm.nombre)} />
                   <label htmlFor="puesto-activo" style={{ cursor: 'pointer', fontSize: '0.9rem' }}>Activo</label>
                 </div>
               </div>
@@ -2097,10 +2217,10 @@ export const PersonalPage = () => {
           </div>
         </div>
       )}
-      {/* ── Modal Importar XLSX ── */}
-      {showImport && (
+      {/* ── Modal Importar XLSX (solo admin) ── */}
+      {isAdmin && showImport && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-          onClick={() => { setShowImport(false); setImportFile(null); setImportResult(null); }}>
+          onClick={() => { setShowImport(false); setImportFile(null); setImportEmpresaId(''); setImportResult(null); }}>
           <div style={{ background: '#fff', borderRadius: 14, padding: 28, minWidth: 420, maxWidth: 600, maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 8px 30px rgba(0,0,0,0.18)' }}
             onClick={e => e.stopPropagation()}>
             <h3 style={{ margin: '0 0 16px', fontSize: '1.15rem' }}>Importar Empleados desde XLSX</h3>
@@ -2109,15 +2229,36 @@ export const PersonalPage = () => {
               ⬇ Descargar Plantilla
             </button>
 
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ display: 'block', fontSize: '0.82rem', color: '#64748b', marginBottom: 4 }}>
+                Empresa destino *
+              </label>
+              <select
+                value={importEmpresaId === '' ? '' : String(importEmpresaId)}
+                onChange={e => { setImportEmpresaId(e.target.value ? Number(e.target.value) : ''); setImportResult(null); }}
+                style={{ width: '100%', padding: '8px 10px', borderRadius: 7, border: '1px solid #cbd5e1' }}
+              >
+                <option value="">Seleccione...</option>
+                {empresas.map(e => (
+                  <option key={e.id} value={e.id}>{e.nombre}</option>
+                ))}
+              </select>
+            </div>
+
             <div style={{ border: '2px dashed #cbd5e1', borderRadius: 10, padding: 20, textAlign: 'center', marginBottom: 16, background: '#f8fafc' }}>
-              <input type="file" accept=".xlsx" onChange={e => { setImportFile(e.target.files?.[0] || null); setImportResult(null); }} />
+              <input
+                type="file"
+                accept=".xlsx"
+                onChange={e => { setImportFile(e.target.files?.[0] || null); setImportResult(null); }}
+                style={{ ...inputStyle, height: 'auto', lineHeight: 'normal', padding: '8px 10px' }}
+              />
               {importFile && <p style={{ margin: '8px 0 0', fontSize: '0.85rem', color: '#475569' }}>{importFile.name}</p>}
             </div>
 
             <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
-              <button onClick={() => { setShowImport(false); setImportFile(null); setImportResult(null); }} style={btnSecondary}>Cerrar</button>
-              <button onClick={handleImport} disabled={!importFile || importing}
-                style={!importFile || importing ? { ...btnSuccess, backgroundColor: '#6366f1', opacity: 0.6, cursor: 'not-allowed' } : { ...btnSuccess, backgroundColor: '#6366f1' }}>
+              <button onClick={() => { setShowImport(false); setImportFile(null); setImportEmpresaId(''); setImportResult(null); }} style={btnSecondary}>Cerrar</button>
+              <button onClick={handleImport} disabled={!importFile || !importEmpresaId || importing}
+                style={!importFile || !importEmpresaId || importing ? { ...btnSuccess, backgroundColor: '#6366f1', opacity: 0.6, cursor: 'not-allowed' } : { ...btnSuccess, backgroundColor: '#6366f1' }}>
                 {importing ? 'Importando...' : 'Importar'}
               </button>
             </div>

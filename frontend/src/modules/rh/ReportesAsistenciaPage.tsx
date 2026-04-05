@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
+import { fmtNombreEmpleado } from '../../utils/format';
 
 interface Empresa { id: number; nombre: string; }
 interface Departamento { id: number; nombre: string; empresa_id: number; }
@@ -298,7 +299,7 @@ export const ReportesAsistenciaPage = () => {
     if (!busqueda) return true;
     const b = busqueda.toLowerCase();
     return (
-      `${d.nombre} ${d.apellido_paterno}`.toLowerCase().includes(b) ||
+      fmtNombreEmpleado(d).toLowerCase().includes(b) ||
       d.numero_empleado.toLowerCase().includes(b) ||
       d.departamento.toLowerCase().includes(b)
     );
@@ -488,7 +489,7 @@ export const ReportesAsistenciaPage = () => {
                       <tr key={r.empleado_id} style={{ borderBottom: '1px solid #f0f0f0' }}>
                         <td style={td}><span style={{ color: '#9ca3af', fontSize: '0.8rem' }}>{r.numero_empleado}</span></td>
                         <td style={td}>
-                          <div style={{ fontWeight: 600 }}>{r.nombre} {r.apellido_paterno}</div>
+                          <div style={{ fontWeight: 600 }}>{fmtNombreEmpleado(r)}</div>
                         </td>
                         <td style={{ ...td, fontSize: '0.8rem', color: '#6b7280' }}>{r.empresa || '—'}</td>
                         <td style={{ ...td, fontSize: '0.8rem', color: '#6b7280' }}>{r.departamento || '—'}</td>
@@ -542,7 +543,7 @@ export const ReportesAsistenciaPage = () => {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
               <div>
                 <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 700 }}>
-                  {detalleEmp.nombre} {detalleEmp.apellido_paterno}
+                  {fmtNombreEmpleado(detalleEmp)}
                 </h3>
                 <div style={{ fontSize: '0.8rem', color: '#6b7280', marginTop: 2 }}>
                   No. {detalleEmp.numero_empleado} · {detalleEmp.departamento || 'Sin depto.'}

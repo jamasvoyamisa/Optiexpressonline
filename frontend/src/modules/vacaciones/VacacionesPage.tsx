@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
+import { toMexicoDateString } from '../../utils/date';
+import { fmtNombreEmpleado } from '../../utils/format';
 import { useAuth } from '../../hooks/useAuth';
 import { SolicitudVacaciones } from '../../types';
 
@@ -87,7 +89,7 @@ const generarDocumento = (sol: SolicitudVacaciones, emp: EmpleadoResumen | null)
   const departamento = emp?.departamento?.nombre ?? '—';
   const puesto = emp?.puesto?.nombre ?? '—';
 
-  const hoyPartes = fmtPartes(new Date().toISOString().slice(0, 10));
+  const hoyPartes = fmtPartes(toMexicoDateString(new Date()));
   const inicioPartes = fmtPartes(sol.fecha_inicio);
   const finPartes = fmtPartes(sol.fecha_fin);
   const ingresoPartes = fmtPartes(emp?.fecha_ingreso);
@@ -286,14 +288,14 @@ const generarDocumento = (sol: SolicitudVacaciones, emp: EmpleadoResumen | null)
 };
 
 const nombreCompleto = (e: EmpleadoResumen | null | undefined) =>
-  e ? [e.nombre, e.apellido_paterno, e.apellido_materno].filter(Boolean).join(' ') : '—';
+  e ? fmtNombreEmpleado(e) : '—';
 
 const nombreJefe = (e: EmpleadoResumen | null | undefined) => {
   if (!e?.jefe) return '—';
-  return [e.jefe.nombre, e.jefe.apellido_paterno, e.jefe.apellido_materno].filter(Boolean).join(' ');
+  return fmtNombreEmpleado(e.jefe);
 };
 
-const PAGE_SIZE = 25;
+const PAGE_SIZE = 30;
 
 const inputStyle: React.CSSProperties = {
   padding: '8px 12px',

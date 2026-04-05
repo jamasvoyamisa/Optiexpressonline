@@ -1,10 +1,11 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
-from typing import List, Optional, Union
-from datetime import datetime, timedelta, date
+from typing import List, Optional, Union, Tuple, Dict, Any
+from datetime import datetime, timedelta, date, timezone
 import calendar
 from . import models, schemas
 from .biometric.sync_service import SyncService
+from .checada_especial_resolver import obtener_checada_especial_vigente
 from app.modules.personal import models as personal_models
 from app.modules.personal import service as personal_service
 
@@ -181,7 +182,7 @@ class AsistenciaService:
         asistencia = models.Asistencia(
             empleado_id=empleado.id,
             dispositivo_id=dispositivo.id,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             tipo=models.TipoChecada.ENTRADA,
             sincronizado=True
         )
@@ -343,7 +344,7 @@ class AsistenciaService:
             models.UsuarioPendienteDispositivo.enviado == False
         ).update(
             {models.UsuarioPendienteDispositivo.enviado: True,
-             models.UsuarioPendienteDispositivo.enviado_at: datetime.utcnow()},
+             models.UsuarioPendienteDispositivo.enviado_at: datetime.now(timezone.utc)},
             synchronize_session=False
         )
         db.commit()
@@ -458,7 +459,7 @@ class AsistenciaService:
         if not pe:
             return False
         pe.status = "completed" if success else "failed"
-        pe.completed_at = datetime.utcnow()
+        pe.completed_at = datetime.now(timezone.utc)
         db.commit()
         return True
 
@@ -590,12 +591,12 @@ class AsistenciaService:
         for asig in activas:
             if asig.horario and (AsistenciaService._dias_set(asig.horario.dias_semana) & nuevos_dias):
                 asig.activo = False
-                asig.fecha_fin = datetime.utcnow()
+                asig.fecha_fin = datetime.now(timezone.utc)
 
         eh = models.EmpleadoHorario(
             empleado_id=empleado_id,
             horario_id=horario_id,
-            fecha_inicio=datetime.utcnow(),
+            fecha_inicio=datetime.now(timezone.utc),
             activo=True,
         )
         db.add(eh)
@@ -646,7 +647,7 @@ class AsistenciaService:
         if asignacion_id:
             query = query.filter(models.EmpleadoHorario.id == asignacion_id)
         updated = query.update(
-            {models.EmpleadoHorario.activo: False, models.EmpleadoHorario.fecha_fin: datetime.utcnow()},
+            {models.EmpleadoHorario.activo: False, models.EmpleadoHorario.fecha_fin: datetime.now(timezone.utc)},
             synchronize_session=False,
         )
         db.commit()
@@ -721,6 +722,369 @@ class AsistenciaService:
             models.DiaFestivo.activo == True,
         ).first() is not None
 
+    @staticmethod
+    def empleados_cubiertos_por_vacacion_general_aplicada(db: Session, fecha: date) -> set[int]:
+        """
+        Empleados que ya tienen aplicada una vacación general cuyo rango [inicio, fin]
+        incluye `fecha`. Evita marcar falta ese día (el descuento de días va por otro flujo).
+        """
+        from app.modules.vacaciones import models as vac_models
+
+        rows = (
+            db.query(vac_models.VacacionGeneralAplicacion.empleado_id)
+            .join(
+                vac_models.VacacionGeneral,
+                vac_models.VacacionGeneral.id == vac_models.VacacionGeneralAplicacion.vacacion_general_id,
+            )
+            .filter(
+                vac_models.VacacionGeneral.activo == True,
+                vac_models.VacacionGeneral.fecha_inicio <= fecha,
+                vac_models.VacacionGeneral.fecha_fin >= fecha,
+            )
+            .distinct()
+            .all()
+        )
+        return {int(r[0]) for r in rows}
+
+    @staticmethod
+    def empleados_cubiertos_por_solicitud_vacaciones_aprobada(db: Session, fecha: date) -> set[int]:
+        """
+        Empleados con solicitud de vacaciones aprobada (jefe o RH) cuyo periodo
+        cubre el día `fecha` (calendario México). Evita generar falta automática.
+        """
+        from app.core.timezone_utils import mexico_date_to_utc_range
+        from app.modules.vacaciones.models import SolicitudVacaciones, EstadoSolicitud
+
+        start_utc, end_utc = mexico_date_to_utc_range(fecha)
+        rows = (
+            db.query(SolicitudVacaciones.empleado_id)
+            .filter(
+                SolicitudVacaciones.estado.in_(
+                    (EstadoSolicitud.APROBADA, EstadoSolicitud.APROBADA_JEFE)
+                ),
+                SolicitudVacaciones.fecha_inicio < end_utc,
+                SolicitudVacaciones.fecha_fin > start_utc,
+            )
+            .distinct()
+            .all()
+        )
+        return {int(r[0]) for r in rows}
+
+    @staticmethod
+    def _checadas_requeridas_dia_horario(
+        db: Session,
+        empleado: personal_models.Empleado,
+        fecha_mex: date,
+    ) -> Tuple[int, str]:
+        """
+        Solo horario / empresa / festivo: misma regla que procesar_dia (sin incapacidad ni vacaciones).
+        """
+        empresa = empleado.empresa
+        trabaja_festivos = bool(getattr(empresa, "trabaja_festivos", False))
+        if AsistenciaService.es_dia_festivo(db, fecha_mex) and not trabaja_festivos:
+            return 0, "festivo"
+
+        wd = fecha_mex.weekday()
+        dia_num = wd + 1
+        dias_laborales_emp = ((empleado.empresa.dias_laborales if empleado.empresa else None) or "lun-sab").strip().lower()
+
+        if wd == 6:
+            if dias_laborales_emp == "lun-dom":
+                return 2, "domingo_laborable"
+            return 0, "domingo"
+
+        eh = (
+            db.query(models.EmpleadoHorario)
+            .filter(
+                models.EmpleadoHorario.empleado_id == empleado.id,
+                models.EmpleadoHorario.activo == True,
+            )
+            .first()
+        )
+        if not eh or not eh.horario or not eh.horario.activo:
+            return 0, "sin_horario"
+
+        horario = eh.horario
+
+        if wd == 5:
+            if not empleado.horario_sabado_id:
+                return 0, "no_sabado"
+            horario_sab = (
+                db.query(models.Horario)
+                .filter(
+                    models.Horario.id == empleado.horario_sabado_id,
+                    models.Horario.activo == True,
+                )
+                .first()
+            )
+            if not horario_sab:
+                return 0, "no_sabado"
+            return 2, "sabado"
+
+        if horario.dias_semana:
+            dias_permitidos = [int(d.strip()) for d in horario.dias_semana.split(",") if d.strip().isdigit()]
+            if dias_permitidos and dia_num not in dias_permitidos:
+                return 0, "no_laborable"
+
+        ce = obtener_checada_especial_vigente(db, empleado.id, fecha_mex)
+        if ce and wd < 5 and ce.checadas_requeridas is not None:
+            return int(ce.checadas_requeridas), "checada_especial"
+        if ce and ce.jornada_reducida_lv and wd < 5:
+            return 2, "jornada_reducida"
+
+        return 4, "entre_semana"
+
+    @staticmethod
+    def contexto_dia_laboral_empleado(
+        db: Session,
+        empleado: personal_models.Empleado,
+        fecha_mex: date,
+    ) -> Dict[str, Any]:
+        """
+        Contexto unificado: incapacidad, vacaciones (solicitud / general), festivo, horario.
+        Usado por portal, listados y debe alinearse con procesar_dia.
+        """
+        from app.core.timezone_utils import mexico_date_to_utc_range
+        from app.modules.incapacidades import service as incapacidad_service
+        from app.modules.incapacidades import models as incap_models
+        from app.modules.vacaciones.models import (
+            SolicitudVacaciones,
+            EstadoSolicitud,
+            VacacionGeneral,
+            VacacionGeneralAplicacion,
+        )
+
+        def _base(checadas_req: int, motivo: str, tipo_dia: str, etiqueta: str) -> Dict[str, Any]:
+            return {
+                "checadas_requeridas": checadas_req,
+                "motivo": motivo,
+                "tipo_dia": tipo_dia,
+                "etiqueta": etiqueta,
+                "requiere_checadas": checadas_req > 0,
+            }
+
+        if incapacidad_service.empleado_tiene_incapacidad_activa(db, empleado.id, fecha_mex):
+            inc = (
+                db.query(incap_models.Incapacidad)
+                .filter(
+                    incap_models.Incapacidad.empleado_id == empleado.id,
+                    incap_models.Incapacidad.estado != incap_models.EstadoIncapacidad.CANCELADA,
+                    incap_models.Incapacidad.fecha_inicio <= fecha_mex,
+                    incap_models.Incapacidad.fecha_fin >= fecha_mex,
+                )
+                .first()
+            )
+            tipo_txt = (
+                inc.tipo.value.replace("_", " ") if inc and inc.tipo else "incapacidad"
+            )
+            return _base(
+                0,
+                "incapacidad",
+                "incapacidad",
+                f"Incapacidad ({tipo_txt})" if inc else "Incapacidad",
+            )
+
+        start_utc, end_utc = mexico_date_to_utc_range(fecha_mex)
+        sol = (
+            db.query(SolicitudVacaciones)
+            .filter(
+                SolicitudVacaciones.empleado_id == empleado.id,
+                SolicitudVacaciones.estado.in_(
+                    (EstadoSolicitud.APROBADA, EstadoSolicitud.APROBADA_JEFE)
+                ),
+                SolicitudVacaciones.fecha_inicio < end_utc,
+                SolicitudVacaciones.fecha_fin > start_utc,
+            )
+            .order_by(SolicitudVacaciones.id.desc())
+            .first()
+        )
+        if sol:
+            estado_txt = "aprobada por RH" if sol.estado == EstadoSolicitud.APROBADA else "aprobada por jefe (pendiente RH)"
+            return _base(
+                0,
+                "vacacion_solicitud",
+                "vacacion_solicitud",
+                f"Vacaciones por solicitud ({estado_txt})",
+            )
+
+        vg_ap = (
+            db.query(VacacionGeneral)
+            .join(
+                VacacionGeneralAplicacion,
+                VacacionGeneralAplicacion.vacacion_general_id == VacacionGeneral.id,
+            )
+            .filter(
+                VacacionGeneralAplicacion.empleado_id == empleado.id,
+                VacacionGeneral.activo == True,
+                VacacionGeneral.fecha_inicio <= fecha_mex,
+                VacacionGeneral.fecha_fin >= fecha_mex,
+            )
+            .first()
+        )
+        if vg_ap:
+            return _base(
+                0,
+                "vacacion_general",
+                "vacacion_general",
+                f"Vacación general: {vg_ap.nombre}",
+            )
+
+        empresa = empleado.empresa
+        trabaja_festivos = bool(getattr(empresa, "trabaja_festivos", False))
+        fest = (
+            db.query(models.DiaFestivo)
+            .filter(
+                models.DiaFestivo.fecha == fecha_mex,
+                models.DiaFestivo.activo == True,
+            )
+            .first()
+        )
+        if fest and not trabaja_festivos:
+            return _base(
+                0,
+                "festivo",
+                "festivo",
+                f"Festivo: {fest.nombre}",
+            )
+
+        n, motivo = AsistenciaService._checadas_requeridas_dia_horario(db, empleado, fecha_mex)
+        etiquetas_horario = {
+            "festivo": "Día festivo",
+            "domingo": "Domingo (no laborable)",
+            "domingo_laborable": "Domingo laborable",
+            "sin_horario": "Sin horario asignado",
+            "no_sabado": "Sin jornada de sábado",
+            "no_laborable": "No laborable (horario)",
+            "checada_especial": "Horario / checada especial",
+            "jornada_reducida": "Jornada reducida",
+            "entre_semana": "Jornada entre semana",
+            "sabado": "Jornada de sábado",
+        }
+        etiqueta = etiquetas_horario.get(motivo, motivo)
+        return _base(n, motivo, motivo, etiqueta)
+
+    @staticmethod
+    def listar_contexto_dias_empleado_rango(
+        db: Session,
+        empleado_id: int,
+        fecha_ini: date,
+        fecha_fin: date,
+    ) -> List[Dict[str, Any]]:
+        emp = (
+            db.query(personal_models.Empleado)
+            .filter(personal_models.Empleado.id == empleado_id)
+            .first()
+        )
+        if not emp:
+            return []
+        out: List[Dict[str, Any]] = []
+        d = fecha_ini
+        while d <= fecha_fin:
+            ctx = AsistenciaService.contexto_dia_laboral_empleado(db, emp, d)
+            row = dict(ctx)
+            row["fecha"] = d.isoformat()
+            out.append(row)
+            d += timedelta(days=1)
+        return out
+
+    @staticmethod
+    def reconciliar_faltas_automaticas_con_contexto(
+        db: Session,
+        fecha_inicio: date,
+        fecha_fin: date,
+    ) -> Dict[str, Any]:
+        """
+        Marca como justificadas las FALTA con origen automático cuando, con las reglas
+        actuales, ese día no requería asistencia (incapacidad, vacación por solicitud,
+        vacación general aplicada, festivo sin laborar).
+        Corrige faltas generadas antes de alinear procesar_dia con esas reglas.
+        """
+        from app.core.timezone_utils import mexico_date_to_utc_range, to_mexico
+
+        motivos_ajuste = frozenset(
+            {
+                "incapacidad",
+                "vacacion_solicitud",
+                "vacacion_general",
+                "festivo",
+            }
+        )
+
+        lo = mexico_date_to_utc_range(fecha_inicio)[0]
+        hi = mexico_date_to_utc_range(fecha_fin)[1]
+
+        incs = (
+            db.query(models.Incidencia)
+            .filter(
+                models.Incidencia.tipo == models.TipoIncidencia.FALTA,
+                models.Incidencia.origen == "automatico",
+                models.Incidencia.justificada == False,
+                models.Incidencia.fecha >= lo,
+                models.Incidencia.fecha < hi,
+            )
+            .all()
+        )
+
+        empleado_ids = {i.empleado_id for i in incs}
+        empleados_map = (
+            {
+                e.id: e
+                for e in db.query(personal_models.Empleado).filter(
+                    personal_models.Empleado.id.in_(empleado_ids)
+                )
+            }
+            if empleado_ids
+            else {}
+        )
+
+        actualizadas = 0
+        omitidas = 0
+        detalle: List[Dict[str, Any]] = []
+
+        for inc in incs:
+            emp = empleados_map.get(inc.empleado_id)
+            if not emp:
+                omitidas += 1
+                continue
+            ts = to_mexico(inc.fecha)
+            if not ts:
+                omitidas += 1
+                continue
+            d_mex = ts.date()
+
+            ctx = AsistenciaService.contexto_dia_laboral_empleado(db, emp, d_mex)
+            if ctx.get("motivo") not in motivos_ajuste:
+                continue
+
+            inc.justificada = True
+            msg = (
+                f"Ajuste sistema: el día correspondía a «{ctx['etiqueta']}»; "
+                "no debía registrarse falta automática."
+            )
+            if inc.comentarios and str(inc.comentarios).strip():
+                inc.comentarios = str(inc.comentarios).strip() + "\n" + msg
+            else:
+                inc.comentarios = msg
+            actualizadas += 1
+            detalle.append(
+                {
+                    "incidencia_id": inc.id,
+                    "empleado_id": inc.empleado_id,
+                    "fecha": d_mex.isoformat(),
+                    "motivo_contexto": ctx["motivo"],
+                }
+            )
+
+        db.commit()
+        return {
+            "fecha_inicio": str(fecha_inicio),
+            "fecha_fin": str(fecha_fin),
+            "revisadas": len(incs),
+            "justificadas": actualizadas,
+            "omitidas_sin_empleado_o_fecha": omitidas,
+            "detalle": detalle[:500],
+        }
+
     # ========== PROCESO DIARIO: FALTAS E INCOMPLETAS ==========
 
     @staticmethod
@@ -737,7 +1101,8 @@ class AsistenciaService:
             except ValueError:
                 raise ValueError("Formato de fecha inválido. Use YYYY-MM-DD.")
         else:
-            fecha = (datetime.utcnow() - timedelta(days=1)).date()
+            from app.core.timezone_utils import hoy_mexico
+            fecha = hoy_mexico() - timedelta(days=1)
 
         from app.core.timezone_utils import mexico_date_to_utc_range, to_mexico
         dia_inicio_utc, dia_fin_utc = mexico_date_to_utc_range(fecha)
@@ -776,6 +1141,9 @@ class AsistenciaService:
             if incapacidad_service.empleado_tiene_incapacidad_activa(db, emp_id, fecha)
         }
 
+        con_vacacion_general = AsistenciaService.empleados_cubiertos_por_vacacion_general_aplicada(db, fecha)
+        con_solicitud_vacaciones = AsistenciaService.empleados_cubiertos_por_solicitud_vacaciones_aprobada(db, fecha)
+
         # Usuarios especiales (exento_incidencias): no generan incidencias automáticas
         exentos = {
             eid for eid, emp in empleados_map.items()
@@ -789,6 +1157,14 @@ class AsistenciaService:
 
             # Si el empleado tiene incapacidad activa ese día → no generar incidencia
             if asig.empleado_id in con_incapacidad:
+                continue
+
+            # Vacación general ya aplicada y el día cae en el rango → no marcar falta/incompleta
+            if asig.empleado_id in con_vacacion_general:
+                continue
+
+            # Solicitud de vacaciones aprobada (jefe o RH) en el periodo → no marcar falta
+            if asig.empleado_id in con_solicitud_vacaciones:
                 continue
 
             # Usuario especial (exento de incidencias) → no generar
@@ -836,8 +1212,24 @@ class AsistenciaService:
                 hora_salida_efectiva = horario.hora_salida
                 tolerancia_efectiva = horario.tolerancia_minutos or 0
 
+            ce_pd = obtener_checada_especial_vigente(db, asig.empleado_id, fecha)
+            if ce_pd:
+                if ce_pd.tolerancia_minutos is not None:
+                    tolerancia_efectiva = ce_pd.tolerancia_minutos
+                if dia_num == 6:
+                    if ce_pd.hora_salida_sabado:
+                        hora_salida_efectiva = ce_pd.hora_salida_sabado
+                    elif ce_pd.hora_salida:
+                        hora_salida_efectiva = ce_pd.hora_salida
+                elif ce_pd.hora_salida:
+                    hora_salida_efectiva = ce_pd.hora_salida
+
             # Sábado y domingo laborable: 2 checadas (entrada + salida, sin comida)
             checadas_requeridas = 2 if dia_num in (6, 7) else 4
+            if ce_pd and 1 <= dia_num <= 5 and ce_pd.checadas_requeridas is not None:
+                checadas_requeridas = int(ce_pd.checadas_requeridas)
+            elif ce_pd and ce_pd.jornada_reducida_lv and 1 <= dia_num <= 5:
+                checadas_requeridas = 2
 
             # Contar checadas del empleado ese día (rango en UTC para fecha en México)
             checadas = db.query(models.Asistencia).filter(
@@ -895,8 +1287,8 @@ class AsistenciaService:
             # Determinar tipo y descripción según checadas
             # FALTA = no se presentó (0 checadas)
             # INCOMPLETA = asistió pero faltan checadas (1, 2 o 3 de 4)
-            if dia_num == 6:
-                # Sábado: solo entrada y salida (2 checadas)
+            if checadas_requeridas == 2:
+                # Solo entrada y salida (sábado, domingo laborable o medio día L-V)
                 if checadas == 0:
                     tipo = models.TipoIncidencia.FALTA
                     descripcion = "No se presentó (sin checadas)"
@@ -1003,3 +1395,172 @@ class AsistenciaService:
     def get_incidencia(db: Session, incidencia_id: int) -> Optional[models.Incidencia]:
         """Obtener una incidencia por ID."""
         return db.query(models.Incidencia).filter(models.Incidencia.id == incidencia_id).first()
+
+    # ========== CHECADAS ESPECIALES ==========
+
+    @staticmethod
+    def listar_checadas_especiales(db: Session) -> List[models.ChecadaEspecial]:
+        return (
+            db.query(models.ChecadaEspecial)
+            .order_by(models.ChecadaEspecial.fecha_inicio.desc())
+            .all()
+        )
+
+    @staticmethod
+    def map_checada_especial_response(ce: models.ChecadaEspecial) -> schemas.ChecadaEspecialResponse:
+        cr = ce.checadas_requeridas
+        if cr is None:
+            cr = 2 if ce.jornada_reducida_lv else 4
+        incl_list: List[int] = []
+        if ce.empresas_incluidas is not None and isinstance(ce.empresas_incluidas, list):
+            incl_list = [int(x) for x in ce.empresas_incluidas]
+        excl_list: List[int] = []
+        if ce.empresas_excluidas and isinstance(ce.empresas_excluidas, list):
+            excl_list = [int(x) for x in ce.empresas_excluidas]
+        fecha_fin_opt = ce.fecha_fin if ce.fecha_fin != ce.fecha_inicio else None
+        a = (ce.alcance or "global").strip().lower()
+        # Reglas antiguas solo JSON: alcance en BD era "global" pero lista de una empresa
+        if ce.empresas_incluidas is not None and isinstance(ce.empresas_incluidas, list):
+            if a == "global" and len(incl_list) == 1 and ce.departamento_id is None:
+                a = "empresa"
+        eid = ce.empresa_id
+        did = ce.departamento_id
+        legacy = ce.empresas_incluidas is None
+        if legacy:
+            alcance_legacy = ce.alcance
+            empresa_id_legacy = ce.empresa_id
+            departamento_id_legacy = ce.departamento_id
+        else:
+            alcance_legacy = None
+            empresa_id_legacy = None
+            departamento_id_legacy = None
+        return schemas.ChecadaEspecialResponse(
+            id=ce.id,
+            nombre=ce.nombre,
+            fecha=ce.fecha_inicio,
+            fecha_fin=fecha_fin_opt,
+            hora_entrada=ce.hora_entrada,
+            hora_salida=ce.hora_salida,
+            tolerancia_minutos=ce.tolerancia_minutos,
+            checadas_requeridas=cr,
+            alcance=a,
+            empresa_id=eid,
+            departamento_id=did,
+            empresas_incluidas=incl_list,
+            empresas_excluidas=excl_list,
+            notas=ce.notas,
+            activo=bool(ce.activo),
+            created_at=ce.created_at,
+            updated_at=ce.updated_at,
+            alcance_legacy=alcance_legacy,
+            empresa_id_legacy=empresa_id_legacy,
+            departamento_id_legacy=departamento_id_legacy,
+        )
+
+    @staticmethod
+    def _sync_checada_especial_incluidas(ce: models.ChecadaEspecial) -> None:
+        """Alinea empresas_incluidas (JSON) con alcance / empresa_id / departamento_id."""
+        a = (ce.alcance or "global").strip().lower()
+        if a == "departamento":
+            ce.empresas_incluidas = None
+        elif a == "global":
+            ce.empresas_incluidas = []
+        elif a == "empresa":
+            if ce.empresa_id is not None:
+                ce.empresas_incluidas = [ce.empresa_id]
+            else:
+                ce.empresas_incluidas = []
+
+    @staticmethod
+    def crear_checada_especial(db: Session, data: schemas.ChecadaEspecialCreate) -> models.ChecadaEspecial:
+        a = data.alcance
+        if a == "empresa" and not data.empresa_id:
+            raise ValueError("empresa_id es obligatorio cuando el alcance es empresa")
+        if a == "departamento" and not data.departamento_id:
+            raise ValueError("departamento_id es obligatorio cuando el alcance es departamento")
+        jornada = data.checadas_requeridas == 2
+        excl = list(data.empresas_excluidas or [])
+        if a == "global":
+            alc = "global"
+            eid = None
+            did = None
+            incl: Optional[List[int]] = []
+        elif a == "empresa":
+            alc = "empresa"
+            eid = data.empresa_id
+            did = None
+            incl = [data.empresa_id] if data.empresa_id else []
+        else:
+            alc = "departamento"
+            eid = None
+            did = data.departamento_id
+            incl = None
+        ce = models.ChecadaEspecial(
+            nombre=data.nombre.strip(),
+            notas=data.notas,
+            activo=data.activo if data.activo is not None else True,
+            fecha_inicio=data.fecha,
+            fecha_fin=data.fecha,
+            alcance=alc,
+            empresa_id=eid,
+            departamento_id=did,
+            hora_entrada=data.hora_entrada,
+            hora_salida=data.hora_salida,
+            hora_entrada_sabado=None,
+            hora_salida_sabado=None,
+            tolerancia_minutos=data.tolerancia_minutos,
+            jornada_reducida_lv=jornada,
+            checadas_requeridas=data.checadas_requeridas,
+            empresas_incluidas=incl,
+            empresas_excluidas=excl,
+        )
+        db.add(ce)
+        db.commit()
+        db.refresh(ce)
+        return ce
+
+    @staticmethod
+    def actualizar_checada_especial(
+        db: Session, checada_id: int, data: schemas.ChecadaEspecialUpdate
+    ) -> Optional[models.ChecadaEspecial]:
+        ce = db.query(models.ChecadaEspecial).filter(models.ChecadaEspecial.id == checada_id).first()
+        if not ce:
+            return None
+        payload = data.model_dump(exclude_unset=True)
+        if "fecha" in payload and payload["fecha"] is not None:
+            fi = payload["fecha"]
+            ce.fecha_inicio = fi
+            ce.fecha_fin = fi
+            del payload["fecha"]
+        if "checadas_requeridas" in payload and payload["checadas_requeridas"] is not None:
+            ce.jornada_reducida_lv = payload["checadas_requeridas"] == 2
+        for k, v in payload.items():
+            if hasattr(ce, k):
+                setattr(ce, k, v)
+        if "alcance" in payload:
+            new_a = (ce.alcance or "global").strip().lower()
+            if new_a == "global":
+                ce.empresa_id = None
+                ce.departamento_id = None
+            elif new_a == "empresa":
+                ce.departamento_id = None
+            elif new_a == "departamento":
+                ce.empresa_id = None
+        new_a = (ce.alcance or "global").strip().lower()
+        if new_a == "empresa" and ce.empresa_id is None:
+            raise ValueError("empresa_id es obligatorio cuando el alcance es empresa")
+        if new_a == "departamento" and ce.departamento_id is None:
+            raise ValueError("departamento_id es obligatorio cuando el alcance es departamento")
+        AsistenciaService._sync_checada_especial_incluidas(ce)
+        db.commit()
+        db.refresh(ce)
+        return ce
+
+    @staticmethod
+    def eliminar_checada_especial(db: Session, checada_id: int) -> bool:
+        ce = db.query(models.ChecadaEspecial).filter(models.ChecadaEspecial.id == checada_id).first()
+        if not ce:
+            return False
+        db.delete(ce)
+        db.commit()
+        return True

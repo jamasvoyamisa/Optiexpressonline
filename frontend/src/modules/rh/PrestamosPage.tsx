@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
+import { fmtNombreEmpleado } from '../../utils/format';
 import { useAuth } from '../../hooks/useAuth';
 import { generarDocumentoPrestamo } from '../prestamos/documentoPrestamo';
 
@@ -102,12 +103,15 @@ const formatMonto = (v: string | number) => {
 
 const nombreEmpleado = (e?: Empleado | null) => {
   if (!e) return '—';
-  return `${e.nombre} ${e.apellido_paterno ?? ''}`.trim();
+  return fmtNombreEmpleado(e);
 };
 
 export const PrestamosPage = () => {
   const { authMe } = useAuth();
-  const isRH = authMe?.is_superuser === true || authMe?.is_rh === true;
+  /** Vista completa del módulo (listados, alta RH): admin, RH o Director */
+  const isRH = authMe?.is_superuser === true || authMe?.is_rh === true || authMe?.is_director === true;
+  /** Confirmación en nómina: solo RH o admin (no Director) */
+  const puedeConfirmarNominaRH = authMe?.is_superuser === true || authMe?.is_rh === true;
 
   const [solicitudes, setSolicitudes] = useState<SolicitudPrestamo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -550,7 +554,7 @@ export const PrestamosPage = () => {
                               Registrar depósito
                             </button>
                           )}
-                          {sol.estado === 'depositado' && (isRH || authMe?.is_superuser) && !sol.fecha_confirmacion_rh && (
+                          {sol.estado === 'depositado' && puedeConfirmarNominaRH && !sol.fecha_confirmacion_rh && (
                             <button
                               type="button"
                               onClick={() => {

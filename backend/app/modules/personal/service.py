@@ -1,7 +1,8 @@
 import unicodedata
 import re
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import or_, func
+from sqlalchemy.exc import IntegrityError
 from typing import List, Optional
 from . import models, schemas
 from app.core.security import get_password_hash
@@ -57,7 +58,7 @@ class PersonalService:
     @staticmethod
     def create_empresa(db: Session, empresa: schemas.EmpresaCreate) -> models.Empresa:
         inicio, fin = PersonalService._assign_rango(db)
-        payload = empresa.dict()
+        payload = empresa.model_dump()
         payload["dias_laborales"] = PersonalService._validar_dias_laborales_empresa(payload.get("dias_laborales"))
         db_empresa = models.Empresa(**payload, rango_inicio=inicio, rango_fin=fin)
         db.add(db_empresa)
@@ -81,7 +82,7 @@ class PersonalService:
         db_empresa = db.query(models.Empresa).filter(models.Empresa.id == empresa_id).first()
         if not db_empresa:
             return None
-        update_data = empresa.dict(exclude_unset=True)
+        update_data = empresa.model_dump(exclude_unset=True)
         if "dias_laborales" in update_data:
             update_data["dias_laborales"] = PersonalService._validar_dias_laborales_empresa(update_data.get("dias_laborales"))
         for field, value in update_data.items():
@@ -179,12 +180,44 @@ class PersonalService:
             joinedload(models.Puesto.departamento),
         ).filter(models.Puesto.id == puesto_id).first()
 
-    PUESTOS_RESERVADOS = {"director", "gerente general", "rh"}
+    PUESTOS_RESERVADOS = {"director", "gerente general", "rh", "gerente", "supervisor"}
+    PUESTOS_RESERVADOS_ORDEN = [
+        ("director", 1),
+        ("gerente general", 2),
+        ("rh", 3),
+        ("gerente", 4),
+        ("supervisor", 5),
+    ]
 
     @staticmethod
     def _nombre_reservado(nombre: str) -> bool:
         n = (nombre or "").strip().lower()
         return n in PersonalService.PUESTOS_RESERVADOS
+
+    @staticmethod
+    def ensure_puestos_reservados(db: Session) -> None:
+        """Garantiza la existencia de puestos globales reservados del sistema."""
+        existentes = {
+            (p.nombre or "").strip().lower()
+            for p in db.query(models.Puesto).filter(
+                models.Puesto.empresa_id.is_(None),
+                models.Puesto.departamento_id.is_(None),
+            ).all()
+        }
+        created = False
+        for nombre, orden in PersonalService.PUESTOS_RESERVADOS_ORDEN:
+            if nombre in existentes:
+                continue
+            db.add(models.Puesto(
+                empresa_id=None,
+                departamento_id=None,
+                nombre=nombre.title() if nombre != "rh" else "RH",
+                orden=orden,
+                activo=True,
+            ))
+            created = True
+        if created:
+            db.commit()
 
     @staticmethod
     def _puesto_to_response(p: models.Puesto) -> dict:
@@ -199,7 +232,7 @@ class PersonalService:
     @staticmethod
     def create_puesto(db: Session, data: schemas.PuestoCreate) -> models.Puesto:
         if PersonalService._nombre_reservado(data.nombre):
-            raise ValueError("No se puede crear el puesto: Director, Gerente General y RH son asignados por el Administrador.")
+            raise ValueError("No se puede crear el puesto: Director, Gerente General, RH, Gerente y Supervisor son asignados por el Administrador.")
         # Validar que departamento pertenezca a empresa
         depto = db.query(models.Departamento).filter(
             models.Departamento.id == data.departamento_id,
@@ -235,7 +268,7 @@ class PersonalService:
             if PersonalService._nombre_reservado(p.nombre):
                 pass  # No cambiar nombre de puestos reservados
             elif PersonalService._nombre_reservado(data.nombre):
-                raise ValueError("No se puede usar: Director, Gerente General y RH son asignados por el Administrador.")
+                raise ValueError("No se puede usar: Director, Gerente General, RH, Gerente y Supervisor son asignados por el Administrador.")
             else:
                 # Unicidad dentro del mismo empresa+departamento (o global si ambos null)
                 q = db.query(models.Puesto).filter(
@@ -258,6 +291,10 @@ class PersonalService:
         if data.orden is not None:
             p.orden = data.orden
         if data.activo is not None:
+            if PersonalService._nombre_reservado(p.nombre) and not data.activo:
+                raise ValueError(
+                    "No se puede desactivar: Director, Gerente General, RH, Gerente y Supervisor son puestos del sistema."
+                )
             p.activo = data.activo
         db.commit()
         db.refresh(p)
@@ -269,7 +306,7 @@ class PersonalService:
         if not p:
             return False
         if PersonalService._nombre_reservado(p.nombre):
-            raise ValueError("No se puede eliminar: Director, Gerente General y RH son puestos del sistema.")
+            raise ValueError("No se puede eliminar: Director, Gerente General, RH, Gerente y Supervisor son puestos del sistema.")
         count = db.query(models.Empleado).filter(models.Empleado.puesto_id == puesto_id).count()
         if count > 0:
             raise ValueError(f"No se puede eliminar: hay {count} empleado(s) con este puesto. Reasígnelos primero.")
@@ -330,6 +367,20 @@ class PersonalService:
     # ========== EMPLEADOS ==========
     
     @staticmethod
+    def _next_pin_global(db: Session) -> str:
+        """Siguiente pin numérico global disponible (fallback)."""
+        nums = [
+            int(p.pin_checador)
+            for p in db.query(models.Empleado.pin_checador)
+            .filter(models.Empleado.pin_checador.isnot(None))
+            .all()
+            if p.pin_checador and str(p.pin_checador).isdigit()
+        ]
+        if not nums:
+            return "1"
+        return str(max(nums) + 1)
+
+    @staticmethod
     def _next_pin_checador(db: Session, empresa_id: int) -> str:
         """Devuelve el siguiente pin_checador disponible dentro del rango de la empresa."""
         empresa = db.query(models.Empresa).filter(models.Empresa.id == empresa_id).first()
@@ -372,7 +423,6 @@ class PersonalService:
         if empleado.empresa_id:
             pin = PersonalService._next_pin_checador(db, empleado.empresa_id)
         data["pin_checador"] = pin  # puede ser None si no hay empresa (se actualiza post-insert)
-        db_empleado = models.Empleado(**data)
         # Contraseña para acceso al sistema
         rfc_default = (empleado.rfc or '').strip()[:8]
         password_plain = (
@@ -380,24 +430,44 @@ class PersonalService:
             else rfc_default if rfc_default
             else empleado.numero_empleado
         )
-        db_empleado.password_hash = get_password_hash(password_plain)
-        db.add(db_empleado)
-        db.commit()
+
+        db_empleado = None
+        for intento in range(2):
+            db_empleado = models.Empleado(**data)
+            db_empleado.password_hash = get_password_hash(password_plain)
+            db.add(db_empleado)
+            try:
+                db.commit()
+                break
+            except IntegrityError as e:
+                db.rollback()
+                msg = str(getattr(e, "orig", e)).lower()
+                # Si colisiona el pin, reintenta sin pin para usar fallback global.
+                if "pin_checador" in msg and intento == 0:
+                    data["pin_checador"] = None
+                    continue
+                raise
+
         db.refresh(db_empleado)
         # Si no se pudo asignar pin_checador (sin empresa/rango), usar el id
         if not db_empleado.pin_checador:
-            db_empleado.pin_checador = str(db_empleado.id)
-            db.commit()
+            db_empleado.pin_checador = PersonalService._next_pin_global(db)
+            try:
+                db.commit()
+            except IntegrityError:
+                db.rollback()
+                db_empleado.pin_checador = PersonalService._next_pin_global(db)
+                db.commit()
             db.refresh(db_empleado)
         # Asignar horario L-V si se proporcionó
         if empleado.horario_id:
             try:
                 from app.modules.asistencia import models as asist_models
-                from datetime import datetime
+                from datetime import datetime, timezone
                 eh = asist_models.EmpleadoHorario(
                     empleado_id=db_empleado.id,
                     horario_id=empleado.horario_id,
-                    fecha_inicio=datetime.utcnow(),
+                    fecha_inicio=datetime.now(timezone.utc),
                     activo=True,
                 )
                 db.add(eh)
@@ -409,6 +479,60 @@ class PersonalService:
             db_empleado.horario_sabado_id = empleado.horario_sabado_id
             db.commit()
         return db_empleado
+
+    @staticmethod
+    def _next_numero_especial(db: Session, empresa_id: int) -> str:
+        """Genera número interno para usuario especial (no capturado en formulario)."""
+        prefix = f"ESP-{empresa_id}-"
+        existentes = db.query(models.Empleado.numero_empleado).filter(
+            models.Empleado.empresa_id == empresa_id,
+            models.Empleado.numero_empleado.like(f"{prefix}%"),
+        ).all()
+        nums = []
+        for (num,) in existentes:
+            if not num:
+                continue
+            suf = str(num).replace(prefix, "", 1)
+            if suf.isdigit():
+                nums.append(int(suf))
+        siguiente = (max(nums) + 1) if nums else 1
+        return f"{prefix}{str(siguiente).zfill(4)}"
+
+    @staticmethod
+    def _puesto_es_director(db: Session, puesto_id: int) -> bool:
+        p = db.query(models.Puesto).filter(models.Puesto.id == puesto_id).first()
+        return bool(p and (p.nombre or "").strip().lower() == "director")
+
+    @staticmethod
+    def create_usuario_especial(db: Session, data: schemas.UsuarioEspecialCreate) -> models.Empleado:
+        """Crea un usuario especial exento de incidencias con alta simplificada."""
+        numero = PersonalService._next_numero_especial(db, data.empresa_id)
+        empleado = schemas.EmpleadoCreate(
+            numero_empleado=numero,
+            nombre=data.nombre.strip(),
+            apellido_paterno=(data.apellido_paterno or "").strip() or None,
+            apellido_materno=(data.apellido_materno or "").strip() or None,
+            email=data.email,
+            telefono=(data.telefono or "").strip() or None,
+            username=(data.username or "").strip() or None,
+            empresa_id=data.empresa_id,
+            departamento_id=data.departamento_id,
+            puesto_id=data.puesto_id,
+            exento_incidencias=True,
+            # Regla: usuarios especiales no deben registrar checadas.
+            puede_checar_remoto=False,
+            fecha_ingreso=data.fecha_ingreso,
+            password=(data.password or "").strip() or None,
+        )
+        db_empleado = PersonalService.create_empleado(db, empleado)
+        if PersonalService._puesto_es_director(db, data.puesto_id):
+            ids = set(data.empresas_supervision_ids or [data.empresa_id])
+            ids.add(data.empresa_id)
+            for eid in ids:
+                db.add(models.EmpleadoSupervisionEmpresa(empleado_id=db_empleado.id, empresa_id=eid))
+            db.commit()
+            db.refresh(db_empleado)
+        return db_empleado
     
     @staticmethod
     def get_empleado(db: Session, empleado_id: int) -> Optional[models.Empleado]:
@@ -416,8 +540,11 @@ class PersonalService:
         return db.query(models.Empleado).options(
             joinedload(models.Empleado.empresa),
             joinedload(models.Empleado.departamento_rel).joinedload(models.Departamento.empresa),
+            joinedload(models.Empleado.departamento_rel).joinedload(models.Departamento.jefe),
             joinedload(models.Empleado.puesto_rel),
+            joinedload(models.Empleado.jefe).joinedload(models.Empleado.puesto_rel),
             joinedload(models.Empleado.horarios_asignados),
+            selectinload(models.Empleado.supervision_empresas_rel),
         ).filter(models.Empleado.id == empleado_id).first()
     
     @staticmethod
@@ -437,7 +564,34 @@ class PersonalService:
     def suggest_username(db: Session, nombre: str, apellido_paterno: str, exclude_id: int = None) -> str:
         """Genera y devuelve un username único."""
         return _generate_unique_username(db, nombre, apellido_paterno, exclude_id)
-    
+
+    @staticmethod
+    def empleados_operativos_dashboard_query(
+        db: Session,
+        solo_mi_area: bool = False,
+        depto_ids: Optional[List[int]] = None,
+    ):
+        """
+        Misma base que el listado de personal (operativos): con empresa, no exentos
+        (coalesce), sin cuentas Administrador/Superuser. Opcionalmente por departamento(es).
+        """
+        admin_rol_ids = [
+            r.id for r in db.query(models.Rol.id).filter(
+                models.Rol.nombre.in_(("Administrador", "Superuser"))
+            ).all()
+        ]
+        q = db.query(models.Empleado).filter(
+            models.Empleado.empresa_id.isnot(None),
+            func.coalesce(models.Empleado.exento_incidencias, False) == False,
+        )
+        if admin_rol_ids:
+            q = q.filter(
+                or_(models.Empleado.rol_id.is_(None), models.Empleado.rol_id.notin_(admin_rol_ids))
+            )
+        if solo_mi_area:
+            q = q.filter(models.Empleado.departamento_id.in_(depto_ids or []))
+        return q
+
     @staticmethod
     def get_empleados(
         db: Session,
@@ -449,8 +603,13 @@ class PersonalService:
         departamento_id: Optional[int] = None,
         search: Optional[str] = None,
         exento_incidencias: Optional[bool] = None,
+        incluir_exentos: bool = False,
     ) -> List[models.Empleado]:
-        """Listar empleados con filtros. exento_incidencias filtra usuarios especiales."""
+        """Listar empleados con filtros.
+        Por defecto no incluye usuarios especiales (exento_incidencias=True); use incluir_exentos=True
+        para listados que deben incluirlos (p. ej. candidatos a gerente de departamento).
+        exento_incidencias=true lista solo especiales; false solo no especiales.
+        """
         from sqlalchemy import or_
 
         # IDs de roles de administrador/superuser (solo excluir cuando no filtramos por exento)
@@ -462,20 +621,33 @@ class PersonalService:
                 ).all()
             ]
 
+        # selectinload(jefe): evita que joinedload+jefe falle o quede vacío con limit/offset (lista grande).
+        # Incluye jefe aunque sea usuario especial (exento_incidencias) o rol administrativo.
         query = db.query(models.Empleado).options(
             joinedload(models.Empleado.empresa),
-            joinedload(models.Empleado.departamento_rel),
+            joinedload(models.Empleado.departamento_rel).joinedload(models.Departamento.jefe),
             joinedload(models.Empleado.puesto_rel),
-            joinedload(models.Empleado.jefe),
+            selectinload(models.Empleado.jefe).selectinload(models.Empleado.puesto_rel),
             joinedload(models.Empleado.horarios_asignados),
+            selectinload(models.Empleado.supervision_empresas_rel),
         )
 
         # Excluir siempre cuentas de sistema (sin empresa asignada)
         query = query.filter(models.Empleado.empresa_id.isnot(None))
 
+        def _no_es_usuario_especial():
+            """Excluye solo quienes tienen exento_incidencias=True (compat. MySQL 0/1/NULL)."""
+            return func.coalesce(models.Empleado.exento_incidencias, False) == False
+
         if exento_incidencias is not None:
-            query = query.filter(models.Empleado.exento_incidencias == exento_incidencias)
-        elif admin_rol_ids:
+            if exento_incidencias is True:
+                query = query.filter(models.Empleado.exento_incidencias == True)
+            else:
+                query = query.filter(_no_es_usuario_especial())
+        elif not incluir_exentos:
+            query = query.filter(_no_es_usuario_especial())
+
+        if exento_incidencias is None and admin_rol_ids:
             query = query.filter(
                 or_(
                     models.Empleado.rol_id.is_(None),
@@ -484,7 +656,20 @@ class PersonalService:
             )
 
         if estado:
-            query = query.filter(models.Empleado.estado == estado)
+            try:
+                est_enum = models.EstadoEmpleado(estado.lower())
+            except ValueError:
+                est_enum = None
+            if est_enum is not None:
+                if est_enum == models.EstadoEmpleado.ACTIVO:
+                    query = query.filter(
+                        or_(
+                            models.Empleado.estado == models.EstadoEmpleado.ACTIVO,
+                            models.Empleado.estado.is_(None),
+                        )
+                    )
+                else:
+                    query = query.filter(models.Empleado.estado == est_enum)
         if rol_id:
             query = query.filter(models.Empleado.rol_id == rol_id)
         if jefe_id:
@@ -501,8 +686,13 @@ class PersonalService:
             )
             query = query.filter(search_filter)
         
+        query = query.order_by(
+            models.Empleado.apellido_paterno.asc(),
+            models.Empleado.apellido_materno.asc(),
+            models.Empleado.nombre.asc(),
+        )
         return query.offset(skip).limit(limit).all()
-    
+
     @staticmethod
     def update_empleado(db: Session, empleado_id: int, empleado: schemas.EmpleadoUpdate) -> Optional[models.Empleado]:
         """Actualizar empleado"""
@@ -516,6 +706,8 @@ class PersonalService:
             if password and str(password).strip():
                 db_empleado.password_hash = get_password_hash(password)
 
+        empresas_supervision_ids = update_data.pop("empresas_supervision_ids", None)
+
         # horario_id y horario_sabado_id se manejan aparte
         horario_id_was_sent = "horario_id" in update_data
         horario_sabado_was_sent = "horario_sabado_id" in update_data
@@ -525,6 +717,27 @@ class PersonalService:
         for field, value in update_data.items():
             if hasattr(db_empleado, field):
                 setattr(db_empleado, field, value)
+
+        db.flush()
+
+        puesto = db.query(models.Puesto).filter(models.Puesto.id == db_empleado.puesto_id).first()
+        puesto_n = (puesto.nombre or "").strip().lower() if puesto else ""
+        if puesto_n != "director":
+            db.query(models.EmpleadoSupervisionEmpresa).filter(
+                models.EmpleadoSupervisionEmpresa.empleado_id == empleado_id
+            ).delete()
+        elif empresas_supervision_ids is not None:
+            ids = set(empresas_supervision_ids)
+            if db_empleado.empresa_id:
+                ids.add(db_empleado.empresa_id)
+            for eid in ids:
+                if not PersonalService.get_empresa(db, eid):
+                    raise ValueError(f"La empresa {eid} no existe")
+            db.query(models.EmpleadoSupervisionEmpresa).filter(
+                models.EmpleadoSupervisionEmpresa.empleado_id == empleado_id
+            ).delete()
+            for eid in ids:
+                db.add(models.EmpleadoSupervisionEmpresa(empleado_id=empleado_id, empresa_id=eid))
 
         from app.modules.asistencia.service import AsistenciaService
 
@@ -541,8 +754,7 @@ class PersonalService:
             db_empleado.horario_sabado_id = horario_sabado_id
 
         db.commit()
-        db.refresh(db_empleado)
-        return db_empleado
+        return PersonalService.get_empleado(db, empleado_id)
     
     @staticmethod
     def delete_empleado(db: Session, empleado_id: int) -> bool:
@@ -552,8 +764,8 @@ class PersonalService:
             return False
         
         db_empleado.estado = models.EstadoEmpleado.BAJA
-        from datetime import datetime
-        db_empleado.fecha_baja = datetime.utcnow()
+        from datetime import datetime, timezone
+        db_empleado.fecha_baja = datetime.now(timezone.utc)
 
         from app.modules.asistencia import models as asist_models
         enviados = db.query(asist_models.UsuarioPendienteDispositivo).filter(
@@ -579,7 +791,16 @@ class PersonalService:
     @staticmethod
     def get_subordinados(db: Session, jefe_id: int) -> List[models.Empleado]:
         """Obtener subordinados de un jefe"""
-        return db.query(models.Empleado).filter(models.Empleado.jefe_id == jefe_id).all()
+        return (
+            db.query(models.Empleado)
+            .filter(models.Empleado.jefe_id == jefe_id)
+            .order_by(
+                models.Empleado.apellido_paterno.asc(),
+                models.Empleado.apellido_materno.asc(),
+                models.Empleado.nombre.asc(),
+            )
+            .all()
+        )
 
     # ========== GERENTES Y SUPERVISORES DE ÁREA ==========
     # Los gerentes (área a su cargo) y los supervisores en esa área pueden aprobar vacaciones y justificar incidencias.

@@ -1,4 +1,5 @@
 from datetime import datetime as dt
+from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
@@ -126,10 +127,15 @@ def get_solicitudes(
     empleado_id: Optional[int] = None,
     estado: Optional[str] = None,
     jefe_id: Optional[int] = None,
+    departamento_id: Optional[int] = Query(
+        None,
+        description="Solo superusuario: filtrar por departamento del solicitante.",
+    ),
     current: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db)
 ):
     """Listar solicitudes de vacaciones"""
+    dept_filtro = departamento_id if current.get("is_superuser") else None
     result = service.VacacionesService.get_solicitudes(
         db,
         skip=skip,
@@ -138,6 +144,7 @@ def get_solicitudes(
         estado=estado,
         jefe_id=jefe_id,
         include_canceladas=bool(current.get("is_superuser")),
+        departamento_id=dept_filtro,
     )
     for s in result:
         _set_jefe_aprobador_nombre(s)
@@ -364,6 +371,8 @@ def get_mi_balance(
         dias_tomados=data["dias_tomados"],
         dias_pendientes=data["dias_pendientes"],
         fecha_limite_goce=data.get("fecha_limite_goce"),
+        dias_deuda_vacaciones_ley=data.get("dias_deuda_vacaciones_ley", Decimal("0")),
+        saldo_dias_lft_neto=data["saldo_dias_lft_neto"],
     )
 
 
@@ -385,6 +394,8 @@ def get_balance(
         dias_tomados=data["dias_tomados"],
         dias_pendientes=data["dias_pendientes"],
         fecha_limite_goce=data.get("fecha_limite_goce"),
+        dias_deuda_vacaciones_ley=data.get("dias_deuda_vacaciones_ley", Decimal("0")),
+        saldo_dias_lft_neto=data["saldo_dias_lft_neto"],
     )
 
 
@@ -425,7 +436,17 @@ def listar_vacaciones_generales(
     current: dict = Depends(get_current_empleado_with_rol),
 ):
     _require_superuser_vacaciones_generales(current)
-    return service.VacacionesService.listar_vacaciones_generales(db, solo_activos=solo_activos)
+    items = service.VacacionesService.listar_vacaciones_generales(db, solo_activos=solo_activos)
+    ids = [v.id for v in items]
+    counts = service.VacacionesService.conteos_aplicaciones_vacaciones_generales(db, ids)
+    out: List[schemas.VacacionGeneralResponse] = []
+    for v in items:
+        n = counts.get(v.id, 0)
+        row = schemas.VacacionGeneralResponse.model_validate(v, from_attributes=True)
+        out.append(
+            row.model_copy(update={"aplicado": n > 0, "empleados_aplicados": n})
+        )
+    return out
 
 
 @router.post("/generales", response_model=schemas.VacacionGeneralResponse, status_code=status.HTTP_201_CREATED)

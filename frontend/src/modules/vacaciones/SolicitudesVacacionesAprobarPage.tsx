@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
+import { fmtNombreEmpleado } from '../../utils/format';
 import { useAuth } from '../../hooks/useAuth';
 import type { SolicitudVacaciones } from '../../types';
 
@@ -207,7 +208,7 @@ export const SolicitudesVacacionesAprobarPage = () => {
   };
 
   const nombreEmp = (emp?: EmpleadoResumen) =>
-    emp ? `${emp.nombre} ${emp.apellido_paterno || ''}`.trim() : '—';
+    emp ? fmtNombreEmpleado(emp) : '—';
 
   const rolLabel = () => {
     if (authMe?.is_superuser) return 'Administrador';

@@ -1,12 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 from app.core.database import get_db
 from app.core.config import settings
 from app.core.security import get_current_user
 from app.core.deps import get_current_empleado_with_rol
 from app.modules.personal import models as personal_models
+from app.modules.personal.service import PersonalService
 from . import schemas, service, models
 from .biometric.sync_service import SyncService
 
@@ -547,9 +548,8 @@ def agent_mark_delete_done(
     ).first()
     if not pd:
         raise HTTPException(status_code=404, detail="No encontrado o ya procesado")
-    from datetime import datetime
     pd.procesado = True
-    pd.procesado_at = datetime.utcnow()
+    pd.procesado_at = datetime.now(timezone.utc)
     db.commit()
     return {"ok": True}
 
@@ -570,8 +570,8 @@ def get_dashboard_stats(
     puede_ver = current_extra.get("puede_ver_dashboard") or current_extra.get("puede_ver_mi_area")
     if not puede_ver:
         raise HTTPException(status_code=403, detail="No tienes permiso para ver el dashboard")
-    from datetime import date, timedelta
-    from app.core.timezone_utils import mexico_date_to_utc_range
+    from sqlalchemy import or_
+    from app.core.timezone_utils import mexico_date_to_utc_range, hoy_mexico
     from app.modules.personal import models as pm
 
     depto_ids = current_extra.get("departamento_ids_que_administro") or []
@@ -588,21 +588,18 @@ def get_dashboard_stats(
     else:
         solo_mi_area = current_extra.get("puede_ver_mi_area") and not tiene_vista_general and depto_ids
 
-    hoy = date.today()
+    hoy = hoy_mexico()
     inicio_mes = hoy.replace(day=1)
     fin_mes = inicio_mes + timedelta(days=32)
     fin_mes = fin_mes.replace(day=1) - timedelta(days=1)
 
-    # Base query empleados (excluir cuentas de sistema y exentos de incidencias)
-    q_empleados = db.query(pm.Empleado).filter(
-        pm.Empleado.empresa_id.isnot(None),
-        pm.Empleado.exento_incidencias == False,
-    )
-    if solo_mi_area:
-        q_empleados = q_empleados.filter(pm.Empleado.departamento_id.in_(depto_ids))
+    # Misma base que listado de personal: empresa asignada, no exentos (coalesce), sin Admin/Superuser
+    q_empleados = PersonalService.empleados_operativos_dashboard_query(db, solo_mi_area, depto_ids)
 
     total_empleados = q_empleados.count()
-    empleados_activos = q_empleados.filter(pm.Empleado.estado == pm.EstadoEmpleado.ACTIVO).count()
+    empleados_activos = q_empleados.filter(
+        or_(pm.Empleado.estado == pm.EstadoEmpleado.ACTIVO, pm.Empleado.estado.is_(None))
+    ).count()
     empleados_inactivos = q_empleados.filter(pm.Empleado.estado == pm.EstadoEmpleado.INACTIVO).count()
     empleados_baja = q_empleados.filter(pm.Empleado.estado == pm.EstadoEmpleado.BAJA).count()
 
@@ -622,10 +619,10 @@ def get_dashboard_stats(
         total_empresas = db.query(pm.Empresa).filter(pm.Empresa.activo == True).count()
         total_departamentos = db.query(pm.Departamento).filter(pm.Departamento.activo == True).count()
 
-    # Empleados del área para filtrar checadas e incidencias
+    # Empleados del área para filtrar checadas e incidencias (misma base que KPIs)
     empleado_ids_area = None
     if solo_mi_area:
-        empleado_ids_area = [e.id for e in db.query(pm.Empleado.id).filter(pm.Empleado.departamento_id.in_(depto_ids)).all()]
+        empleado_ids_area = [r[0] for r in q_empleados.with_entities(pm.Empleado.id).all()]
 
     dt_inicio, _ = mexico_date_to_utc_range(inicio_mes)
     _, dt_fin = mexico_date_to_utc_range(fin_mes + timedelta(days=1))
@@ -685,18 +682,16 @@ def get_dashboard_stats(
     asistencia_grafica: dict = {}
     tipo_g = (tipo_grafica or "global").lower()
 
+    activos_operativos_ids = {
+        r[0]
+        for r in q_empleados.filter(
+            or_(pm.Empleado.estado == pm.EstadoEmpleado.ACTIVO, pm.Empleado.estado.is_(None))
+        ).with_entities(pm.Empleado.id).all()
+    }
+
     if tipo_g == "global":
-        if empleado_ids_area is not None:
-            activos_ids = {e.id for e in db.query(pm.Empleado.id).filter(
-                pm.Empleado.departamento_id.in_(depto_ids),
-                pm.Empleado.estado == pm.EstadoEmpleado.ACTIVO,
-            ).all()}
-        else:
-            activos_ids = {e.id for e in db.query(pm.Empleado.id).filter(
-                pm.Empleado.estado == pm.EstadoEmpleado.ACTIVO,
-            ).all()}
-        personal_activos = len(activos_ids)
-        con_asistencia = len(empleados_con_checada_hoy & activos_ids)
+        personal_activos = len(activos_operativos_ids)
+        con_asistencia = len(empleados_con_checada_hoy & activos_operativos_ids)
         asistencia_grafica = {
             "tipo": "global",
             "items": [{"label": "Personal", "personal": personal_activos, "con_asistencia": con_asistencia}],
@@ -709,12 +704,10 @@ def get_dashboard_stats(
             empresas = [e for e in empresas if e.id in empresa_ids_scope]
         items = []
         for emp in empresas:
-            emp_ids = [e.id for e in db.query(pm.Empleado.id).filter(
+            emp_ids = [r[0] for r in db.query(pm.Empleado.id).filter(
                 pm.Empleado.empresa_id == emp.id,
-                pm.Empleado.estado == pm.EstadoEmpleado.ACTIVO,
+                pm.Empleado.id.in_(activos_operativos_ids),
             ).all()]
-            if empleado_ids_area is not None:
-                emp_ids = [e for e in emp_ids if e in empleado_ids_area]
             personal = len(emp_ids)
             con_asistencia = len(empleados_con_checada_hoy & set(emp_ids))
             items.append({"label": emp.nombre, "personal": personal, "con_asistencia": con_asistencia})
@@ -725,9 +718,9 @@ def get_dashboard_stats(
             deptos = [d for d in deptos if d.id in depto_ids]
         items = []
         for dept in deptos:
-            emp_ids = [e.id for e in db.query(pm.Empleado.id).filter(
+            emp_ids = [r[0] for r in db.query(pm.Empleado.id).filter(
                 pm.Empleado.departamento_id == dept.id,
-                pm.Empleado.estado == pm.EstadoEmpleado.ACTIVO,
+                pm.Empleado.id.in_(activos_operativos_ids),
             ).all()]
             personal = len(emp_ids)
             con_asistencia = len(empleados_con_checada_hoy & set(emp_ids))
@@ -801,6 +794,31 @@ def get_mis_checadas(
         fecha_inicio=fecha_inicio_dt,
         fecha_fin=fecha_fin_dt
     )
+
+
+@router.get("/mis-contexto-dias", response_model=List[schemas.DiaContextoLaboralResponse])
+def get_mis_contexto_dias(
+    fecha_inicio: str = Query(..., description="YYYY-MM-DD (calendario México)"),
+    fecha_fin: str = Query(..., description="YYYY-MM-DD"),
+    current: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Contexto de cada día en el rango: incapacidad, vacación general aplicada, solicitud de vacaciones,
+    festivo o jornada normal (sábado, entre semana, etc.). Alineado con la generación de incidencias.
+    """
+    try:
+        fi = datetime.strptime(fecha_inicio.strip(), "%Y-%m-%d").date()
+        ff = datetime.strptime(fecha_fin.strip(), "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Use fechas YYYY-MM-DD")
+    if ff < fi:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="fecha_fin debe ser >= fecha_inicio")
+    if (ff - fi).days > 95:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Rango máximo 96 días")
+    empleado_id = int(current["user_id"])
+    raw = service.AsistenciaService.listar_contexto_dias_empleado_rango(db, empleado_id, fi, ff)
+    return [schemas.DiaContextoLaboralResponse(**row) for row in raw]
 
 
 @router.post("/cleanup-employees")
@@ -893,6 +911,10 @@ def get_checadas_mi_area(
     fecha_inicio: Optional[str] = None,
     fecha_fin: Optional[str] = None,
     limit: int = Query(2000, ge=1, le=5000),
+    departamento_id: Optional[int] = Query(
+        None,
+        description="Solo superusuario: filtrar por un departamento. Sin parámetro = todos.",
+    ),
     current_extra: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db)
 ):
@@ -900,7 +922,14 @@ def get_checadas_mi_area(
     empleado_id = current_extra["user_id"]
     is_superuser = current_extra.get("is_superuser") is True
 
-    if is_superuser:
+    if is_superuser and departamento_id is not None:
+        empleados = db.query(personal_models.Empleado).filter(
+            personal_models.Empleado.departamento_id == departamento_id
+        ).all()
+        empleado_ids = [e.id for e in empleados]
+        if not empleado_ids:
+            return []
+    elif is_superuser:
         empleado_ids = None
     else:
         from app.modules.personal import service as personal_service
@@ -942,6 +971,10 @@ def get_incidencias_mi_area(
     tipo: Optional[str] = None,
     fecha_inicio: Optional[str] = None,
     fecha_fin: Optional[str] = None,
+    departamento_id: Optional[int] = Query(
+        None,
+        description="Solo superusuario: filtrar por un departamento. Sin parámetro = todas.",
+    ),
     current_extra: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db)
 ):
@@ -953,7 +986,14 @@ def get_incidencias_mi_area(
     is_superuser = current_extra.get("is_superuser") is True
     is_jefe = current_extra.get("is_jefe") is True
 
-    if is_superuser:
+    if is_superuser and departamento_id is not None:
+        empleados = db.query(personal_models.Empleado).filter(
+            personal_models.Empleado.departamento_id == departamento_id
+        ).all()
+        empleado_ids = [e.id for e in empleados]
+        if not empleado_ids:
+            return []
+    elif is_superuser:
         empleado_ids = None
     else:
         # Área que administro: departamentos donde soy jefe (gerente) o donde soy supervisor
@@ -1210,6 +1250,36 @@ def procesar_dia(
     return resultado
 
 
+@router.post(
+    "/incidencias/reconciliar-faltas-contexto",
+    response_model=schemas.ReconciliarFaltasContextoResponse,
+)
+def reconciliar_faltas_contexto(
+    fecha_inicio: str = Query(..., description="YYYY-MM-DD"),
+    fecha_fin: str = Query(..., description="YYYY-MM-DD"),
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db),
+):
+    """
+    Marca como **justificadas** las faltas automáticas en el rango cuando, con las reglas actuales
+    (vacación general aplicada, solicitud aprobada, incapacidad, festivo), ese día no requería asistencia.
+    Solo RH o superadmin.
+    """
+    if not current_extra.get("is_superuser") and not current_extra.get("is_rh"):
+        raise HTTPException(status_code=403, detail="Solo RH o superadmin pueden ejecutar esta acción")
+    try:
+        fi = datetime.strptime(fecha_inicio.strip(), "%Y-%m-%d").date()
+        ff = datetime.strptime(fecha_fin.strip(), "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Use fechas YYYY-MM-DD")
+    if ff < fi:
+        raise HTTPException(status_code=400, detail="fecha_fin debe ser >= fecha_inicio")
+    if (ff - fi).days > 120:
+        raise HTTPException(status_code=400, detail="Rango máximo 121 días")
+    r = service.AsistenciaService.reconciliar_faltas_automaticas_con_contexto(db, fi, ff)
+    return schemas.ReconciliarFaltasContextoResponse(**r)
+
+
 # ========== DÍAS FESTIVOS ==========
 
 @router.get("/festivos", response_model=list[schemas.DiaFestivoResponse])
@@ -1267,9 +1337,9 @@ def delete_dia_festivo(
         raise HTTPException(status_code=404, detail="Festivo no encontrado")
 
 
-@router.post("/festivos/generar/{año}", status_code=status.HTTP_200_OK)
+@router.post("/festivos/generar/{anio}", status_code=status.HTTP_200_OK)
 def generar_festivos_año(
-    año: int,
+    anio: int,
     current_extra: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db)
 ):
@@ -1279,9 +1349,69 @@ def generar_festivos_año(
     """
     if not current_extra.get("is_superuser") and not current_extra.get("is_rh"):
         raise HTTPException(status_code=403, detail="Solo RH o superadmin")
-    if año < 2020 or año > 2099:
+    if anio < 2020 or anio > 2099:
         raise HTTPException(status_code=400, detail="Año inválido (2020-2099)")
-    return service.AsistenciaService.generar_festivos_año(db, año)
+    return service.AsistenciaService.generar_festivos_año(db, anio)
+
+
+def _require_superuser_checadas_especiales(current: dict):
+    if not current.get("is_superuser"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo el administrador puede gestionar checadas especiales",
+        )
+
+
+@router.get("/checadas-especiales", response_model=List[schemas.ChecadaEspecialResponse])
+def listar_checadas_especiales(
+    db: Session = Depends(get_db),
+    current: dict = Depends(get_current_empleado_with_rol),
+):
+    _require_superuser_checadas_especiales(current)
+    items = service.AsistenciaService.listar_checadas_especiales(db)
+    return [service.AsistenciaService.map_checada_especial_response(x) for x in items]
+
+
+@router.post("/checadas-especiales", response_model=schemas.ChecadaEspecialResponse, status_code=status.HTTP_201_CREATED)
+def crear_checada_especial(
+    body: schemas.ChecadaEspecialCreate,
+    db: Session = Depends(get_db),
+    current: dict = Depends(get_current_empleado_with_rol),
+):
+    _require_superuser_checadas_especiales(current)
+    try:
+        ce = service.AsistenciaService.crear_checada_especial(db, body)
+        return service.AsistenciaService.map_checada_especial_response(ce)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.put("/checadas-especiales/{checada_id}", response_model=schemas.ChecadaEspecialResponse)
+def actualizar_checada_especial(
+    checada_id: int,
+    body: schemas.ChecadaEspecialUpdate,
+    db: Session = Depends(get_db),
+    current: dict = Depends(get_current_empleado_with_rol),
+):
+    _require_superuser_checadas_especiales(current)
+    try:
+        row = service.AsistenciaService.actualizar_checada_especial(db, checada_id, body)
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro no encontrado")
+        return service.AsistenciaService.map_checada_especial_response(row)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.delete("/checadas-especiales/{checada_id}", status_code=status.HTTP_204_NO_CONTENT)
+def eliminar_checada_especial(
+    checada_id: int,
+    db: Session = Depends(get_db),
+    current: dict = Depends(get_current_empleado_with_rol),
+):
+    _require_superuser_checadas_especiales(current)
+    if not service.AsistenciaService.eliminar_checada_especial(db, checada_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro no encontrado")
 
 
 # ========== REPORTES ==========

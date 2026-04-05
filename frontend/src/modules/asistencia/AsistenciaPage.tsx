@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import api from '../../services/api';
 import { Asistencia, Dispositivo, Empleado } from '../../types';
 import { parseTimestampForMexico, toMexicoDateString } from '../../utils/date';
+import { fmtNombreEmpleado } from '../../utils/format';
 
 interface AsistenciaConEmpleado extends Asistencia {
   empleado?: Empleado;
@@ -13,7 +14,7 @@ export const AsistenciaPage = () => {
   const [dispositivos, setDispositivos] = useState<Dispositivo[]>([]);
   const [empleados, setEmpleados] = useState<Empleado[]>([]);
   const [loading, setLoading] = useState(true);
-  const hoy = new Date().toISOString().slice(0, 10);
+  const hoy = toMexicoDateString(new Date());
   const [filtros, setFiltros] = useState({ empleado_id: '', dispositivo_id: '', fecha_inicio: hoy, fecha_fin: hoy });
   const filtrosRef = useRef(filtros);
   filtrosRef.current = filtros;
@@ -57,7 +58,7 @@ export const AsistenciaPage = () => {
     if (checada.empleado_nombre) return checada.empleado_nombre;
     const empleado = empleados.find(e => e.id === checada.empleado_id);
     if (!empleado) return `ID: ${checada.empleado_id}`;
-    return `${empleado.nombre} ${empleado.apellido_paterno || ''}`.trim();
+    return fmtNombreEmpleado(empleado);
   };
 
   const estadisticas = {
@@ -179,7 +180,7 @@ export const AsistenciaPage = () => {
           <select value={filtros.empleado_id} onChange={(e) => setFiltros({ ...filtros, empleado_id: e.target.value })} style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}>
             <option value="">Todos los empleados</option>
             {empleados.map(emp => (
-              <option key={emp.id} value={emp.id}>{emp.nombre} {emp.apellido_paterno || ''}</option>
+              <option key={emp.id} value={emp.id}>{fmtNombreEmpleado(emp)}</option>
             ))}
           </select>
           <select value={filtros.dispositivo_id} onChange={(e) => setFiltros({ ...filtros, dispositivo_id: e.target.value })} style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}>

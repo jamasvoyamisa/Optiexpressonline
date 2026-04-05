@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import api from '../../services/api';
 import type { SolicitudVacaciones } from '../../types';
+import { fmtNombreEmpleado } from '../../utils/format';
 
 interface EmpleadoResumen {
   id: number;
@@ -45,7 +46,7 @@ const td: React.CSSProperties = {
   verticalAlign: 'middle',
 };
 
-const PAGE_SIZE = 25;
+const PAGE_SIZE = 30;
 
 export const SolicitudesVacRH = () => {
   const [solicitudes, setSolicitudes] = useState<SolicitudVacaciones[]>([]);
@@ -145,7 +146,7 @@ export const SolicitudesVacRH = () => {
   const solicitudesFiltradas = solicitudes.filter(sol => {
     const emp = empleadosMap.get(sol.empleado_id);
     const nombreCompleto = emp
-      ? `${emp.nombre} ${emp.apellido_paterno || ''} ${emp.apellido_materno || ''}`.toLowerCase()
+      ? fmtNombreEmpleado(emp).toLowerCase()
       : '';
     const numEmp = emp?.numero_empleado?.toLowerCase() || '';
 
@@ -172,7 +173,7 @@ export const SolicitudesVacRH = () => {
   };
 
   const nombreEmp = (emp?: EmpleadoResumen) =>
-    emp ? `${emp.nombre} ${emp.apellido_paterno || ''}`.trim() : '—';
+    emp ? fmtNombreEmpleado(emp) : '—';
 
   if (loading) {
     return (

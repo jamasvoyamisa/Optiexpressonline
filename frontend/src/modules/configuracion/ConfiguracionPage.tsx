@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import api from '../../services/api';
+import { fmtNombreEmpleado } from '../../utils/format';
 import { useAuth } from '../../hooks/useAuth';
-import { Dispositivo, DispositivoCreate, EmpresaResponse, EmpleadoResponse } from '../../types';
+import { DepartamentoResponse, Dispositivo, DispositivoCreate, EmpresaResponse, EmpleadoResponse, PuestoResponse, SoporteTicketTipoResponse, UsuarioEspecialCreate } from '../../types';
 import { VacacionesGeneralesPage } from '../vacaciones/VacacionesGeneralesPage';
+import { ChecadasEspecialesPage } from './ChecadasEspecialesPage';
 
 const toLocalDate = (iso: string) =>
   new Date(iso.endsWith('Z') || iso.includes('+') ? iso : iso + 'Z');
@@ -13,7 +15,7 @@ const fmtDate = (iso: string) =>
     hour: '2-digit', minute: '2-digit', second: '2-digit',
   });
 
-type ConfigTab = 'dispositivos' | 'empresas' | 'horarios' | 'festivos' | 'vacaciones_generales' | 'usuarios_especiales';
+type ConfigTab = 'dispositivos' | 'empresas' | 'horarios' | 'festivos' | 'vacaciones_generales' | 'checadas_especiales' | 'usuarios_especiales' | 'soporte';
 
 function configTabSubtitle(tab: ConfigTab): string {
   switch (tab) {
@@ -27,8 +29,12 @@ function configTabSubtitle(tab: ConfigTab): string {
       return 'Días festivos (calendario LFT)';
     case 'vacaciones_generales':
       return 'Vacaciones generales y días otorgados por la empresa';
+    case 'checadas_especiales':
+      return 'Checadas especiales (horarios por fechas)';
     case 'usuarios_especiales':
       return 'Usuarios Especiales';
+    case 'soporte':
+      return 'Catálogo de tipos de ticket de soporte';
     default:
       return '';
   }
@@ -53,6 +59,38 @@ interface Horario {
   activo: boolean;
 }
 
+type UsuarioEspecialFormState = {
+  nombre: string;
+  apellido_paterno: string;
+  apellido_materno: string;
+  email: string;
+  telefono: string;
+  username: string;
+  password: string;
+  /** Si es true, solo se muestran casillas de empresas (alcance del director). */
+  esDirector: boolean;
+  empresa_id: number | '';
+  departamento_id: number | '';
+  puesto_id: number | '';
+  /** Empresas que supervisa (solo modo director). */
+  empresas_supervision_ids: number[];
+};
+
+const emptyUsuarioEspecialForm = (): UsuarioEspecialFormState => ({
+  nombre: '',
+  apellido_paterno: '',
+  apellido_materno: '',
+  email: '',
+  telefono: '',
+  username: '',
+  password: '',
+  esDirector: false,
+  empresa_id: '',
+  departamento_id: '',
+  puesto_id: '',
+  empresas_supervision_ids: [],
+});
+
 const tabStyle = (active: boolean): React.CSSProperties => ({
   padding: '10px 28px', cursor: 'pointer', border: 'none',
   borderBottom: active ? '3px solid #0ea5e9' : '3px solid transparent',
@@ -70,6 +108,60 @@ const modalSmall: React.CSSProperties = {
   backgroundColor: 'white', borderRadius: '12px', padding: '28px',
   maxWidth: '500px', width: '90%', boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
 };
+
+const modalEmpresa: React.CSSProperties = {
+  backgroundColor: 'white', borderRadius: '12px', padding: '28px',
+  maxWidth: '720px', width: '94%', maxHeight: '92vh', overflowY: 'auto',
+  boxShadow: '0 8px 32px rgba(0,0,0,0.2)',
+};
+
+type EmpresaFormState = {
+  nombre: string;
+  rfc: string;
+  capital_social: string;
+  codigo_postal: string;
+  domicilio: string;
+  numero_exterior: string;
+  numero_interior: string;
+  colonia: string;
+  municipio: string;
+  estado: string;
+  regimen_fiscal: string;
+  telefono: string;
+  dias_laborales: 'lun-sab' | 'lun-dom';
+  trabaja_festivos: boolean;
+};
+
+const emptyEmpresaForm = (): EmpresaFormState => ({
+  nombre: '',
+  rfc: '',
+  capital_social: '',
+  codigo_postal: '',
+  domicilio: '',
+  numero_exterior: '',
+  numero_interior: '',
+  colonia: '',
+  municipio: '',
+  estado: '',
+  regimen_fiscal: '',
+  telefono: '',
+  dias_laborales: 'lun-sab',
+  trabaja_festivos: false,
+});
+
+function formatEmpresaDomicilioFiscal(emp: EmpresaResponse): string {
+  const parts = [
+    emp.domicilio,
+    emp.numero_exterior ? `No. ext. ${emp.numero_exterior}` : '',
+    emp.numero_interior ? `Int. ${emp.numero_interior}` : '',
+    emp.colonia,
+    emp.municipio,
+    emp.estado,
+    emp.codigo_postal ? `C.P. ${emp.codigo_postal}` : '',
+  ].filter(Boolean);
+  if (parts.length) return parts.join(', ');
+  return emp.direccion || '—';
+}
 
 const labelStyle: React.CSSProperties = { display: 'block', marginBottom: '4px', fontSize: '0.85rem', fontWeight: 500, color: '#374151' };
 const inputStyle: React.CSSProperties = { width: '100%', height: '38px', padding: '0 12px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '0.9rem', boxSizing: 'border-box' };
@@ -89,15 +181,13 @@ export const ConfiguracionPage = () => {
   const [showApiKey, setShowApiKey] = useState<Record<number, boolean>>({});
   const [showEmpresaModal, setShowEmpresaModal] = useState(false);
   const [editingEmpresaId, setEditingEmpresaId] = useState<number | null>(null);
-  const [empresaForm, setEmpresaForm] = useState<{ nombre: string; rfc: string; direccion: string; telefono: string; dias_laborales: 'lun-sab' | 'lun-dom'; trabaja_festivos: boolean }>({
-    nombre: '',
-    rfc: '',
-    direccion: '',
-    telefono: '',
-    dias_laborales: 'lun-sab',
-    trabaja_festivos: false,
-  });
+  const [empresaForm, setEmpresaForm] = useState<EmpresaFormState>(emptyEmpresaForm());
+  const [regimenesSat, setRegimenesSat] = useState<{ code: string; descripcion: string }[]>([]);
   const [saving, setSaving] = useState(false);
+  const [tiposSoporte, setTiposSoporte] = useState<SoporteTicketTipoResponse[]>([]);
+  const [showTipoSoporteModal, setShowTipoSoporteModal] = useState(false);
+  const [editingTipoSoporte, setEditingTipoSoporte] = useState<SoporteTicketTipoResponse | null>(null);
+  const [tipoSoporteForm, setTipoSoporteForm] = useState({ nombre: '', activo: true });
 
   // Festivos state
   const [festivos, setFestivos] = useState<DiaFestivo[]>([]);
@@ -118,10 +208,16 @@ export const ConfiguracionPage = () => {
 
   // Usuarios especiales (exento de incidencias)
   const [usuariosEspeciales, setUsuariosEspeciales] = useState<EmpleadoResponse[]>([]);
+  const [departamentos, setDepartamentos] = useState<DepartamentoResponse[]>([]);
+  const [puestos, setPuestos] = useState<PuestoResponse[]>([]);
   const [loadingUsuariosEspeciales, setLoadingUsuariosEspeciales] = useState(false);
-  const [showAgregarEspecialModal, setShowAgregarEspecialModal] = useState(false);
-  const [busquedaEspecial, setBusquedaEspecial] = useState('');
-  const [empleadosBusqueda, setEmpleadosBusqueda] = useState<EmpleadoResponse[]>([]);
+  const [showUsuarioEspecialModal, setShowUsuarioEspecialModal] = useState(false);
+  const [usuarioEspecialModalMode, setUsuarioEspecialModalMode] = useState<'create' | 'edit'>('create');
+  const [editingUsuarioEspecialId, setEditingUsuarioEspecialId] = useState<number | null>(null);
+  const [loadingUsuarioEspecialDetalle, setLoadingUsuarioEspecialDetalle] = useState(false);
+  /** Copia inicial al abrir «Ver» (evita perder empresa/depto/puesto al desmarcar director). */
+  const [usuarioEspecialEditSnapshot, setUsuarioEspecialEditSnapshot] = useState<UsuarioEspecialFormState | null>(null);
+  const [usuarioEspecialForm, setUsuarioEspecialForm] = useState<UsuarioEspecialFormState>(emptyUsuarioEspecialForm());
   const [togglingEspecial, setTogglingEspecial] = useState<number | null>(null);
 
   useEffect(() => {
@@ -129,9 +225,16 @@ export const ConfiguracionPage = () => {
     loadFestivos();
   }, []);
 
-  /** Solo administrador ve / usa la pestaña Vacaciones generales */
   useEffect(() => {
-    if (!isSuperuser && configTab === 'vacaciones_generales') {
+    if (configTab !== 'empresas') return;
+    api.get<{ code: string; descripcion: string }[]>('/personal/regimenes-fiscales-sat')
+      .then((res) => setRegimenesSat(Array.isArray(res.data) ? res.data : []))
+      .catch(() => setRegimenesSat([]));
+  }, [configTab]);
+
+  /** Solo administrador ve / usa pestañas Vacaciones generales y Checadas especiales */
+  useEffect(() => {
+    if (!isSuperuser && (configTab === 'vacaciones_generales' || configTab === 'checadas_especiales')) {
       setConfigTab('dispositivos');
     }
   }, [isSuperuser, configTab]);
@@ -165,29 +268,277 @@ export const ConfiguracionPage = () => {
     if (configTab === 'usuarios_especiales') loadUsuariosEspeciales();
   }, [configTab]);
 
-  const buscarEmpleadosParaEspecial = async () => {
-    if (!busquedaEspecial.trim()) return;
-    try {
-      const res = await api.get<EmpleadoResponse[]>('/personal/empleados', { params: { search: busquedaEspecial.trim(), limit: 30 } });
-      const list = Array.isArray(res.data) ? res.data : [];
-      const yaEspeciales = new Set(usuariosEspeciales.map(u => u.id));
-      setEmpleadosBusqueda(list.filter(e => !yaEspeciales.has(e.id)));
-    } catch {
-      setEmpleadosBusqueda([]);
-    }
-  };
+  useEffect(() => {
+    if (configTab === 'soporte' && isSuperuser) loadTiposSoporte();
+  }, [configTab, isSuperuser]);
 
   const toggleExentoIncidencias = async (emp: EmpleadoResponse, valor: boolean) => {
     setTogglingEspecial(emp.id);
     try {
       await api.put(`/personal/empleados/${emp.id}`, { exento_incidencias: valor });
       loadUsuariosEspeciales();
-      if (showAgregarEspecialModal) buscarEmpleadosParaEspecial();
     } catch (err: unknown) {
       const e = err as { response?: { data?: { detail?: string } } };
       alert(e.response?.data?.detail || 'Error al actualizar');
     } finally {
       setTogglingEspecial(null);
+    }
+  };
+
+  const departamentosPorEmpresaEspecial = usuarioEspecialForm.empresa_id === ''
+    ? []
+    : departamentos.filter((d) => d.activo && d.empresa_id === Number(usuarioEspecialForm.empresa_id));
+
+  const puestosPorEmpresaDeptoEspecial = usuarioEspecialForm.empresa_id === '' || usuarioEspecialForm.departamento_id === ''
+    ? []
+    : puestos.filter((p) => {
+        if (!p.activo) return false;
+        const esGlobal = p.empresa_id == null && p.departamento_id == null;
+        const esDelDepto = p.empresa_id === Number(usuarioEspecialForm.empresa_id) && p.departamento_id === Number(usuarioEspecialForm.departamento_id);
+        return esGlobal || esDelDepto;
+      });
+
+  const puestoDirectorGlobalId = () => {
+    const d = puestos.find(
+      (p) =>
+        p.activo &&
+        p.empresa_id == null &&
+        p.departamento_id == null &&
+        (p.nombre || '').trim().toLowerCase() === 'director',
+    );
+    return d?.id;
+  };
+
+  const primerDepartamentoActivoEmpresa = (empresaId: number) => {
+    const deps = departamentos
+      .filter((d) => d.activo && d.empresa_id === empresaId)
+      .sort((a, b) => a.id - b.id);
+    return deps[0]?.id;
+  };
+
+  const toggleEmpresaSupervision = (empId: number) => {
+    setUsuarioEspecialForm((p) => {
+      const s = new Set(p.empresas_supervision_ids);
+      if (s.has(empId)) s.delete(empId);
+      else s.add(empId);
+      return { ...p, empresas_supervision_ids: [...s] };
+    });
+  };
+
+  const populateUsuarioEspecialFormFromEmpleado = (emp: EmpleadoResponse): UsuarioEspecialFormState => {
+    const esDir = (emp.puesto?.nombre || '').trim().toLowerCase() === 'director';
+    const sup =
+      emp.empresas_supervisadas_ids && emp.empresas_supervisadas_ids.length > 0
+        ? [...emp.empresas_supervisadas_ids]
+        : esDir && emp.empresa_id
+          ? [emp.empresa_id]
+          : [];
+    return {
+      nombre: emp.nombre || '',
+      apellido_paterno: emp.apellido_paterno || '',
+      apellido_materno: emp.apellido_materno || '',
+      email: emp.email || '',
+      telefono: emp.telefono || '',
+      username: emp.username || '',
+      password: '',
+      esDirector: esDir,
+      empresa_id: emp.empresa_id ?? '',
+      departamento_id: emp.departamento_id ?? '',
+      puesto_id: emp.puesto_id ?? '',
+      empresas_supervision_ids: sup,
+    };
+  };
+
+  const openCrearUsuarioEspecial = () => {
+    setUsuarioEspecialModalMode('create');
+    setEditingUsuarioEspecialId(null);
+    setUsuarioEspecialEditSnapshot(null);
+    setUsuarioEspecialForm(emptyUsuarioEspecialForm());
+    setShowUsuarioEspecialModal(true);
+  };
+
+  const openVerUsuarioEspecial = async (emp: EmpleadoResponse) => {
+    setLoadingUsuarioEspecialDetalle(true);
+    try {
+      const res = await api.get<EmpleadoResponse>(`/personal/empleados/${emp.id}`);
+      const populated = populateUsuarioEspecialFormFromEmpleado(res.data);
+      setUsuarioEspecialForm(populated);
+      setUsuarioEspecialEditSnapshot({ ...populated });
+      setUsuarioEspecialModalMode('edit');
+      setEditingUsuarioEspecialId(emp.id);
+      setShowUsuarioEspecialModal(true);
+    } catch {
+      alert('No se pudo cargar el usuario.');
+    } finally {
+      setLoadingUsuarioEspecialDetalle(false);
+    }
+  };
+
+  const closeUsuarioEspecialModal = () => {
+    setShowUsuarioEspecialModal(false);
+    setEditingUsuarioEspecialId(null);
+    setUsuarioEspecialModalMode('create');
+    setUsuarioEspecialEditSnapshot(null);
+    setUsuarioEspecialForm(emptyUsuarioEspecialForm());
+  };
+
+  const handleGuardarUsuarioEspecial = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!usuarioEspecialForm.nombre.trim()) { alert('El nombre es obligatorio'); return; }
+    if (usuarioEspecialModalMode === 'edit' && editingUsuarioEspecialId == null) return;
+    setSaving(true);
+    try {
+      const base = {
+        nombre: usuarioEspecialForm.nombre.trim(),
+        apellido_paterno: usuarioEspecialForm.apellido_paterno.trim() || undefined,
+        apellido_materno: usuarioEspecialForm.apellido_materno.trim() || undefined,
+        email: usuarioEspecialForm.email.trim() || undefined,
+        telefono: usuarioEspecialForm.telefono.trim() || undefined,
+        username: usuarioEspecialForm.username.trim() || undefined,
+      };
+
+      if (usuarioEspecialForm.esDirector) {
+        const ids = usuarioEspecialForm.empresas_supervision_ids;
+        if (ids.length === 0) {
+          alert('Marca al menos una empresa que supervise el director.');
+          setSaving(false);
+          return;
+        }
+        const pid = puestoDirectorGlobalId();
+        if (!pid) {
+          alert('No existe el puesto global «Director» en el catálogo. Contacte al administrador del sistema.');
+          setSaving(false);
+          return;
+        }
+        for (const eid of ids) {
+          if (!primerDepartamentoActivoEmpresa(eid)) {
+            const nom = empresas.find((e) => e.id === eid)?.nombre || String(eid);
+            alert(`La empresa «${nom}» no tiene departamento activo. Crea al menos un departamento antes.`);
+            setSaving(false);
+            return;
+          }
+        }
+        const empresaPrimaria = Math.min(...ids);
+        const deptId = primerDepartamentoActivoEmpresa(empresaPrimaria)!;
+        const payload: UsuarioEspecialCreate = {
+          ...base,
+          password: usuarioEspecialForm.password.trim() || undefined,
+          empresa_id: empresaPrimaria,
+          departamento_id: deptId,
+          puesto_id: pid,
+          empresas_supervision_ids: [...ids],
+        };
+        if (usuarioEspecialModalMode === 'create') {
+          await api.post('/personal/usuarios-especiales', payload);
+          alert('Usuario especial creado');
+        } else {
+          const putBody: Record<string, unknown> = {
+            ...base,
+            empresa_id: empresaPrimaria,
+            departamento_id: deptId,
+            puesto_id: pid,
+            empresas_supervision_ids: [...ids],
+          };
+          if (usuarioEspecialForm.password.trim()) putBody.password = usuarioEspecialForm.password.trim();
+          await api.put(`/personal/empleados/${editingUsuarioEspecialId}`, putBody);
+          alert('Usuario especial actualizado');
+        }
+      } else {
+        if (usuarioEspecialForm.empresa_id === '' || usuarioEspecialForm.departamento_id === '' || usuarioEspecialForm.puesto_id === '') {
+          alert('Empresa, departamento y puesto son obligatorios');
+          setSaving(false);
+          return;
+        }
+        const pr = puestos.find((x) => x.id === Number(usuarioEspecialForm.puesto_id));
+        const payload: UsuarioEspecialCreate = {
+          ...base,
+          password: usuarioEspecialForm.password.trim() || undefined,
+          empresa_id: Number(usuarioEspecialForm.empresa_id),
+          departamento_id: Number(usuarioEspecialForm.departamento_id),
+          puesto_id: Number(usuarioEspecialForm.puesto_id),
+        };
+        if (pr && (pr.nombre || '').trim().toLowerCase() === 'director') {
+          payload.empresas_supervision_ids = [Number(usuarioEspecialForm.empresa_id)];
+        }
+        if (usuarioEspecialModalMode === 'create') {
+          await api.post('/personal/usuarios-especiales', payload);
+          alert('Usuario especial creado');
+        } else {
+          const putBody: Record<string, unknown> = {
+            ...base,
+            empresa_id: Number(usuarioEspecialForm.empresa_id),
+            departamento_id: Number(usuarioEspecialForm.departamento_id),
+            puesto_id: Number(usuarioEspecialForm.puesto_id),
+          };
+          if (pr && (pr.nombre || '').trim().toLowerCase() === 'director') {
+            putBody.empresas_supervision_ids = [Number(usuarioEspecialForm.empresa_id)];
+          }
+          if (usuarioEspecialForm.password.trim()) putBody.password = usuarioEspecialForm.password.trim();
+          await api.put(`/personal/empleados/${editingUsuarioEspecialId}`, putBody);
+          alert('Usuario especial actualizado');
+        }
+      }
+
+      closeUsuarioEspecialModal();
+      loadUsuariosEspeciales();
+      loadData();
+    } catch (err: unknown) {
+      const e2 = err as { response?: { data?: { detail?: string } } };
+      alert(e2.response?.data?.detail || 'Error al guardar usuario especial');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const loadTiposSoporte = async () => {
+    try {
+      const res = await api.get<SoporteTicketTipoResponse[]>('/soporte/tipos');
+      setTiposSoporte(Array.isArray(res.data) ? res.data : []);
+    } catch {
+      setTiposSoporte([]);
+    }
+  };
+
+  const openNewTipoSoporte = () => {
+    setEditingTipoSoporte(null);
+    setTipoSoporteForm({ nombre: '', activo: true });
+    setShowTipoSoporteModal(true);
+  };
+
+  const startEditTipoSoporte = (tipo: SoporteTicketTipoResponse) => {
+    setEditingTipoSoporte(tipo);
+    setTipoSoporteForm({ nombre: tipo.nombre, activo: tipo.activo });
+    setShowTipoSoporteModal(true);
+  };
+
+  const handleTipoSoporteSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!tipoSoporteForm.nombre.trim()) {
+      alert('El nombre es obligatorio');
+      return;
+    }
+    setSaving(true);
+    try {
+      if (editingTipoSoporte) {
+        await api.put(`/soporte/tipos/${editingTipoSoporte.id}`, {
+          nombre: tipoSoporteForm.nombre.trim(),
+          activo: tipoSoporteForm.activo,
+        });
+      } else {
+        await api.post('/soporte/tipos', {
+          nombre: tipoSoporteForm.nombre.trim(),
+          activo: tipoSoporteForm.activo,
+        });
+      }
+      setShowTipoSoporteModal(false);
+      setEditingTipoSoporte(null);
+      setTipoSoporteForm({ nombre: '', activo: true });
+      loadTiposSoporte();
+    } catch (err: unknown) {
+      const e2 = err as { response?: { data?: { detail?: string } } };
+      alert(e2.response?.data?.detail || 'Error al guardar tipo de ticket');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -201,16 +552,20 @@ export const ConfiguracionPage = () => {
 
   const loadData = async () => {
     try {
-      const [devRes, emprsRes, empRes, horRes] = await Promise.allSettled([
+      const [devRes, emprsRes, empRes, horRes, depRes, puestosRes] = await Promise.allSettled([
         api.get('/asistencia/devices'),
         api.get('/personal/empresas?limit=500'),
         api.get('/personal/empleados?limit=1000'),
         api.get('/asistencia/horarios'),
+        api.get('/personal/departamentos?limit=1000'),
+        api.get('/personal/puestos?limit=1000'),
       ]);
       if (devRes.status === 'fulfilled') setDispositivos(devRes.value?.data ?? []);
       if (emprsRes.status === 'fulfilled') setEmpresas(emprsRes.value?.data ?? []);
       if (empRes.status === 'fulfilled') setEmpleados(Array.isArray(empRes.value?.data) ? empRes.value.data : []);
       if (horRes.status === 'fulfilled') setHorarios(Array.isArray(horRes.value?.data) ? horRes.value.data : []);
+      if (depRes.status === 'fulfilled') setDepartamentos(Array.isArray(depRes.value?.data) ? depRes.value.data : []);
+      if (puestosRes.status === 'fulfilled') setPuestos(Array.isArray(puestosRes.value?.data) ? puestosRes.value.data : []);
     } catch (error) {
       console.error('Error en loadData:', error);
     } finally {
@@ -391,7 +746,7 @@ export const ConfiguracionPage = () => {
   };
 
   const openNewEmpresa = () => {
-    setEmpresaForm({ nombre: '', rfc: '', direccion: '', telefono: '', dias_laborales: 'lun-sab', trabaja_festivos: false });
+    setEmpresaForm(emptyEmpresaForm());
     setEditingEmpresaId(null);
     setShowEmpresaModal(true);
   };
@@ -400,7 +755,16 @@ export const ConfiguracionPage = () => {
     setEmpresaForm({
       nombre: emp.nombre,
       rfc: emp.rfc || '',
-      direccion: emp.direccion || '',
+      capital_social:
+        emp.capital_social != null && String(emp.capital_social) !== '' ? String(emp.capital_social) : '',
+      codigo_postal: emp.codigo_postal || '',
+      domicilio: emp.domicilio || '',
+      numero_exterior: emp.numero_exterior || '',
+      numero_interior: emp.numero_interior || '',
+      colonia: emp.colonia || '',
+      municipio: emp.municipio || '',
+      estado: emp.estado || '',
+      regimen_fiscal: emp.regimen_fiscal || '',
       telefono: emp.telefono || '',
       dias_laborales: emp.dias_laborales === 'lun-dom' ? 'lun-dom' : 'lun-sab',
       trabaja_festivos: !!emp.trabaja_festivos,
@@ -409,18 +773,49 @@ export const ConfiguracionPage = () => {
     setShowEmpresaModal(true);
   };
 
+  const regimenSatLabel = (code: string | null | undefined) => {
+    if (!code) return '—';
+    const r = regimenesSat.find((x) => x.code === code);
+    return r ? `${code} — ${r.descripcion}` : code;
+  };
+
   const handleEmpresaSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!empresaForm.nombre.trim()) { alert('El nombre de la empresa es obligatorio'); return; }
+    if (!empresaForm.nombre.trim()) { alert('La denominación o razón social es obligatoria'); return; }
+    if (empresaForm.codigo_postal.trim() && !/^\d{5}$/.test(empresaForm.codigo_postal.trim())) {
+      alert('El código postal debe tener 5 dígitos'); return;
+    }
     setSaving(true);
     try {
-      const payload: Record<string, unknown> = { nombre: empresaForm.nombre };
-      if (empresaForm.rfc) payload.rfc = empresaForm.rfc;
-      if (empresaForm.direccion) payload.direccion = empresaForm.direccion;
-      if (empresaForm.telefono) payload.telefono = empresaForm.telefono;
+      const payload: Record<string, unknown> = { nombre: empresaForm.nombre.trim() };
+      if (empresaForm.rfc.trim()) payload.rfc = empresaForm.rfc.trim().toUpperCase();
+      if (empresaForm.telefono.trim()) payload.telefono = empresaForm.telefono.trim();
+      if (empresaForm.codigo_postal.trim()) payload.codigo_postal = empresaForm.codigo_postal.trim();
+      if (empresaForm.domicilio.trim()) payload.domicilio = empresaForm.domicilio.trim();
+      if (empresaForm.numero_exterior.trim()) payload.numero_exterior = empresaForm.numero_exterior.trim();
+      if (empresaForm.numero_interior.trim()) payload.numero_interior = empresaForm.numero_interior.trim();
+      if (empresaForm.colonia.trim()) payload.colonia = empresaForm.colonia.trim();
+      if (empresaForm.municipio.trim()) payload.municipio = empresaForm.municipio.trim();
+      if (empresaForm.estado.trim()) payload.estado = empresaForm.estado.trim();
+      if (empresaForm.regimen_fiscal.trim()) payload.regimen_fiscal = empresaForm.regimen_fiscal.trim();
+      const cap = empresaForm.capital_social.trim().replace(/,/g, '');
+      if (cap) {
+        const n = parseFloat(cap);
+        if (!Number.isNaN(n)) payload.capital_social = n;
+      }
+      const dirParts = [
+        empresaForm.domicilio.trim(),
+        empresaForm.numero_exterior.trim() ? `No. ext. ${empresaForm.numero_exterior.trim()}` : '',
+        empresaForm.numero_interior.trim() ? `Int. ${empresaForm.numero_interior.trim()}` : '',
+        empresaForm.colonia.trim(),
+        empresaForm.codigo_postal.trim(),
+        empresaForm.municipio.trim(),
+        empresaForm.estado.trim(),
+      ].filter(Boolean);
+      if (dirParts.length) payload.direccion = dirParts.join(', ');
       payload.dias_laborales = empresaForm.dias_laborales;
       payload.trabaja_festivos = empresaForm.trabaja_festivos;
-      payload.checadas_remotas = true; // Siempre habilitadas
+      payload.checadas_remotas = true;
       if (editingEmpresaId) {
         await api.put(`/personal/empresas/${editingEmpresaId}`, payload);
         alert('Empresa actualizada');
@@ -431,8 +826,10 @@ export const ConfiguracionPage = () => {
       setShowEmpresaModal(false);
       loadData();
     } catch (error: unknown) {
-      const err = error as { response?: { data?: { detail?: string } } };
-      alert(err.response?.data?.detail || 'Error al guardar empresa');
+      const err = error as { response?: { data?: { detail?: string | string[] } } };
+      const d = err.response?.data?.detail;
+      const msg = Array.isArray(d) ? d.map((x) => (typeof x === 'object' && x && 'msg' in x ? String((x as { msg: string }).msg) : String(x))).join(' ') : (d || 'Error al guardar empresa');
+      alert(msg);
     } finally {
       setSaving(false);
     }
@@ -478,7 +875,10 @@ export const ConfiguracionPage = () => {
             <button onClick={() => setShowFestivoModal(true)} style={btnSuccess}>+ Agregar Festivo</button>
           )}
           {configTab === 'usuarios_especiales' && (
-            <button onClick={() => { setShowAgregarEspecialModal(true); setBusquedaEspecial(''); setEmpleadosBusqueda([]); }} style={btnSuccess}>+ Agregar usuario especial</button>
+            <button onClick={openCrearUsuarioEspecial} style={btnSuccess}>+ Agregar usuario especial</button>
+          )}
+          {configTab === 'soporte' && isSuperuser && (
+            <button onClick={openNewTipoSoporte} style={btnSuccess}>+ Nuevo tipo de ticket</button>
           )}
           <button
             onClick={() => { setLoading(true); loadData(); }}
@@ -501,7 +901,15 @@ export const ConfiguracionPage = () => {
             Vacaciones generales
           </button>
         )}
+        {isSuperuser && (
+          <button style={tabStyle(configTab === 'checadas_especiales')} onClick={() => setConfigTab('checadas_especiales')}>
+            Checadas especiales
+          </button>
+        )}
         <button style={tabStyle(configTab === 'usuarios_especiales')} onClick={() => setConfigTab('usuarios_especiales')}>Usuarios especiales</button>
+        {isSuperuser && (
+          <button style={tabStyle(configTab === 'soporte')} onClick={() => setConfigTab('soporte')}>Soporte</button>
+        )}
       </div>
 
       {/* ====== TAB: DISPOSITIVOS ====== */}
@@ -658,7 +1066,7 @@ export const ConfiguracionPage = () => {
               <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '10px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
                 <thead>
                   <tr style={{ backgroundColor: '#f8f9fa' }}>
-                    {['Nombre', 'RFC', 'Direccion', 'Telefono', 'Jornada', 'Festivos', 'Empleados', 'Estado', 'Acciones'].map(h => (
+                    {['Razón social', 'RFC', 'Domicilio fiscal', 'C.P.', 'Régimen fiscal', 'Teléfono', 'Jornada', 'Festivos', 'Empleados', 'Estado', 'Acciones'].map(h => (
                       <th key={h} style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>{h}</th>
                     ))}
                   </tr>
@@ -669,9 +1077,11 @@ export const ConfiguracionPage = () => {
                     return (
                       <tr key={emp.id} style={{ borderBottom: '1px solid #eee' }}>
                         <td style={{ padding: '11px 14px', fontWeight: 500 }}>{emp.nombre}</td>
-                        <td style={{ padding: '11px 14px', color: '#555' }}>{emp.rfc || '-'}</td>
-                        <td style={{ padding: '11px 14px', color: '#555', maxWidth: '250px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{emp.direccion || '-'}</td>
-                        <td style={{ padding: '11px 14px', color: '#555' }}>{emp.telefono || '-'}</td>
+                        <td style={{ padding: '11px 14px', color: '#555' }}>{emp.rfc || '—'}</td>
+                        <td style={{ padding: '11px 14px', color: '#555', maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.82rem' }} title={formatEmpresaDomicilioFiscal(emp)}>{formatEmpresaDomicilioFiscal(emp)}</td>
+                        <td style={{ padding: '11px 14px', color: '#555', fontFamily: 'monospace' }}>{emp.codigo_postal || '—'}</td>
+                        <td style={{ padding: '11px 14px', color: '#555', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.78rem' }} title={regimenSatLabel(emp.regimen_fiscal)}>{regimenSatLabel(emp.regimen_fiscal)}</td>
+                        <td style={{ padding: '11px 14px', color: '#555' }}>{emp.telefono || '—'}</td>
                         <td style={{ padding: '11px 14px', color: '#334155', fontWeight: 600 }}>
                           {emp.dias_laborales === 'lun-dom' ? 'Lun-Dom' : 'Lun-Sáb'}
                         </td>
@@ -845,33 +1255,96 @@ export const ConfiguracionPage = () => {
       {/* Modal Crear/Editar Empresa */}
       {showEmpresaModal && (
         <div style={modalOverlay} onClick={() => setShowEmpresaModal(false)}>
-          <div style={modalSmall} onClick={e => e.stopPropagation()}>
+          <div style={modalEmpresa} onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h3 style={{ margin: 0 }}>{editingEmpresaId ? 'Editar Empresa' : 'Nueva Empresa'}</h3>
-              <button onClick={() => setShowEmpresaModal(false)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#999', lineHeight: 1 }}>&times;</button>
+              <h3 style={{ margin: 0 }}>{editingEmpresaId ? 'Editar empresa' : 'Nueva empresa'}</h3>
+              <button type="button" onClick={() => setShowEmpresaModal(false)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#999', lineHeight: 1 }}>&times;</button>
             </div>
             <form onSubmit={handleEmpresaSubmit}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '20px' }}>
+                <p style={{ margin: 0, fontSize: '0.82rem', color: '#64748b', fontWeight: 600 }}>Datos fiscales</p>
                 <div>
-                  <label style={labelStyle}>Nombre de la empresa *</label>
+                  <label style={labelStyle}>Denominación o razón social *</label>
                   <input style={inputStyle} value={empresaForm.nombre}
-                    onChange={e => setEmpresaForm(p => ({ ...p, nombre: e.target.value }))} required />
+                    onChange={e => setEmpresaForm(p => ({ ...p, nombre: e.target.value }))} required placeholder="Nombre legal ante el SAT" />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div>
+                    <label style={labelStyle}>RFC</label>
+                    <input style={inputStyle} value={empresaForm.rfc}
+                      onChange={e => setEmpresaForm(p => ({ ...p, rfc: e.target.value.toUpperCase() }))} maxLength={13} placeholder="12 o 13 caracteres" />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Capital social (MXN)</label>
+                    <input style={inputStyle} inputMode="decimal"
+                      value={empresaForm.capital_social}
+                      onChange={e => setEmpresaForm(p => ({ ...p, capital_social: e.target.value }))} placeholder="0.00" />
+                  </div>
                 </div>
                 <div>
-                  <label style={labelStyle}>RFC</label>
-                  <input style={inputStyle} value={empresaForm.rfc}
-                    onChange={e => setEmpresaForm(p => ({ ...p, rfc: e.target.value.toUpperCase() }))} maxLength={13} placeholder="13 caracteres" />
+                  <label style={labelStyle}>Régimen fiscal (SAT)</label>
+                  <select
+                    style={inputStyle}
+                    value={empresaForm.regimen_fiscal}
+                    onChange={e => setEmpresaForm(p => ({ ...p, regimen_fiscal: e.target.value }))}
+                  >
+                    <option value="">— Seleccionar —</option>
+                    {regimenesSat.map((r) => (
+                      <option key={r.code} value={r.code}>{`${r.code} — ${r.descripcion}`}</option>
+                    ))}
+                  </select>
+                  <span style={{ fontSize: '0.75rem', color: '#6b7280', display: 'block', marginTop: 4 }}>Catálogo c_RegimenFiscal (CFDI 4.0)</span>
+                </div>
+
+                <p style={{ margin: '8px 0 0', fontSize: '0.82rem', color: '#64748b', fontWeight: 600 }}>Domicilio fiscal</p>
+                <div>
+                  <label style={labelStyle}>Calle / domicilio</label>
+                  <input style={inputStyle} value={empresaForm.domicilio}
+                    onChange={e => setEmpresaForm(p => ({ ...p, domicilio: e.target.value }))} placeholder="Vía pública" />
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div>
+                    <label style={labelStyle}>Núm. exterior</label>
+                    <input style={inputStyle} value={empresaForm.numero_exterior}
+                      onChange={e => setEmpresaForm(p => ({ ...p, numero_exterior: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Núm. interior</label>
+                    <input style={inputStyle} value={empresaForm.numero_interior}
+                      onChange={e => setEmpresaForm(p => ({ ...p, numero_interior: e.target.value }))} />
+                  </div>
                 </div>
                 <div>
-                  <label style={labelStyle}>Direccion</label>
-                  <input style={inputStyle} value={empresaForm.direccion}
-                    onChange={e => setEmpresaForm(p => ({ ...p, direccion: e.target.value }))} />
+                  <label style={labelStyle}>Colonia</label>
+                  <input style={inputStyle} value={empresaForm.colonia}
+                    onChange={e => setEmpresaForm(p => ({ ...p, colonia: e.target.value }))} />
                 </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
+                  <div>
+                    <label style={labelStyle}>Código postal</label>
+                    <input style={inputStyle} value={empresaForm.codigo_postal} maxLength={5}
+                      onChange={e => setEmpresaForm(p => ({ ...p, codigo_postal: e.target.value.replace(/\D/g, '').slice(0, 5) }))} placeholder="00000" />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Municipio / alcaldía</label>
+                    <input style={inputStyle} value={empresaForm.municipio}
+                      onChange={e => setEmpresaForm(p => ({ ...p, municipio: e.target.value }))} />
+                  </div>
+                  <div>
+                    <label style={labelStyle}>Estado</label>
+                    <input style={inputStyle} value={empresaForm.estado}
+                      onChange={e => setEmpresaForm(p => ({ ...p, estado: e.target.value }))} />
+                  </div>
+                </div>
+
+                <p style={{ margin: '8px 0 0', fontSize: '0.82rem', color: '#64748b', fontWeight: 600 }}>Contacto</p>
                 <div>
-                  <label style={labelStyle}>Telefono</label>
+                  <label style={labelStyle}>Teléfono</label>
                   <input style={inputStyle} value={empresaForm.telefono}
                     onChange={e => setEmpresaForm(p => ({ ...p, telefono: e.target.value }))} />
                 </div>
+
+                <p style={{ margin: '8px 0 0', fontSize: '0.82rem', color: '#64748b', fontWeight: 600 }}>Jornada</p>
                 <div>
                   <label style={labelStyle}>Días laborables de la empresa</label>
                   <select
@@ -903,7 +1376,7 @@ export const ConfiguracionPage = () => {
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
                 <button type="button" onClick={() => setShowEmpresaModal(false)} style={btnSecondary}>Cancelar</button>
                 <button type="submit" style={saving ? { ...btnSuccess, opacity: 0.6, cursor: 'not-allowed' } : btnSuccess} disabled={saving}>
-                  {saving ? 'Guardando...' : editingEmpresaId ? 'Guardar Cambios' : 'Crear Empresa'}
+                  {saving ? 'Guardando...' : editingEmpresaId ? 'Guardar cambios' : 'Crear empresa'}
                 </button>
               </div>
             </form>
@@ -1044,6 +1517,10 @@ export const ConfiguracionPage = () => {
         <VacacionesGeneralesPage embedded />
       )}
 
+      {isSuperuser && configTab === 'checadas_especiales' && (
+        <ChecadasEspecialesPage embedded />
+      )}
+
       {/* ====== TAB: USUARIOS ESPECIALES ====== */}
       {configTab === 'usuarios_especiales' && (
         <div>
@@ -1073,11 +1550,20 @@ export const ConfiguracionPage = () => {
                 <tbody>
                   {usuariosEspeciales.map(emp => (
                     <tr key={emp.id} style={{ borderBottom: '1px solid #eee' }}>
-                      <td style={{ padding: '11px 14px', fontWeight: 500 }}>{emp.numero_empleado}</td>
-                      <td style={{ padding: '11px 14px' }}>{emp.nombre} {emp.apellido_paterno || ''}</td>
+                      <td style={{ padding: '11px 14px', fontWeight: 500 }}>{(emp.numero_empleado || '').startsWith('ESP-') ? '—' : emp.numero_empleado}</td>
+                      <td style={{ padding: '11px 14px' }}>{fmtNombreEmpleado(emp)}</td>
                       <td style={{ padding: '11px 14px', color: '#555' }}>{emp.departamento?.nombre || '—'}</td>
-                      <td style={{ padding: '11px 14px', textAlign: 'center' }}>
+                      <td style={{ padding: '11px 14px', textAlign: 'center', whiteSpace: 'nowrap' }}>
                         <button
+                          type="button"
+                          onClick={() => openVerUsuarioEspecial(emp)}
+                          disabled={loadingUsuarioEspecialDetalle}
+                          style={{ padding: '4px 12px', fontSize: '0.8rem', backgroundColor: '#e0f2fe', color: '#0369a1', border: 'none', borderRadius: '4px', cursor: loadingUsuarioEspecialDetalle ? 'not-allowed' : 'pointer', marginRight: 8 }}
+                        >
+                          Ver
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => toggleExentoIncidencias(emp, false)}
                           disabled={togglingEspecial === emp.id}
                           style={{ padding: '4px 12px', fontSize: '0.8rem', backgroundColor: '#fee2e2', color: '#dc2626', border: 'none', borderRadius: '4px', cursor: togglingEspecial === emp.id ? 'not-allowed' : 'pointer' }}
@@ -1092,52 +1578,264 @@ export const ConfiguracionPage = () => {
             </div>
           )}
 
-          {/* Modal Agregar usuario especial */}
-          {showAgregarEspecialModal && (
-            <div style={modalOverlay} onClick={() => setShowAgregarEspecialModal(false)}>
-              <div style={{ ...modalSmall, maxWidth: '520px' }} onClick={e => e.stopPropagation()}>
+          {/* Modal Crear / Editar usuario especial */}
+          {showUsuarioEspecialModal && (
+            <div style={modalOverlay} onClick={closeUsuarioEspecialModal}>
+              <div style={{ ...modalSmall, maxWidth: '700px', maxHeight: '90vh', overflowY: 'auto' }} onClick={e => e.stopPropagation()}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', paddingBottom: '12px', borderBottom: '1px solid #e5e7eb' }}>
-                  <h3 style={{ margin: 0, fontSize: '1.1rem' }}>Agregar usuario especial</h3>
-                  <button type="button" onClick={() => setShowAgregarEspecialModal(false)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#9ca3af' }}>&times;</button>
+                  <h3 style={{ margin: 0, fontSize: '1.1rem' }}>
+                    {usuarioEspecialModalMode === 'edit' ? 'Ver / editar usuario especial' : 'Agregar usuario especial'}
+                  </h3>
+                  <button type="button" onClick={closeUsuarioEspecialModal} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#9ca3af' }}>&times;</button>
                 </div>
-                <p style={{ margin: '0 0 12px', fontSize: '0.9rem', color: '#6b7280' }}>Busca un empleado para asignarlo como usuario especial (no generará incidencias).</p>
-                <div style={{ display: 'flex', gap: '8px', marginBottom: '16px' }}>
-                  <input
-                    type="text"
-                    placeholder="Nombre, número o email..."
-                    value={busquedaEspecial}
-                    onChange={e => setBusquedaEspecial(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && buscarEmpleadosParaEspecial()}
-                    style={{ ...inputStyle, flex: 1 }}
-                  />
-                  <button onClick={buscarEmpleadosParaEspecial} style={{ ...btnSuccess, flexShrink: 0 }}>Buscar</button>
-                </div>
-                {empleadosBusqueda.length > 0 && (
-                  <div style={{ maxHeight: '280px', overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: '6px' }}>
-                    {empleadosBusqueda.map(emp => (
-                      <div key={emp.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 12px', borderBottom: '1px solid #f3f4f6' }}>
-                        <div>
-                          <span style={{ fontWeight: 600 }}>{emp.nombre} {emp.apellido_paterno || ''}</span>
-                          <span style={{ marginLeft: 8, color: '#6b7280', fontSize: '0.85rem' }}>#{emp.numero_empleado}</span>
-                          {emp.departamento?.nombre && <span style={{ marginLeft: 8, fontSize: '0.8rem', color: '#9ca3af' }}>{emp.departamento.nombre}</span>}
+                <p style={{ margin: '0 0 12px', fontSize: '0.9rem', color: '#6b7280' }}>
+                  Usuario especial: no genera incidencias automáticas. Si es director, marca la casilla y elige solo las empresas; en otro caso elige empresa, departamento y puesto.
+                  {usuarioEspecialModalMode === 'edit' && (
+                    <span style={{ display: 'block', marginTop: 6 }}>El número de empleado no se modifica desde aquí.</span>
+                  )}
+                </p>
+                <form onSubmit={handleGuardarUsuarioEspecial}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                    <div>
+                      <label style={labelStyle}>Nombre *</label>
+                      <input style={inputStyle} value={usuarioEspecialForm.nombre} onChange={e => setUsuarioEspecialForm(p => ({ ...p, nombre: e.target.value }))} required />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Apellido paterno</label>
+                      <input style={inputStyle} value={usuarioEspecialForm.apellido_paterno} onChange={e => setUsuarioEspecialForm(p => ({ ...p, apellido_paterno: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Apellido materno</label>
+                      <input style={inputStyle} value={usuarioEspecialForm.apellido_materno} onChange={e => setUsuarioEspecialForm(p => ({ ...p, apellido_materno: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Email</label>
+                      <input style={inputStyle} type="email" value={usuarioEspecialForm.email} onChange={e => setUsuarioEspecialForm(p => ({ ...p, email: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Teléfono</label>
+                      <input style={inputStyle} value={usuarioEspecialForm.telefono} onChange={e => setUsuarioEspecialForm(p => ({ ...p, telefono: e.target.value }))} />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Usuario (opcional)</label>
+                      <input style={inputStyle} value={usuarioEspecialForm.username} onChange={e => setUsuarioEspecialForm(p => ({ ...p, username: e.target.value.toLowerCase() }))} placeholder="Se autogenera si se deja vacío" />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Contraseña (opcional)</label>
+                      <input
+                        style={inputStyle}
+                        type="password"
+                        value={usuarioEspecialForm.password}
+                        onChange={e => setUsuarioEspecialForm(p => ({ ...p, password: e.target.value }))}
+                        placeholder={usuarioEspecialModalMode === 'edit' ? 'Dejar vacío para no cambiar' : 'Si se omite, se usa un valor interno'}
+                      />
+                    </div>
+                    <div style={{ gridColumn: '1 / -1' }}>
+                      <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', fontSize: '0.9rem', fontWeight: 500, color: '#374151' }}>
+                        <input
+                          type="checkbox"
+                          checked={usuarioEspecialForm.esDirector}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            setUsuarioEspecialForm((p) => {
+                              if (checked) {
+                                return {
+                                  ...p,
+                                  esDirector: true,
+                                  empresa_id: '',
+                                  departamento_id: '',
+                                  puesto_id: '',
+                                  empresas_supervision_ids: p.empresa_id ? [Number(p.empresa_id)] : [],
+                                };
+                              }
+                              if (usuarioEspecialModalMode === 'edit' && usuarioEspecialEditSnapshot) {
+                                return {
+                                  ...usuarioEspecialEditSnapshot,
+                                  esDirector: false,
+                                  password: p.password,
+                                };
+                              }
+                              return {
+                                ...p,
+                                esDirector: false,
+                                empresa_id: '',
+                                departamento_id: '',
+                                puesto_id: '',
+                                empresas_supervision_ids: [],
+                              };
+                            });
+                          }}
+                          style={{ marginTop: 3 }}
+                        />
+                        <span>
+                          Es director
+                          <span style={{ display: 'block', fontWeight: 400, fontSize: '0.82rem', color: '#6b7280', marginTop: 4 }}>
+                            Actívalo para elegir únicamente las empresas que supervisa (sin departamento ni puesto en pantalla).
+                          </span>
+                        </span>
+                      </label>
+                    </div>
+                    {usuarioEspecialForm.esDirector ? (
+                      <div style={{ gridColumn: '1 / -1' }}>
+                        <label style={labelStyle}>Empresas que supervisa *</label>
+                        <p style={{ margin: '0 0 8px', fontSize: '0.82rem', color: '#6b7280' }}>
+                          Marca todas las razones sociales bajo su dirección. El número de empleado especial usará la empresa con ID menor entre las elegidas como domicilio técnico.
+                        </p>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: 220, overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: 8, padding: '10px 12px', background: '#fafafa' }}>
+                          {empresas.filter((em) => em.activo).map((em) => (
+                            <label key={em.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.88rem' }}>
+                              <input
+                                type="checkbox"
+                                checked={usuarioEspecialForm.empresas_supervision_ids.includes(em.id)}
+                                onChange={() => toggleEmpresaSupervision(em.id)}
+                              />
+                              <span>{em.nombre}</span>
+                            </label>
+                          ))}
                         </div>
-                        <button
-                          onClick={() => { toggleExentoIncidencias(emp, true); }}
-                          disabled={togglingEspecial === emp.id}
-                          style={{ padding: '4px 12px', fontSize: '0.8rem', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: '4px', cursor: togglingEspecial === emp.id ? 'not-allowed' : 'pointer' }}
-                        >
-                          {togglingEspecial === emp.id ? '...' : 'Agregar'}
-                        </button>
                       </div>
-                    ))}
+                    ) : (
+                      <>
+                        <div>
+                          <label style={labelStyle}>Empresa *</label>
+                          <select
+                            style={inputStyle}
+                            value={usuarioEspecialForm.empresa_id}
+                            onChange={e => setUsuarioEspecialForm(p => ({
+                              ...p,
+                              empresa_id: e.target.value ? Number(e.target.value) : '',
+                              departamento_id: '',
+                              puesto_id: '',
+                            }))}
+                            required
+                          >
+                            <option value="">-- Seleccionar empresa --</option>
+                            {empresas.filter(e => e.activo).map(emp => <option key={emp.id} value={emp.id}>{emp.nombre}</option>)}
+                          </select>
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Departamento *</label>
+                          <select
+                            style={inputStyle}
+                            value={usuarioEspecialForm.departamento_id}
+                            onChange={e => setUsuarioEspecialForm(p => ({ ...p, departamento_id: e.target.value ? Number(e.target.value) : '', puesto_id: '' }))}
+                            required
+                            disabled={usuarioEspecialForm.empresa_id === ''}
+                          >
+                            <option value="">-- Seleccionar departamento --</option>
+                            {departamentosPorEmpresaEspecial.map(dep => <option key={dep.id} value={dep.id}>{dep.nombre}</option>)}
+                          </select>
+                        </div>
+                        <div style={{ gridColumn: '1 / -1' }}>
+                          <label style={labelStyle}>Puesto *</label>
+                          <select
+                            style={inputStyle}
+                            value={usuarioEspecialForm.puesto_id}
+                            onChange={e => setUsuarioEspecialForm(p => ({ ...p, puesto_id: e.target.value ? Number(e.target.value) : '' }))}
+                            required
+                            disabled={usuarioEspecialForm.empresa_id === '' || usuarioEspecialForm.departamento_id === ''}
+                          >
+                            <option value="">-- Seleccionar puesto --</option>
+                            {puestosPorEmpresaDeptoEspecial.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+                          </select>
+                        </div>
+                      </>
+                    )}
                   </div>
-                )}
-                {busquedaEspecial && empleadosBusqueda.length === 0 && (
-                  <p style={{ color: '#6b7280', fontSize: '0.9rem', padding: '12px 0' }}>No se encontraron empleados o ya están en la lista.</p>
-                )}
-                <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'flex-end' }}>
-                  <button onClick={() => setShowAgregarEspecialModal(false)} style={btnSecondary}>Cerrar</button>
+                  <p style={{ margin: '0 0 4px', fontSize: '0.85rem', color: '#7c2d12', background: '#ffedd5', border: '1px solid #fdba74', borderRadius: 6, padding: '8px 10px' }}>
+                    Usuario especial: no registra checadas (ni remotas ni de dispositivo).
+                  </p>
+                  <div style={{ marginTop: '16px', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                    <button type="button" onClick={closeUsuarioEspecialModal} style={btnSecondary}>Cancelar</button>
+                    <button type="submit" style={saving ? { ...btnSuccess, opacity: 0.6, cursor: 'not-allowed' } : btnSuccess} disabled={saving}>
+                      {saving ? 'Guardando...' : usuarioEspecialModalMode === 'edit' ? 'Guardar cambios' : 'Crear usuario especial'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ====== TAB: SOPORTE (solo administrador) ====== */}
+      {isSuperuser && configTab === 'soporte' && (
+        <div>
+          <div style={{ padding: '16px', backgroundColor: '#f0f9ff', borderRadius: '8px', marginBottom: '20px', border: '1px solid #bae6fd' }}>
+            <p style={{ margin: 0, fontSize: '0.9rem', color: '#0369a1' }}>
+              Configura los tipos disponibles para los tickets del portal (ej. Soporte, Reemplazo, Mantenimiento).
+            </p>
+          </div>
+          {tiposSoporte.length === 0 ? (
+            <div style={{ padding: '30px', textAlign: 'center', border: '1px solid #e5e7eb', borderRadius: '10px', backgroundColor: '#fff' }}>
+              <p style={{ margin: 0, color: '#6b7280' }}>No hay tipos de ticket configurados.</p>
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto', backgroundColor: 'white', borderRadius: '10px', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ backgroundColor: '#f8f9fa' }}>
+                    <th style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>Nombre</th>
+                    <th style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>Estado</th>
+                    <th style={{ padding: '12px 14px', textAlign: 'center', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tiposSoporte.map((tipo) => (
+                    <tr key={tipo.id} style={{ borderBottom: '1px solid #eee' }}>
+                      <td style={{ padding: '11px 14px', fontWeight: 500 }}>{tipo.nombre}</td>
+                      <td style={{ padding: '11px 14px' }}>
+                        <span style={{ padding: '3px 10px', borderRadius: '4px', fontSize: '0.8rem', backgroundColor: tipo.activo ? '#d4edda' : '#f8d7da', color: tipo.activo ? '#155724' : '#721c24', fontWeight: 500 }}>
+                          {tipo.activo ? 'Activo' : 'Inactivo'}
+                        </span>
+                      </td>
+                      <td style={{ padding: '11px 14px', textAlign: 'center' }}>
+                        <button onClick={() => startEditTipoSoporte(tipo)} style={{ padding: '4px 10px', fontSize: '0.78rem', cursor: 'pointer', backgroundColor: '#ffc107', color: '#000', border: 'none', borderRadius: '4px' }}>
+                          Editar
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {showTipoSoporteModal && (
+            <div style={modalOverlay} onClick={() => setShowTipoSoporteModal(false)}>
+              <div style={{ ...modalSmall, maxWidth: '460px' }} onClick={e => e.stopPropagation()}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', paddingBottom: '10px', borderBottom: '1px solid #e5e7eb' }}>
+                  <h3 style={{ margin: 0, fontSize: '1.1rem' }}>{editingTipoSoporte ? 'Editar tipo de ticket' : 'Nuevo tipo de ticket'}</h3>
+                  <button type="button" onClick={() => setShowTipoSoporteModal(false)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#9ca3af' }}>&times;</button>
                 </div>
+                <form onSubmit={handleTipoSoporteSubmit}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '16px' }}>
+                    <div>
+                      <label style={labelStyle}>Nombre *</label>
+                      <input
+                        style={inputStyle}
+                        value={tipoSoporteForm.nombre}
+                        onChange={(e) => setTipoSoporteForm((p) => ({ ...p, nombre: e.target.value }))}
+                        placeholder="Ej: Soporte, Reemplazo"
+                        required
+                      />
+                    </div>
+                    <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <input
+                        type="checkbox"
+                        checked={tipoSoporteForm.activo}
+                        onChange={(e) => setTipoSoporteForm((p) => ({ ...p, activo: e.target.checked }))}
+                      />
+                      Activo
+                    </label>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                    <button type="button" onClick={() => setShowTipoSoporteModal(false)} style={btnSecondary}>Cancelar</button>
+                    <button type="submit" style={saving ? { ...btnSuccess, opacity: 0.6, cursor: 'not-allowed' } : btnSuccess} disabled={saving}>
+                      {saving ? 'Guardando...' : 'Guardar'}
+                    </button>
+                  </div>
+                </form>
               </div>
             </div>
           )}
