@@ -1,0 +1,52 @@
+name: Build Agent Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "agent-windows/**"
+      - ".github/workflows/build-agent-windows.yml"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: cmd
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          cd agent-windows
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller==6.10.0
+
+      - name: Build EXE (console + GUI)
+        run: |
+          cd agent-windows
+          pyinstaller --clean --noconfirm --onefile --name AgenteZKTeco main.py
+          pyinstaller --clean --noconfirm --onefile --windowed --name AgenteZKTecoGUI agent_gui.py
+
+      - name: Prepare artifact
+        run: |
+          mkdir release
+          copy agent-windows\dist\AgenteZKTeco.exe release\
+          copy agent-windows\dist\AgenteZKTecoGUI.exe release\
+          if exist agent-windows\config.yaml.example copy agent-windows\config.yaml.example release\
+          copy agent-windows\README.md release\
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-windows-exe
+          path: release/
+          if-no-files-found: error
