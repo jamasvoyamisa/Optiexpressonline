@@ -1,9 +1,18 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, type Dispatch, type SetStateAction } from 'react';
 import api from '../../services/api';
-import { parseTimestampForMexico } from '../../utils/date';
+import { descargarArchivo, XLSX_MIME } from '../../utils/download';
+import { parseTimestampForMexico, toMexicoDateString } from '../../utils/date';
+import {
+  formatQuincenaLabel,
+  getQuincenaActualMexico,
+  getQuincenaRango,
+  quincenaAnterior,
+  quincenaSiguiente,
+} from '../../utils/quincena';
 import { fmtNombreEmpleado, cmpNombreEmpleado } from '../../utils/format';
 import { useAuth } from '../../hooks/useAuth';
-import { Empleado, EmpleadoCreate, Dispositivo, Asistencia, EmpresaResponse, DepartamentoResponse, PuestoResponse } from '../../types';
+import { isNominaEnabled } from '../../config/features';
+import { Empleado, EmpleadoCreate, Dispositivo, Asistencia, EmpresaResponse, DepartamentoResponse, PuestoResponse, SolicitudVacaciones } from '../../types';
 
 interface FormData extends Omit<EmpleadoCreate, 'registrar_en_checador' | 'dispositivo_ids'> {
   registrar_en_checador: boolean;
@@ -12,6 +21,242 @@ interface FormData extends Omit<EmpleadoCreate, 'registrar_en_checador' | 'dispo
   username?: string;
   horario_id?: number;
   horario_sabado_id?: number | null;
+}
+
+interface NominaFormData {
+  salario_base: string;
+  salario_diario_integrado: string;
+  tipo_contrato: string;
+  regimen_tipo: string;
+  periodicidad_pago: string;
+  banco_clave: string;
+  cuenta_bancaria: string;
+  clabe_interbancaria: string;
+  entidad_federativa: string;
+  riesgo_puesto: string;
+  tipo_jornada: string;
+  sindicalizado: boolean;
+  numero_credito_infonavit: string;
+  descuento_infonavit: string;
+  numero_credito_infonacot: string;
+  descuento_infonacot: string;
+}
+
+const emptyNominaForm = (): NominaFormData => ({
+  salario_base: '',
+  salario_diario_integrado: '',
+  tipo_contrato: '',
+  regimen_tipo: '',
+  periodicidad_pago: '',
+  banco_clave: '',
+  cuenta_bancaria: '',
+  clabe_interbancaria: '',
+  entidad_federativa: '',
+  riesgo_puesto: '',
+  tipo_jornada: '',
+  sindicalizado: false,
+  numero_credito_infonavit: '',
+  descuento_infonavit: '',
+  numero_credito_infonacot: '',
+  descuento_infonacot: '',
+});
+
+type VacPeriodoInfo = {
+  anios_antiguedad: number;
+  dias_derecho: number;
+  dias_tomados: number;
+  dias_disponibles: number;
+  dias_adelantados?: number;
+  fecha_aniversario?: string | null;
+  fecha_limite_goce?: string | null;
+  /** True si ya pasó la fecha límite de goce (18 meses tras el aniversario de ese periodo). */
+  prescrito_por_plazo?: boolean;
+  dias_pendientes_historico?: number;
+};
+
+interface VacBalanceConPeriodos {
+  empleado_id: number;
+  año: number;
+  periodo_actual?: VacPeriodoInfo | null;
+  periodo_anterior?: VacPeriodoInfo | null;
+  dias_disponibles: number;
+  dias_tomados: number;
+  dias_pendientes: number;
+  fecha_limite_goce?: string | null;
+  dias_deuda_vacaciones_ley?: number;
+  saldo_dias_lft_neto: number;
+  /** Días fuera de LFT (migración / saldo heredado). */
+  dias_saldo_migracion_vacaciones?: number;
+  /** saldo_dias_lft_neto + dias_saldo_migracion_vacaciones */
+  saldo_total_con_migracion?: number;
+}
+
+type CatNominaBuckets = {
+  tipos_contrato: { clave: string; descripcion: string }[];
+  tipos_regimen: { clave: string; descripcion: string }[];
+  periodicidad_pago: { clave: string; descripcion: string }[];
+  bancos: { clave: string; descripcion: string }[];
+  entidades_federativas: { clave: string; descripcion: string }[];
+  riesgos_puesto: { clave: string; descripcion: string }[];
+  tipos_jornada: { clave: string; descripcion: string }[];
+};
+
+function buildNominaApiPayload(nf: NominaFormData): Record<string, unknown> {
+  const np: Record<string, unknown> = {};
+  if (nf.salario_base.trim()) np.salario_base = parseFloat(nf.salario_base.replace(/,/g, ''));
+  if (nf.salario_diario_integrado.trim()) np.salario_diario_integrado = parseFloat(nf.salario_diario_integrado.replace(/,/g, ''));
+  if (nf.tipo_contrato) np.tipo_contrato = nf.tipo_contrato;
+  if (nf.regimen_tipo) np.regimen_tipo = nf.regimen_tipo;
+  if (nf.periodicidad_pago) np.periodicidad_pago = nf.periodicidad_pago;
+  if (nf.banco_clave) np.banco_clave = nf.banco_clave;
+  if (nf.cuenta_bancaria.trim()) np.cuenta_bancaria = nf.cuenta_bancaria.trim();
+  if (nf.clabe_interbancaria.trim()) np.clabe_interbancaria = nf.clabe_interbancaria.trim();
+  if (nf.entidad_federativa) np.entidad_federativa = nf.entidad_federativa;
+  if (nf.riesgo_puesto) np.riesgo_puesto = nf.riesgo_puesto;
+  if (nf.tipo_jornada) np.tipo_jornada = nf.tipo_jornada;
+  np.sindicalizado = nf.sindicalizado;
+  if (nf.numero_credito_infonavit.trim()) np.numero_credito_infonavit = nf.numero_credito_infonavit.trim();
+  if (nf.descuento_infonavit.trim()) np.descuento_infonavit = parseFloat(nf.descuento_infonavit);
+  if (nf.numero_credito_infonacot.trim()) np.numero_credito_infonacot = nf.numero_credito_infonacot.trim();
+  if (nf.descuento_infonacot.trim()) np.descuento_infonacot = parseFloat(nf.descuento_infonacot);
+  return np;
+}
+
+function NominaBancoFormFields({
+  nominaForm,
+  setNominaForm,
+  catNomina,
+}: {
+  nominaForm: NominaFormData;
+  setNominaForm: Dispatch<SetStateAction<NominaFormData>>;
+  catNomina: CatNominaBuckets;
+}) {
+  return (
+    <div style={{ padding: '4px 0 8px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
+        <div>
+          <label style={labelStyle}>Salario base mensual (MXN)</label>
+          <input
+            style={inputStyle}
+            inputMode="decimal"
+            value={nominaForm.salario_base}
+            onChange={e => setNominaForm(p => ({ ...p, salario_base: e.target.value }))}
+            placeholder="0.00"
+          />
+        </div>
+        <div>
+          <label style={labelStyle}>Salario Diario Integrado (SDI)</label>
+          <input
+            style={inputStyle}
+            inputMode="decimal"
+            value={nominaForm.salario_diario_integrado}
+            onChange={e => setNominaForm(p => ({ ...p, salario_diario_integrado: e.target.value }))}
+            placeholder="0.00"
+          />
+        </div>
+        <div>
+          <label style={labelStyle}>Tipo de contrato (SAT)</label>
+          <select style={inputStyle} value={nominaForm.tipo_contrato} onChange={e => setNominaForm(p => ({ ...p, tipo_contrato: e.target.value }))}>
+            <option value="">— Seleccionar —</option>
+            {catNomina.tipos_contrato.map(c => <option key={c.clave} value={c.clave}>{c.clave} — {c.descripcion}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={labelStyle}>Régimen (SAT)</label>
+          <select style={inputStyle} value={nominaForm.regimen_tipo} onChange={e => setNominaForm(p => ({ ...p, regimen_tipo: e.target.value }))}>
+            <option value="">— Seleccionar —</option>
+            {catNomina.tipos_regimen.map(c => <option key={c.clave} value={c.clave}>{c.clave} — {c.descripcion}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={labelStyle}>Periodicidad de pago</label>
+          <select style={inputStyle} value={nominaForm.periodicidad_pago} onChange={e => setNominaForm(p => ({ ...p, periodicidad_pago: e.target.value }))}>
+            <option value="">— Seleccionar —</option>
+            {catNomina.periodicidad_pago.map(c => <option key={c.clave} value={c.clave}>{c.clave} — {c.descripcion}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={labelStyle}>Tipo de jornada (SAT)</label>
+          <select style={inputStyle} value={nominaForm.tipo_jornada} onChange={e => setNominaForm(p => ({ ...p, tipo_jornada: e.target.value }))}>
+            <option value="">— Seleccionar —</option>
+            {catNomina.tipos_jornada.map(c => <option key={c.clave} value={c.clave}>{c.clave} — {c.descripcion}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={labelStyle}>Riesgo de puesto (SAT)</label>
+          <select style={inputStyle} value={nominaForm.riesgo_puesto} onChange={e => setNominaForm(p => ({ ...p, riesgo_puesto: e.target.value }))}>
+            <option value="">— Seleccionar —</option>
+            {catNomina.riesgos_puesto.map(c => <option key={c.clave} value={c.clave}>{c.clave} — {c.descripcion}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={labelStyle}>Entidad federativa (SAT)</label>
+          <select style={inputStyle} value={nominaForm.entidad_federativa} onChange={e => setNominaForm(p => ({ ...p, entidad_federativa: e.target.value }))}>
+            <option value="">— Seleccionar —</option>
+            {catNomina.entidades_federativas.map(c => <option key={c.clave} value={c.clave}>{c.clave} — {c.descripcion}</option>)}
+          </select>
+        </div>
+      </div>
+
+      <p style={{ margin: '18px 0 12px', fontWeight: 600, fontSize: '0.88rem', color: '#374151' }}>Datos bancarios</p>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
+        <div>
+          <label style={labelStyle}>Banco</label>
+          <select style={inputStyle} value={nominaForm.banco_clave} onChange={e => setNominaForm(p => ({ ...p, banco_clave: e.target.value }))}>
+            <option value="">— Seleccionar —</option>
+            {catNomina.bancos.map(c => <option key={c.clave} value={c.clave}>{c.clave} — {c.descripcion}</option>)}
+          </select>
+        </div>
+        <div>
+          <label style={labelStyle}>Cuenta bancaria</label>
+          <input
+            style={inputStyle}
+            value={nominaForm.cuenta_bancaria}
+            onChange={e => setNominaForm(p => ({ ...p, cuenta_bancaria: e.target.value }))}
+            maxLength={20}
+            placeholder="Número de cuenta"
+          />
+        </div>
+        <div style={{ gridColumn: '1 / -1' }}>
+          <label style={labelStyle}>CLABE interbancaria</label>
+          <input
+            style={inputStyle}
+            value={nominaForm.clabe_interbancaria}
+            onChange={e => setNominaForm(p => ({ ...p, clabe_interbancaria: e.target.value.replace(/\D/g, '').slice(0, 18) }))}
+            maxLength={18}
+            placeholder="18 dígitos"
+          />
+        </div>
+      </div>
+
+      <p style={{ margin: '18px 0 12px', fontWeight: 600, fontSize: '0.88rem', color: '#374151' }}>INFONAVIT / INFONACOT</p>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px' }}>
+        <div>
+          <label style={labelStyle}>No. crédito INFONAVIT</label>
+          <input style={inputStyle} value={nominaForm.numero_credito_infonavit} onChange={e => setNominaForm(p => ({ ...p, numero_credito_infonavit: e.target.value }))} maxLength={20} />
+        </div>
+        <div>
+          <label style={labelStyle}>Descuento INFONAVIT (%)</label>
+          <input style={inputStyle} inputMode="decimal" value={nominaForm.descuento_infonavit} onChange={e => setNominaForm(p => ({ ...p, descuento_infonavit: e.target.value }))} placeholder="0.00" />
+        </div>
+        <div>
+          <label style={labelStyle}>No. crédito INFONACOT</label>
+          <input style={inputStyle} value={nominaForm.numero_credito_infonacot} onChange={e => setNominaForm(p => ({ ...p, numero_credito_infonacot: e.target.value }))} maxLength={20} />
+        </div>
+        <div>
+          <label style={labelStyle}>Descuento INFONACOT (%)</label>
+          <input style={inputStyle} inputMode="decimal" value={nominaForm.descuento_infonacot} onChange={e => setNominaForm(p => ({ ...p, descuento_infonacot: e.target.value }))} placeholder="0.00" />
+        </div>
+      </div>
+
+      <div style={{ marginTop: '16px' }}>
+        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.88rem', color: '#374151' }}>
+          <input type="checkbox" checked={nominaForm.sindicalizado} onChange={e => setNominaForm(p => ({ ...p, sindicalizado: e.target.checked }))} style={{ width: '16px', height: '16px' }} />
+          Empleado sindicalizado
+        </label>
+      </div>
+    </div>
+  );
 }
 
 interface HorarioSimple {
@@ -98,7 +343,25 @@ const modalSmall: React.CSSProperties = {
 };
 
 const modalLarge: React.CSSProperties = {
-  ...modalSmall, maxWidth: '800px', height: '90vh', display: 'flex', flexDirection: 'column', overflowY: 'hidden',
+  ...modalSmall,
+  maxWidth: '800px',
+  width: '92%',
+  height: '90vh',
+  maxHeight: '90vh',
+  display: 'flex',
+  flexDirection: 'column',
+  overflow: 'hidden',
+  boxSizing: 'border-box',
+};
+
+/** Área desplazable del formulario empleado (tabs); minHeight:0 es necesario para que flex + overflow funcione. */
+const empleadoFormScrollArea: React.CSSProperties = {
+  flex: 1,
+  minHeight: 0,
+  overflowY: 'auto',
+  overflowX: 'hidden',
+  WebkitOverflowScrolling: 'touch',
+  paddingRight: '6px',
 };
 
 
@@ -156,6 +419,8 @@ export const PersonalPage = () => {
   const isAdmin = authMe?.is_superuser === true;
   const isRH = authMe?.is_rh === true;
   const canExport = isAdmin || isRH;
+  /** Solo administrador (API nómina restringida a require_superuser). */
+  const canEditNomina = isAdmin;
   const [mainTab, setMainTab] = useState<'empleados' | 'departamentos' | 'puestos'>('empleados');
   const [empleados, setEmpleados] = useState<Empleado[]>([]);
   /** Incluye usuarios especiales (p. ej. directores) para asignar gerente de departamento. */
@@ -175,21 +440,43 @@ export const PersonalPage = () => {
   const POR_PAGINA = 30;
   const [selectedEmpleado, setSelectedEmpleado] = useState<Empleado | null>(null);
   const [showDetalle, setShowDetalle] = useState(false);
-  const [detalleTab, setDetalleTab] = useState<'info' | 'asistencias' | 'editar' | 'checadores' | 'huella'>('info');
+  const [detalleTab, setDetalleTab] = useState<'info' | 'asistencias' | 'vacaciones' | 'editar' | 'checadores' | 'huella'>('info');
   const [empChecadas, setEmpChecadas] = useState<Asistencia[]>([]);
   const [loadingChecadas, setLoadingChecadas] = useState(false);
+  /** Quincena cuyas checadas se muestran en el modal (México, mismo criterio que Mi área). */
+  const [empAsistQuincena, setEmpAsistQuincena] = useState<{ year: number; month: number; num: 1 | 2 }>(() =>
+    getQuincenaActualMexico(),
+  );
+
+  const [vacBalance, setVacBalance] = useState<VacBalanceConPeriodos | null>(null);
+  const [vacSolicitudes, setVacSolicitudes] = useState<SolicitudVacaciones[]>([]);
+  const [loadingVacaciones, setLoadingVacaciones] = useState(false);
+  const [vacSaldoEdit, setVacSaldoEdit] = useState('');
+  const [savingVacSaldo, setSavingVacSaldo] = useState(false);
+  const [vacMigracionEdit, setVacMigracionEdit] = useState('');
+  const [savingVacMigracion, setSavingVacMigracion] = useState(false);
+  const [vacError, setVacError] = useState<string | null>(null);
+
+  // Catálogos nómina (cargados una vez)
+  const [catNomina, setCatNomina] = useState<CatNominaBuckets>({
+    tipos_contrato: [], tipos_regimen: [], periodicidad_pago: [],
+    bancos: [], entidades_federativas: [], riesgos_puesto: [], tipos_jornada: [],
+  });
 
   // Modal formulario empleado (crear / editar)
   const [showFormModal, setShowFormModal] = useState(false);
-  const [formTab, setFormTab] = useState<'personales' | 'laborales'>('personales');
+  const [formTab, setFormTab] = useState<'personales' | 'laborales' | 'nomina'>('personales');
   const [editingId, setEditingId] = useState<number | null>(null);
   const [form, setForm] = useState<FormData>({ ...emptyForm });
+  const [nominaForm, setNominaForm] = useState<NominaFormData>(emptyNominaForm());
+  const [savingNomina, setSavingNomina] = useState(false);
   const [usernameManual, setUsernameManual] = useState(false);
   const [usernameStatus, setUsernameStatus] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle');
   const [numeroManual, setNumeroManual] = useState(false);
   const [showImport, setShowImport] = useState(false);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importEmpresaId, setImportEmpresaId] = useState<number | ''>('');
+  const [importActualizarExistentes, setImportActualizarExistentes] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<any>(null);
 
@@ -219,6 +506,22 @@ export const PersonalPage = () => {
   const [enrollDevice, setEnrollDevice] = useState<number | null>(null);
   const [tieneHuella, setTieneHuella] = useState(false);
   const [huellaTemplates, setHuellaTemplates] = useState<{ id: number; finger_index: number; source_device_nombre: string | null; updated_at: string | null }[]>([]);
+  const [empleadoDispositivos, setEmpleadoDispositivos] = useState<{
+    dispositivo_id: number;
+    dispositivo_nombre: string;
+    dispositivo_ubicacion: string | null;
+    enviado: boolean;
+    enviado_at: string | null;
+    pending_user_id: number | null;
+    pending_enroll_id: number | null;
+    pending_delete_id: number | null;
+    tiene_huella_en_bd: boolean;
+    finger_indices: number[];
+    checadas_total: number;
+    ultima_checada: string | null;
+  }[]>([]);
+  const [loadingEmpDisp, setLoadingEmpDisp] = useState(false);
+  const [borrandoCheckador, setBorrandoCheckador] = useState<number | null>(null);
   const [enrollingHuella, setEnrollingHuella] = useState(false);
   const [enrollStatus, setEnrollStatus] = useState<'idle' | 'completed'>('idle');
   // Replicación de huella
@@ -233,11 +536,13 @@ export const PersonalPage = () => {
       if (search) params.append('search', search);
       if (filtroEstado) params.append('estado', filtroEstado);
       params.append('limit', '500');
+      // Incluir exento_incidencias: si no, al marcar la casilla el API deja de devolver al empleado y “desaparece” del listado.
+      params.append('incluir_exentos', 'true');
       const candidatosParams = new URLSearchParams();
       candidatosParams.append('limit', '2000');
       candidatosParams.append('estado', 'activo');
       candidatosParams.append('incluir_exentos', 'true');
-      const [empRes, empGerRes, devRes, emprsRes, deptosRes, puestosRes, horRes] = await Promise.all([
+      const [empRes, empGerRes, devRes, emprsRes, deptosRes, puestosRes, horRes, catRes] = await Promise.all([
         api.get(`/personal/empleados?${params.toString()}`),
         api.get(`/personal/empleados?${candidatosParams.toString()}`),
         api.get('/asistencia/devices'),
@@ -245,6 +550,7 @@ export const PersonalPage = () => {
         api.get('/personal/departamentos?limit=500'),
         api.get('/personal/puestos'), // sin activo = todos (para puestos tab); form filtra activos
         api.get('/asistencia/horarios?activo=true'),
+        (isNominaEnabled && isAdmin ? api.get('/nomina/catalogos') : Promise.resolve({ data: null })).catch(() => ({ data: null })),
       ]);
       setEmpleados(empRes.data);
       setEmpleadosCandidatosGerente(Array.isArray(empGerRes.data) ? empGerRes.data : []);
@@ -253,12 +559,27 @@ export const PersonalPage = () => {
       setDepartamentos(deptosRes.data);
       setPuestos(puestosRes.data);
       setHorarios(Array.isArray(horRes.data) ? horRes.data : []);
+      if (catRes.data) {
+        setCatNomina({
+          tipos_contrato: catRes.data.tipos_contrato ?? [],
+          tipos_regimen: catRes.data.tipos_regimen ?? [],
+          periodicidad_pago: catRes.data.periodicidad_pago ?? [],
+          bancos: catRes.data.bancos ?? [],
+          entidades_federativas: catRes.data.entidades_federativas ?? [],
+          riesgos_puesto: catRes.data.riesgos_puesto ?? [],
+          tipos_jornada: catRes.data.tipos_jornada ?? [],
+        });
+      }
     } catch (error) {
       console.error('Error al cargar datos:', error);
     } finally {
       setLoading(false);
     }
-  }, [search, filtroEstado]);
+  }, [search, filtroEstado, isNominaEnabled, isAdmin]);
+
+  useEffect(() => {
+    if ((!isNominaEnabled || !isAdmin) && formTab === 'nomina') setFormTab('personales');
+  }, [isNominaEnabled, isAdmin, formTab]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -320,14 +641,10 @@ export const PersonalPage = () => {
 
   const descargarPlantilla = async () => {
     try {
-      const res = await api.get('/personal/importar/plantilla', { responseType: 'blob' });
-      const url = window.URL.createObjectURL(new Blob([res.data]));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'plantilla_empleados.xlsx';
-      a.click();
-      window.URL.revokeObjectURL(url);
-    } catch { alert('Error al descargar plantilla'); }
+      await descargarArchivo('/personal/importar/plantilla', 'plantilla_empleados.xlsx', XLSX_MIME);
+    } catch (e: any) {
+      alert(e?.message || 'Error al descargar plantilla');
+    }
   };
 
   const exportarEmpleadosXlsx = async () => {
@@ -336,21 +653,13 @@ export const PersonalPage = () => {
       if (filtroEmpresa) params.append('empresa_id', filtroEmpresa);
       if (filtroEstado) params.append('estado', filtroEstado);
       const qs = params.toString();
-      const res = await api.get(`/personal/exportar/empleados${qs ? `?${qs}` : ''}`, { responseType: 'blob' });
-      const cd = res.headers['content-disposition'] as string | undefined;
-      let fname = 'empleados_export.xlsx';
-      if (cd) {
-        const m = cd.match(/filename="?([^";]+)"?/i);
-        if (m) fname = m[1];
-      }
-      const url = window.URL.createObjectURL(new Blob([res.data]));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = fname;
-      a.click();
-      window.URL.revokeObjectURL(url);
-    } catch {
-      alert('Error al exportar empleados (solo administradores).');
+      await descargarArchivo(
+        `/personal/exportar/empleados${qs ? `?${qs}` : ''}`,
+        'empleados_export.xlsx',
+        XLSX_MIME,
+      );
+    } catch (e: any) {
+      alert(e?.message || 'Error al exportar empleados (solo administradores).');
     }
   };
 
@@ -361,10 +670,11 @@ export const PersonalPage = () => {
     const fd = new FormData();
     fd.append('file', importFile);
     fd.append('empresa_id', String(importEmpresaId));
+    fd.append('actualizar_existentes', importActualizarExistentes ? 'true' : 'false');
     try {
       const res = await api.post('/personal/importar/xlsx', fd, { headers: { 'Content-Type': 'multipart/form-data' } });
       setImportResult(res.data);
-      if (res.data.creados > 0) loadData();
+      if ((res.data.creados || 0) > 0 || (res.data.actualizados || 0) > 0) loadData();
     } catch (e: any) {
       const msg = e.response?.data?.detail || 'Error al importar';
       setImportResult({ error: msg });
@@ -375,6 +685,7 @@ export const PersonalPage = () => {
 
   const openNewForm = () => {
     setForm({ ...emptyForm });
+    setNominaForm(emptyNominaForm());
     setEditingId(null);
     setUsernameManual(false);
     setUsernameStatus('idle');
@@ -416,19 +727,15 @@ export const PersonalPage = () => {
         }
       }
 
+      let savedEmpleadoId: number | null = editingId;
       if (editingId) {
         delete payload.numero_empleado;
         delete payload.registrar_en_checador;
         delete payload.dispositivo_ids;
         await api.put(`/personal/empleados/${editingId}`, payload);
-        alert(payload.password ? 'Empleado y contraseña actualizados' : 'Empleado actualizado');
-        if (showDetalle) {
-          setShowDetalle(false);
-          loadData();
-          return;
-        }
       } else {
-        await api.post('/personal/empleados', payload);
+        const res = await api.post('/personal/empleados', payload);
+        savedEmpleadoId = res.data?.id ?? null;
         const devCount = form.dispositivo_ids.length;
         const usuario = (form.username || form.numero_empleado || '').trim() || form.numero_empleado;
         const msgLogin = form.password?.trim()
@@ -437,6 +744,22 @@ export const PersonalPage = () => {
         alert(
           (form.registrar_en_checador && devCount > 0 ? `Empleado creado y agregado a ${devCount} checador(es). ` : 'Empleado creado. ') + msgLogin
         );
+      }
+      if (savedEmpleadoId && isNominaEnabled && isAdmin) {
+        setSavingNomina(true);
+        try {
+          await api.put(`/nomina/empleados/${savedEmpleadoId}/datos`, buildNominaApiPayload(nominaForm));
+        } catch { /* silencioso, no bloquear flujo principal */ } finally {
+          setSavingNomina(false);
+        }
+      }
+      if (editingId) {
+        alert(payload.password ? 'Empleado y contraseña actualizados' : 'Empleado actualizado');
+        if (showDetalle) {
+          setShowDetalle(false);
+          loadData();
+          return;
+        }
       }
       setShowFormModal(false);
       loadData();
@@ -465,7 +788,14 @@ export const PersonalPage = () => {
     const nombre = `${checadorTarget.nombre} ${checadorTarget.apellido_paterno || ''} ${checadorTarget.apellido_materno || ''}`.trim();
     try {
       const params = checadorDevices.map(id => `dispositivo_ids=${id}`).join('&');
-      await api.post(`/asistencia/enqueue-user-multi?${params}`, { numero_empleado: checadorTarget.numero_empleado, nombre });
+      await api.post(`/asistencia/enqueue-user-multi?${params}`, {
+        numero_empleado: checadorTarget.numero_empleado,
+        nombre,
+        empleado_id: checadorTarget.id,
+        ...(checadorTarget.empresa_id != null && checadorTarget.empresa_id !== undefined
+          ? { empresa_id: checadorTarget.empresa_id }
+          : {}),
+      });
       alert(`Empleado agregado a ${checadorDevices.length} checador(es). El agente lo enviara en ~30 segundos.`);
       setShowChecadorModal(false);
     } catch (error: unknown) {
@@ -478,7 +808,13 @@ export const PersonalPage = () => {
     if (!huellaTarget || !enrollDevice) { alert('Selecciona un dispositivo'); return; }
     setEnrollingHuella(true);
     try {
-      await api.post(`/asistencia/devices/${enrollDevice}/start-enroll`, { numero_empleado: huellaTarget.numero_empleado });
+      await api.post(`/asistencia/devices/${enrollDevice}/start-enroll`, {
+        numero_empleado: huellaTarget.numero_empleado,
+        empleado_id: huellaTarget.id,
+        ...(huellaTarget.empresa_id != null && huellaTarget.empresa_id !== undefined
+          ? { empresa_id: huellaTarget.empresa_id }
+          : {}),
+      });
       setEnrollStatus('completed');
     } catch (error: unknown) {
       const err = error as { response?: { data?: { detail?: string } } };
@@ -679,15 +1015,148 @@ export const PersonalPage = () => {
     })
     .sort(cmpNombreEmpleado);
 
-  const loadChecadas = async (empleadoId: number) => {
+  const loadChecadas = async (
+    empleadoId: number,
+    q: { year: number; month: number; num: 1 | 2 },
+  ) => {
     setLoadingChecadas(true);
     try {
-      const res = await api.get(`/asistencia/checadas?empleado_id=${empleadoId}&limit=200`);
-      setEmpChecadas(res.data);
+      const { inicio, fin } = getQuincenaRango(q.year, q.month, q.num);
+      const res = await api.get('/asistencia/checadas', {
+        params: {
+          empleado_id: empleadoId,
+          limit: 500,
+          fecha_inicio: inicio,
+          fecha_fin: fin,
+        },
+      });
+      setEmpChecadas(Array.isArray(res.data) ? res.data : []);
     } catch {
       setEmpChecadas([]);
     } finally {
       setLoadingChecadas(false);
+    }
+  };
+
+  const loadVacacionesForEmp = useCallback(async (empleadoId: number) => {
+    setLoadingVacaciones(true);
+    setVacError(null);
+    try {
+      const [balRes, solRes] = await Promise.all([
+        api.get<VacBalanceConPeriodos>(`/vacaciones/balance/${empleadoId}`),
+        api.get<SolicitudVacaciones[]>('/vacaciones/solicitudes', {
+          params: { empleado_id: empleadoId, limit: 200 },
+        }),
+      ]);
+      const b = balRes.data;
+      setVacBalance(b ?? null);
+      setVacSolicitudes(Array.isArray(solRes.data) ? solRes.data : []);
+      if (b?.saldo_dias_lft_neto != null) {
+        setVacSaldoEdit(String(Number(b.saldo_dias_lft_neto)));
+      } else {
+        setVacSaldoEdit('');
+      }
+      if (b?.dias_saldo_migracion_vacaciones != null) {
+        setVacMigracionEdit(String(Number(b.dias_saldo_migracion_vacaciones)));
+      } else {
+        setVacMigracionEdit('');
+      }
+    } catch (e: unknown) {
+      const ax = e as { response?: { data?: { detail?: string } } };
+      const d = ax.response?.data?.detail;
+      setVacError(typeof d === 'string' ? d : 'No se pudieron cargar las vacaciones.');
+      setVacBalance(null);
+      setVacSolicitudes([]);
+      setVacSaldoEdit('');
+      setVacMigracionEdit('');
+    } finally {
+      setLoadingVacaciones(false);
+    }
+  }, []);
+
+  const handleGuardarSaldoVac = async (empleadoId: number) => {
+    const raw = vacSaldoEdit.replace(',', '.').trim();
+    const n = parseFloat(raw);
+    if (raw === '' || Number.isNaN(n)) {
+      setVacError('Indica un valor numérico válido para el saldo.');
+      return;
+    }
+    setSavingVacSaldo(true);
+    setVacError(null);
+    try {
+      const r = await api.put<VacBalanceConPeriodos>(`/vacaciones/admin/empleado/${empleadoId}/saldo-lft-neto`, {
+        saldo_lft_neto: n,
+      });
+      const b = r.data;
+      setVacBalance(b ?? null);
+      if (b?.saldo_dias_lft_neto != null) {
+        setVacSaldoEdit(String(Number(b.saldo_dias_lft_neto)));
+      }
+    } catch (e: unknown) {
+      const ax = e as { response?: { data?: { detail?: string } } };
+      const d = ax.response?.data?.detail;
+      setVacError(typeof d === 'string' ? d : 'No se pudo guardar el saldo.');
+    } finally {
+      setSavingVacSaldo(false);
+    }
+  };
+
+  const handleGuardarSaldoMigracionVac = async (empleadoId: number) => {
+    const raw = vacMigracionEdit.replace(',', '.').trim();
+    const n = parseFloat(raw);
+    if (raw === '' || Number.isNaN(n) || n < 0) {
+      setVacError('Indica un valor numérico ≥ 0 para el saldo de migración.');
+      return;
+    }
+    setSavingVacMigracion(true);
+    setVacError(null);
+    try {
+      const r = await api.put<VacBalanceConPeriodos>(
+        `/vacaciones/admin/empleado/${empleadoId}/saldo-migracion-vacaciones`,
+        { dias_saldo_migracion_vacaciones: n },
+      );
+      const b = r.data;
+      setVacBalance(b ?? null);
+      if (b?.dias_saldo_migracion_vacaciones != null) {
+        setVacMigracionEdit(String(Number(b.dias_saldo_migracion_vacaciones)));
+      }
+    } catch (e: unknown) {
+      const ax = e as { response?: { data?: { detail?: string } } };
+      const d = ax.response?.data?.detail;
+      setVacError(typeof d === 'string' ? d : 'No se pudo guardar el saldo de migración.');
+    } finally {
+      setSavingVacMigracion(false);
+    }
+  };
+
+  const loadEmpleadoDispositivos = async (emp: Empleado) => {
+    setLoadingEmpDisp(true);
+    try {
+      const res = await api.get(`/asistencia/empleados/${emp.id}/dispositivos`);
+      setEmpleadoDispositivos(Array.isArray(res.data) ? res.data : []);
+    } catch {
+      setEmpleadoDispositivos([]);
+    } finally {
+      setLoadingEmpDisp(false);
+    }
+  };
+
+  const borrarDelChecador = async (emp: Empleado, dispositivoId: number, dispositivoNombre: string) => {
+    if (!confirm(`¿Borrar a ${nombreCompleto(emp)} del dispositivo "${dispositivoNombre}"?\n\nEl agente eliminará el registro del checador en su próximo ciclo. Después podrás volver a darlo de alta y enrolar de nuevo.`)) {
+      return;
+    }
+    setBorrandoCheckador(dispositivoId);
+    try {
+      await api.post(`/asistencia/devices/${dispositivoId}/queue-delete`, {
+        empleado_id: emp.id,
+      });
+      await loadEmpleadoDispositivos(emp);
+      await loadHuellaTemplates(emp);
+    } catch (error) {
+      const err = error as { response?: { data?: { detail?: string } } };
+      alert(err.response?.data?.detail || 'Error al encolar el borrado');
+    } finally {
+      setBorrandoCheckador(null);
     }
   };
 
@@ -697,7 +1166,9 @@ export const PersonalPage = () => {
     setReplicaDevice(null);
     setReplicaOk(null);
     try {
-      const res = await api.get(`/asistencia/fingerprint-templates/${emp.numero_empleado}`);
+      const res = await api.get(
+        `/asistencia/fingerprint-templates/${emp.numero_empleado}?empleado_id=${emp.id}`
+      );
       const templates = Array.isArray(res.data) ? res.data : [];
       setHuellaTemplates(templates);
       setTieneHuella(templates.length > 0);
@@ -711,6 +1182,13 @@ export const PersonalPage = () => {
     setSelectedEmpleado(emp);
     setDetalleTab('info');
     setEmpChecadas([]);
+    setEmpAsistQuincena(getQuincenaActualMexico());
+    setVacBalance(null);
+    setVacSolicitudes([]);
+    setVacError(null);
+    setVacSaldoEdit('');
+    setVacMigracionEdit('');
+    setLoadingVacaciones(false);
     // Pre-poblar formulario de edición
     setForm({
       numero_empleado: emp.numero_empleado,
@@ -744,6 +1222,32 @@ export const PersonalPage = () => {
     setUsernameManual(false);
     setUsernameStatus('idle');
     setFormTab('personales');
+    setNominaForm(emptyNominaForm());
+    if (isNominaEnabled && isAdmin) {
+      api.get(`/nomina/empleados/${emp.id}/datos`)
+        .then(r => {
+          const d = r.data;
+          setNominaForm({
+            salario_base: d.salario_base != null ? String(d.salario_base) : '',
+            salario_diario_integrado: d.salario_diario_integrado != null ? String(d.salario_diario_integrado) : '',
+            tipo_contrato: d.tipo_contrato || '',
+            regimen_tipo: d.regimen_tipo || '',
+            periodicidad_pago: d.periodicidad_pago || '',
+            banco_clave: d.banco_clave || '',
+            cuenta_bancaria: d.cuenta_bancaria || '',
+            clabe_interbancaria: d.clabe_interbancaria || '',
+            entidad_federativa: d.entidad_federativa || '',
+            riesgo_puesto: d.riesgo_puesto || '',
+            tipo_jornada: d.tipo_jornada || '',
+            sindicalizado: !!d.sindicalizado,
+            numero_credito_infonavit: d.numero_credito_infonavit || '',
+            descuento_infonavit: d.descuento_infonavit != null ? String(d.descuento_infonavit) : '',
+            numero_credito_infonacot: d.numero_credito_infonacot || '',
+            descuento_infonacot: d.descuento_infonacot != null ? String(d.descuento_infonacot) : '',
+          });
+        })
+        .catch(() => {});
+    }
     // Pre-poblar checadores
     setChecadorTarget(emp);
     setChecadorDevices([]);
@@ -1138,20 +1642,35 @@ export const PersonalPage = () => {
       {showFormModal && (
         <div style={subModalOverlay} onClick={() => setShowFormModal(false)}>
           <div style={modalLarge} onClick={e => e.stopPropagation()}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexShrink: 0 }}>
               <h3 style={{ margin: 0 }}>{editingId ? 'Editar Empleado' : 'Alta de Empleado'}</h3>
               <button onClick={() => setShowFormModal(false)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#999', lineHeight: 1 }}>&times;</button>
             </div>
-            <form onSubmit={handleSubmit}>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', borderBottom: '2px solid #e5e7eb', marginBottom: '16px' }}>
+            <form
+              onSubmit={handleSubmit}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                flex: 1,
+                minHeight: 0,
+                overflow: 'hidden',
+              }}
+            >
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', borderBottom: '2px solid #e5e7eb', marginBottom: '12px', flexShrink: 0 }}>
                 <button type="button" style={formTabStyle(formTab === 'personales')} onClick={() => setFormTab('personales')}>
                   Datos personales
                 </button>
                 <button type="button" style={formTabStyle(formTab === 'laborales')} onClick={() => setFormTab('laborales')}>
                   Datos laborales
                 </button>
+                {isNominaEnabled && isAdmin && (
+                  <button type="button" style={formTabStyle(formTab === 'nomina')} onClick={() => setFormTab('nomina')}>
+                    Nómina / Banco
+                  </button>
+                )}
               </div>
 
+              <div style={empleadoFormScrollArea}>
               {formTab === 'personales' && (
                 <div style={{ padding: '8px 0 20px' }}>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '14px' }}>
@@ -1420,7 +1939,15 @@ export const PersonalPage = () => {
                 </div>
               )}
 
-              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', paddingTop: '12px', borderTop: '1px solid #e5e7eb' }}>
+              {isNominaEnabled && isAdmin && formTab === 'nomina' && (
+                <>
+                  <NominaBancoFormFields nominaForm={nominaForm} setNominaForm={setNominaForm} catNomina={catNomina} />
+                  {savingNomina && <p style={{ marginTop: '8px', fontSize: '0.78rem', color: '#6b7280' }}>Guardando datos de nómina…</p>}
+                </>
+              )}
+              </div>
+
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', paddingTop: '12px', borderTop: '1px solid #e5e7eb', flexShrink: 0, background: '#fff' }}>
                 <button type="button" onClick={() => setShowFormModal(false)} style={btnSecondary}>Cancelar</button>
                 <button type="submit" style={saving ? { ...btnSuccess, opacity: 0.6, cursor: 'not-allowed' } : btnSuccess} disabled={saving}>
                   {saving ? 'Guardando...' : editingId ? 'Guardar Cambios' : 'Crear Empleado'}
@@ -1481,12 +2008,24 @@ export const PersonalPage = () => {
           const map = new Map<string, EmpDayRow>();
           for (const c of empChecadas) {
             const d = parseTimestampForMexico(c.timestamp);
-            const fechaSort = d.toISOString().slice(0, 10);
-            const fechaStr = d.toLocaleDateString('es-MX', { weekday: 'short', year: 'numeric', month: '2-digit', day: '2-digit' });
+            // Misma lógica que Mis asistencias: agrupar por día laboral en México (no UTC).
+            // toISOString().slice(0,10) partía la noche del 17: salida ~18:00 quedaba en "día" UTC 18.
+            const fechaSort = toMexicoDateString(d);
+            const fechaStr = d.toLocaleDateString('es-MX', {
+              weekday: 'short',
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              timeZone: 'America/Mexico_City',
+            });
             if (!map.has(fechaSort)) map.set(fechaSort, { key: fechaSort, fecha: fechaStr, fechaSort, esTiempoExtra: false });
             const row = map.get(fechaSort)!;
             if (c.es_tiempo_extra) row.esTiempoExtra = true;
-            const hora = d.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' });
+            const hora = d.toLocaleTimeString('es-MX', {
+              hour: '2-digit',
+              minute: '2-digit',
+              timeZone: 'America/Mexico_City',
+            });
             if (c.tipo === 'entrada' && !row.entrada) row.entrada = hora;
             else if (c.tipo === 'salida_comer' && !row.salida_comer) row.salida_comer = hora;
             else if (c.tipo === 'regreso_comer' && !row.regreso_comer) row.regreso_comer = hora;
@@ -1506,25 +2045,64 @@ export const PersonalPage = () => {
 
         return (
           <div style={modalOverlay} onClick={() => setShowDetalle(false)}>
-            <div style={{ ...modalLarge, maxWidth: '860px' }} onClick={e => e.stopPropagation()}>
+            <div style={{ ...modalLarge, maxWidth: '920px' }} onClick={e => e.stopPropagation()}>
 
-              {/* Header */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
-                <div>
-                  <h2 style={{ margin: '0 0 3px 0', fontSize: '1.2rem' }}>{nombreCompleto(emp)}</h2>
-                  <p style={{ margin: 0, color: '#666', fontSize: '0.88rem' }}>
-                    No. {emp.numero_empleado} &middot; {emp.departamento?.nombre || 'Sin departamento'} &middot; {emp.puesto?.nombre || 'Sin puesto'}
-                  </p>
+              {/* Header: cierre arriba a la derecha; «Dar de Baja» abajo para no confundirlo con la X */}
+              <div style={{ marginBottom: '14px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '16px', flexWrap: 'wrap' }}>
+                  <div style={{ flex: '1 1 220px', minWidth: 0 }}>
+                    <h2 style={{ margin: '0 0 3px 0', fontSize: '1.2rem' }}>{nombreCompleto(emp)}</h2>
+                    <p style={{ margin: 0, color: '#666', fontSize: '0.88rem' }}>
+                      No. {emp.numero_empleado} &middot; {emp.departamento?.nombre || 'Sin departamento'} &middot; {emp.puesto?.nombre || 'Sin puesto'}
+                    </p>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0, marginLeft: 'auto' }}>
+                    {estadoBadge(emp.estado)}
+                    <button
+                      type="button"
+                      onClick={() => setShowDetalle(false)}
+                      aria-label="Cerrar ventana"
+                      style={{
+                        background: '#f3f4f6',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '8px',
+                        fontSize: '1.35rem',
+                        lineHeight: 1,
+                        cursor: 'pointer',
+                        color: '#64748b',
+                        padding: '6px 14px',
+                        minWidth: '44px',
+                        minHeight: '40px',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      &times;
+                    </button>
+                  </div>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  {estadoBadge(emp.estado)}
-                  {emp.estado !== 'baja' && (
-                    <button onClick={() => handleBaja(emp)} style={{ ...btnDanger, padding: '5px 14px', fontSize: '0.82rem' }}>
+                {emp.estado !== 'baja' && (
+                  <div
+                    style={{
+                      marginTop: '12px',
+                      paddingTop: '12px',
+                      borderTop: '1px solid #e5e7eb',
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      alignItems: 'center',
+                      gap: '10px 16px',
+                      justifyContent: 'space-between',
+                    }}
+                  >
+                    <span style={{ fontSize: '0.8rem', color: '#64748b', maxWidth: '480px', lineHeight: 1.4 }}>
+                      Baja definitiva en el sistema; confirme en el cuadro que aparecerá al pulsar.
+                    </span>
+                    <button type="button" onClick={() => handleBaja(emp)} style={{ ...btnDanger, padding: '8px 18px', fontSize: '0.88rem', flexShrink: 0 }}>
                       Dar de Baja
                     </button>
-                  )}
-                  <button onClick={() => setShowDetalle(false)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#999', lineHeight: 1, marginLeft: '4px' }}>&times;</button>
-                </div>
+                  </div>
+                )}
               </div>
 
               {/* Tabs unificadas */}
@@ -1535,9 +2113,18 @@ export const PersonalPage = () => {
                 </button>
                 <button style={detTabStyle(detalleTab === 'asistencias')} onClick={() => {
                   setDetalleTab('asistencias');
-                  if (empChecadas.length === 0) loadChecadas(emp.id);
+                  void loadChecadas(emp.id, empAsistQuincena);
                 }}>
                   Asistencias
+                </button>
+                <button
+                  style={detTabStyle(detalleTab === 'vacaciones')}
+                  onClick={() => {
+                    setDetalleTab('vacaciones');
+                    void loadVacacionesForEmp(emp.id);
+                  }}
+                >
+                  Vacaciones
                 </button>
                 <button style={detTabStyle(detalleTab === 'editar')} onClick={() => setDetalleTab('editar')}>
                   Editar
@@ -1550,6 +2137,7 @@ export const PersonalPage = () => {
                 <button style={detTabStyle(detalleTab === 'huella')} onClick={() => {
                   setDetalleTab('huella');
                   loadHuellaTemplates(emp);
+                  loadEmpleadoDispositivos(emp);
                 }}>
                   Huella
                 </button>
@@ -1583,21 +2171,87 @@ export const PersonalPage = () => {
               {/* ── TAB: ASISTENCIAS ── */}
               {detalleTab === 'asistencias' && (
                 <div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                    <p style={{ margin: 0, color: '#555', fontSize: '0.9rem' }}>{empChecadas.length} registro(s)</p>
-                    <button onClick={() => loadChecadas(emp.id)} style={{ ...btnPrimary, padding: '6px 14px', fontSize: '0.8rem' }} disabled={loadingChecadas}>
-                      {loadingChecadas ? 'Cargando...' : 'Actualizar'}
-                    </button>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center', gap: '12px', marginBottom: '10px' }}>
+                    <div />
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '14px', flexWrap: 'wrap', justifyContent: 'center' }}>
+                      <button
+                        type="button"
+                        title="Quincena anterior"
+                        onClick={() => {
+                          const q = quincenaAnterior(empAsistQuincena.year, empAsistQuincena.month, empAsistQuincena.num);
+                          setEmpAsistQuincena(q);
+                          void loadChecadas(emp.id, q);
+                        }}
+                        style={{
+                          padding: '8px 14px',
+                          backgroundColor: '#0ea5e9',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          fontSize: '1.1rem',
+                          lineHeight: 1,
+                          fontWeight: 600,
+                          boxShadow: '0 1px 3px rgba(14,165,233,0.4)',
+                        }}
+                      >
+                        ←
+                      </button>
+                      <span style={{ color: '#374151', fontSize: '0.88rem', fontWeight: 600, textAlign: 'center', maxWidth: 'min(360px, 92vw)' }}>
+                        {formatQuincenaLabel(empAsistQuincena.year, empAsistQuincena.month, empAsistQuincena.num)}
+                      </span>
+                      <button
+                        type="button"
+                        title="Quincena siguiente"
+                        onClick={() => {
+                          const q = quincenaSiguiente(empAsistQuincena.year, empAsistQuincena.month, empAsistQuincena.num);
+                          setEmpAsistQuincena(q);
+                          void loadChecadas(emp.id, q);
+                        }}
+                        style={{
+                          padding: '8px 14px',
+                          backgroundColor: '#0ea5e9',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          fontSize: '1.1rem',
+                          lineHeight: 1,
+                          fontWeight: 600,
+                          boxShadow: '0 1px 3px rgba(14,165,233,0.4)',
+                        }}
+                      >
+                        →
+                      </button>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                      <button
+                        type="button"
+                        onClick={() => loadChecadas(emp.id, empAsistQuincena)}
+                        style={{ ...btnPrimary, padding: '6px 14px', fontSize: '0.8rem' }}
+                        disabled={loadingChecadas}
+                      >
+                        {loadingChecadas ? 'Cargando...' : 'Actualizar'}
+                      </button>
+                    </div>
                   </div>
+                  <p style={{ margin: '0 0 10px 0', color: '#666', fontSize: '0.82rem' }}>
+                    Solo esta quincena (calendario México).{' '}
+                    <strong>{empChecadas.length}</strong> marca{empChecadas.length !== 1 ? 's' : ''} ·{' '}
+                    <strong>{empDayRows.length}</strong> día{empDayRows.length !== 1 ? 's' : ''} con registro.
+                    {empChecadas.length >= 500 && (
+                      <span style={{ color: '#b45309' }}> Hay más de 500 marcas en el periodo; revisa reporte de asistencia.</span>
+                    )}
+                  </p>
                   {loadingChecadas && empChecadas.length === 0 ? (
                     <p style={{ textAlign: 'center', color: '#888', padding: '20px 0' }}>Cargando asistencias...</p>
                   ) : empDayRows.length === 0 ? (
-                    <p style={{ textAlign: 'center', color: '#888', padding: '20px 0' }}>No hay asistencias registradas para este empleado.</p>
+                    <p style={{ textAlign: 'center', color: '#888', padding: '20px 0' }}>No hay asistencias en esta quincena.</p>
                   ) : (
-                    <div style={{ overflowX: 'auto', maxHeight: '400px', overflowY: 'auto' }}>
+                    <div style={{ overflowX: 'auto', maxHeight: '440px', overflowY: 'auto' }}>
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88rem' }}>
                         <thead>
-                          <tr style={{ backgroundColor: '#f8f9fa', position: 'sticky', top: 0 }}>
+                          <tr style={{ backgroundColor: '#f8f9fa', position: 'sticky', top: 0, zIndex: 1 }}>
                             <th style={{ padding: '10px 12px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontWeight: 600, color: '#555' }}>Fecha</th>
                             <th style={{ padding: '10px 12px', textAlign: 'center', borderBottom: '2px solid #dee2e6', fontWeight: 600, color: '#155724', backgroundColor: '#e8f5e9' }}>Entrada</th>
                             <th style={{ padding: '10px 12px', textAlign: 'center', borderBottom: '2px solid #dee2e6', fontWeight: 600, color: '#856404', backgroundColor: '#fff8e1' }}>Salida Comer</th>
@@ -1606,7 +2260,7 @@ export const PersonalPage = () => {
                           </tr>
                         </thead>
                         <tbody>
-                          {empDayRows.map(row => (
+                          {empDayRows.map((row) => (
                             <tr key={row.key} style={{ borderBottom: '1px solid #eee', backgroundColor: row.esTiempoExtra ? '#fff8e1' : 'transparent' }}>
                               <td style={{ padding: '8px 12px', whiteSpace: 'nowrap' }}>
                                 {row.fecha}
@@ -1627,12 +2281,246 @@ export const PersonalPage = () => {
                 </div>
               )}
 
+              {/* ── TAB: VACACIONES ── */}
+              {detalleTab === 'vacaciones' && (
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: '10px' }}>
+                    <button
+                      type="button"
+                      onClick={() => void loadVacacionesForEmp(emp.id)}
+                      style={{ ...btnPrimary, padding: '6px 14px', fontSize: '0.8rem' }}
+                      disabled={loadingVacaciones}
+                    >
+                      {loadingVacaciones ? 'Cargando...' : 'Actualizar'}
+                    </button>
+                  </div>
+                  {loadingVacaciones && !vacBalance && !vacError ? (
+                    <p style={{ textAlign: 'center', color: '#888', padding: '20px 0' }}>Cargando vacaciones...</p>
+                  ) : vacError && !vacBalance ? (
+                    <p style={{ textAlign: 'center', color: '#dc3545', padding: '16px 0' }}>{vacError}</p>
+                  ) : (
+                    <>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '12px', marginBottom: '16px' }}>
+                        <div style={{ padding: '14px', borderRadius: '8px', border: '1px solid #bae6fd', backgroundColor: '#f0f9ff' }}>
+                          <div style={{ fontSize: '0.78rem', color: '#0369a1', marginBottom: '4px' }}>Saldo LFT</div>
+                          <div style={{ fontSize: '1.45rem', fontWeight: 700, color: '#0c4a6e' }}>
+                            {vacBalance
+                              ? Number(
+                                  vacBalance.saldo_total_con_migracion
+                                    ?? Number(vacBalance.saldo_dias_lft_neto) + Number(vacBalance.dias_saldo_migracion_vacaciones ?? 0),
+                                ).toFixed(2)
+                              : '—'}{' '}
+                            <span style={{ fontSize: '0.85rem', fontWeight: 500 }}>días</span>
+                          </div>
+                          {vacBalance && (
+                            <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: '8px', lineHeight: 1.45 }}>
+                              LFT neto: {Number(vacBalance.saldo_dias_lft_neto).toFixed(2)} · Bolsa manual:{' '}
+                              {Number(vacBalance.dias_saldo_migracion_vacaciones ?? 0).toFixed(2)} · Adeudo ley:{' '}
+                              {Number(vacBalance.dias_deuda_vacaciones_ley ?? 0).toFixed(2)}
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ padding: '14px', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
+                          <div style={{ fontSize: '0.78rem', color: '#666', marginBottom: '4px' }}>Días en periodos vigentes</div>
+                          <div style={{ fontSize: '1.1rem', fontWeight: 600 }}>{vacBalance ? Number(vacBalance.dias_disponibles).toFixed(2) : '—'}</div>
+                        </div>
+                        <div style={{ padding: '14px', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
+                          <div style={{ fontSize: '0.78rem', color: '#666', marginBottom: '4px' }}>Días pendientes (solicitudes)</div>
+                          <div style={{ fontSize: '1.1rem', fontWeight: 600 }}>{vacBalance ? Number(vacBalance.dias_pendientes).toFixed(2) : '—'}</div>
+                        </div>
+                      </div>
+
+                      {(vacBalance?.periodo_actual || vacBalance?.periodo_anterior) && (
+                        <div style={{ marginBottom: '16px' }}>
+                          <h4 style={{ margin: '0 0 8px 0', fontSize: '0.95rem', color: '#374151' }}>Periodos LFT</h4>
+                          <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: '8px' }}>
+                            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+                              <thead>
+                                <tr style={{ backgroundColor: '#f8f9fa' }}>
+                                  <th style={{ padding: '8px 10px', textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>Periodo</th>
+                                  <th style={{ padding: '8px 10px', textAlign: 'right', borderBottom: '1px solid #e5e7eb' }}>Derecho</th>
+                                  <th style={{ padding: '8px 10px', textAlign: 'right', borderBottom: '1px solid #e5e7eb' }}>Tomados</th>
+                                  <th style={{ padding: '8px 10px', textAlign: 'right', borderBottom: '1px solid #e5e7eb' }}>Disponibles</th>
+                                  <th style={{ padding: '8px 10px', textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>Límite goce</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {vacBalance?.periodo_anterior && (
+                                  <tr style={{ borderBottom: '1px solid #f3f4f6' }}>
+                                    <td style={{ padding: '8px 10px' }}>
+                                      {vacBalance.periodo_anterior.prescrito_por_plazo
+                                        ? `Año de servicio ${vacBalance.periodo_anterior.anios_antiguedad} (fuera de plazo de goce)`
+                                        : 'Anterior (por vencer)'}
+                                      {vacBalance.periodo_anterior.prescrito_por_plazo && (
+                                        <div style={{ fontSize: '0.72rem', color: '#92400e', marginTop: '4px', lineHeight: 1.35 }}>
+                                          No suma al saldo LFT vigente. Límite: 18 meses tras el aniversario de ese periodo.
+                                          {(vacBalance.periodo_anterior.dias_pendientes_historico ?? 0) > 0 && (
+                                            <> Días no tomados al vencer el plazo (referencia): {Number(vacBalance.periodo_anterior.dias_pendientes_historico).toFixed(2)}.</>
+                                          )}
+                                        </div>
+                                      )}
+                                    </td>
+                                    <td style={{ padding: '8px 10px', textAlign: 'right' }}>{vacBalance.periodo_anterior.dias_derecho}</td>
+                                    <td style={{ padding: '8px 10px', textAlign: 'right' }}>{Number(vacBalance.periodo_anterior.dias_tomados).toFixed(2)}</td>
+                                    <td style={{ padding: '8px 10px', textAlign: 'right' }}>{Number(vacBalance.periodo_anterior.dias_disponibles).toFixed(2)}</td>
+                                    <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
+                                      {vacBalance.periodo_anterior.fecha_limite_goce
+                                        ? new Date(vacBalance.periodo_anterior.fecha_limite_goce).toLocaleDateString('es-MX', { timeZone: 'America/Mexico_City' })
+                                        : '—'}
+                                    </td>
+                                  </tr>
+                                )}
+                                {vacBalance?.periodo_actual && (
+                                  <tr>
+                                    <td style={{ padding: '8px 10px' }}>Actual</td>
+                                    <td style={{ padding: '8px 10px', textAlign: 'right' }}>{vacBalance.periodo_actual.dias_derecho}</td>
+                                    <td style={{ padding: '8px 10px', textAlign: 'right' }}>{Number(vacBalance.periodo_actual.dias_tomados).toFixed(2)}</td>
+                                    <td style={{ padding: '8px 10px', textAlign: 'right' }}>{Number(vacBalance.periodo_actual.dias_disponibles).toFixed(2)}</td>
+                                    <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
+                                      {vacBalance.periodo_actual.fecha_limite_goce
+                                        ? new Date(vacBalance.periodo_actual.fecha_limite_goce).toLocaleDateString('es-MX', { timeZone: 'America/Mexico_City' })
+                                        : '—'}
+                                    </td>
+                                  </tr>
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      )}
+
+                      {isAdmin ? (
+                        <div style={{ marginBottom: '18px', padding: '14px', borderRadius: '8px', border: '1px solid #fde68a', backgroundColor: '#fffbeb' }}>
+                          <h4 style={{ margin: '0 0 8px 0', fontSize: '0.95rem', color: '#92400e' }}>Ajuste manual de saldo (administrador)</h4>
+                          <p style={{ margin: '0 0 12px 0', fontSize: '0.78rem', color: '#92400e', lineHeight: 1.45 }}>
+                            El número grande arriba es LFT neto + bolsa manual. Los días de bolsa se guardan aparte y se suman al saldo mostrado; el LFT neto sigue la misma regla que el import de empleados (puede ser negativo).
+                          </p>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
+                              <label style={{ fontSize: '0.85rem', color: '#374151', minWidth: '140px' }}>Saldo LFT neto</label>
+                              <input
+                                type="text"
+                                value={vacSaldoEdit}
+                                onChange={(e) => setVacSaldoEdit(e.target.value)}
+                                style={{ width: '120px', padding: '8px 10px', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.9rem' }}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => void handleGuardarSaldoVac(emp.id)}
+                                disabled={savingVacSaldo}
+                                style={savingVacSaldo ? { ...btnPrimary, opacity: 0.65, cursor: 'not-allowed' } : btnPrimary}
+                              >
+                                {savingVacSaldo ? 'Guardando...' : 'Guardar'}
+                              </button>
+                            </div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
+                              <label style={{ fontSize: '0.85rem', color: '#374151', minWidth: '140px' }}>Días bolsa (suman al saldo)</label>
+                              <input
+                                type="text"
+                                value={vacMigracionEdit}
+                                onChange={(e) => setVacMigracionEdit(e.target.value)}
+                                style={{ width: '120px', padding: '8px 10px', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.9rem' }}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => void handleGuardarSaldoMigracionVac(emp.id)}
+                                disabled={savingVacMigracion}
+                                style={savingVacMigracion ? { ...btnPrimary, opacity: 0.65, cursor: 'not-allowed' } : btnPrimary}
+                              >
+                                {savingVacMigracion ? 'Guardando...' : 'Guardar'}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <p style={{ margin: '0 0 16px 0', fontSize: '0.78rem', color: '#6b7280' }}>
+                          El ajuste manual del saldo LFT solo puede hacerlo un administrador.
+                        </p>
+                      )}
+
+                      <h4 style={{ margin: '0 0 8px 0', fontSize: '0.95rem', color: '#374151' }}>Solicitudes</h4>
+                      {vacSolicitudes.length === 0 ? (
+                        <p style={{ color: '#888', fontSize: '0.88rem' }}>No hay solicitudes registradas para este empleado.</p>
+                      ) : (
+                        <div style={{ overflowX: 'auto', maxHeight: '320px', overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: '8px' }}>
+                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+                            <thead>
+                              <tr style={{ backgroundColor: '#f8f9fa', position: 'sticky', top: 0, zIndex: 1 }}>
+                                <th style={{ padding: '8px 10px', textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>Inicio</th>
+                                <th style={{ padding: '8px 10px', textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>Fin</th>
+                                <th style={{ padding: '8px 10px', textAlign: 'right', borderBottom: '1px solid #e5e7eb' }}>Días</th>
+                                <th style={{ padding: '8px 10px', textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>Estado</th>
+                                <th style={{ padding: '8px 10px', textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>Alta</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {vacSolicitudes.map((s) => (
+                                <tr key={s.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                                  <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
+                                    {s.fecha_inicio ? new Date(s.fecha_inicio).toLocaleDateString('es-MX', { timeZone: 'America/Mexico_City' }) : '—'}
+                                  </td>
+                                  <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
+                                    {s.fecha_fin ? new Date(s.fecha_fin).toLocaleDateString('es-MX', { timeZone: 'America/Mexico_City' }) : '—'}
+                                  </td>
+                                  <td style={{ padding: '8px 10px', textAlign: 'right' }}>{s.dias_solicitados}</td>
+                                  <td style={{ padding: '8px 10px' }}>{(s.estado || '').replace(/_/g, ' ')}</td>
+                                  <td style={{ padding: '8px 10px', whiteSpace: 'nowrap', fontSize: '0.78rem', color: '#666' }}>
+                                    {s.created_at ? new Date(s.created_at).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' }) : '—'}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </>
+                  )}
+                  {vacError && vacBalance && (
+                    <p style={{ color: '#b45309', fontSize: '0.82rem', marginTop: '10px' }}>{vacError}</p>
+                  )}
+                </div>
+              )}
+
               {/* ── TAB: EDITAR ── */}
               {detalleTab === 'editar' && (
                 <form onSubmit={handleSubmit}>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', borderBottom: '2px solid #e5e7eb', marginBottom: '16px' }}>
                     <button type="button" style={formTabStyle(formTab === 'personales')} onClick={() => setFormTab('personales')}>Datos personales</button>
                     <button type="button" style={formTabStyle(formTab === 'laborales')} onClick={() => setFormTab('laborales')}>Datos laborales</button>
+                    {canEditNomina && isNominaEnabled && (
+                      <button
+                        type="button"
+                        style={formTabStyle(formTab === 'nomina')}
+                        onClick={() => {
+                          setFormTab('nomina');
+                          api.get(`/nomina/empleados/${emp.id}/datos`)
+                            .then(r => {
+                              const d = r.data;
+                              setNominaForm({
+                                salario_base: d.salario_base != null ? String(d.salario_base) : '',
+                                salario_diario_integrado: d.salario_diario_integrado != null ? String(d.salario_diario_integrado) : '',
+                                tipo_contrato: d.tipo_contrato || '',
+                                regimen_tipo: d.regimen_tipo || '',
+                                periodicidad_pago: d.periodicidad_pago || '',
+                                banco_clave: d.banco_clave || '',
+                                cuenta_bancaria: d.cuenta_bancaria || '',
+                                clabe_interbancaria: d.clabe_interbancaria || '',
+                                entidad_federativa: d.entidad_federativa || '',
+                                riesgo_puesto: d.riesgo_puesto || '',
+                                tipo_jornada: d.tipo_jornada || '',
+                                sindicalizado: !!d.sindicalizado,
+                                numero_credito_infonavit: d.numero_credito_infonavit || '',
+                                descuento_infonavit: d.descuento_infonavit != null ? String(d.descuento_infonavit) : '',
+                                numero_credito_infonacot: d.numero_credito_infonacot || '',
+                                descuento_infonacot: d.descuento_infonacot != null ? String(d.descuento_infonacot) : '',
+                              });
+                            })
+                            .catch(() => setNominaForm(emptyNominaForm()));
+                        }}
+                      >
+                        Nómina / Banco
+                      </button>
+                    )}
                   </div>
 
                   {formTab === 'personales' && (
@@ -1791,6 +2679,15 @@ export const PersonalPage = () => {
                     </div>
                   )}
 
+                  {formTab === 'nomina' && canEditNomina && isNominaEnabled && (
+                    <div style={{ padding: '8px 0 4px' }}>
+                      <NominaBancoFormFields nominaForm={nominaForm} setNominaForm={setNominaForm} catNomina={catNomina} />
+                      <p style={{ margin: '12px 0 0', fontSize: '0.78rem', color: '#6b7280' }}>
+                        Guarda con el botón inferior junto al resto del expediente.
+                      </p>
+                    </div>
+                  )}
+
                   <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', paddingTop: '12px', borderTop: '1px solid #e5e7eb' }}>
                     <button type="button" onClick={() => setDetalleTab('info')} style={btnSecondary}>Cancelar</button>
                     <button type="submit" style={saving ? { ...btnSuccess, opacity: 0.6, cursor: 'not-allowed' } : btnSuccess} disabled={saving}>
@@ -1840,7 +2737,7 @@ export const PersonalPage = () => {
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: huellaTemplates.length > 0 ? '8px' : 0 }}>
                         <span style={{ color: '#155724', fontWeight: 700, fontSize: '1rem' }}>&#10003;</span>
                         <span style={{ fontWeight: 600, fontSize: '0.9rem', color: '#155724' }}>
-                          {huellaTemplates.length} huella{huellaTemplates.length !== 1 ? 's' : ''} registrada{huellaTemplates.length !== 1 ? 's' : ''} en el sistema
+                          {huellaTemplates.length} huella{huellaTemplates.length !== 1 ? 's' : ''} guardada{huellaTemplates.length !== 1 ? 's' : ''} para replicación
                         </span>
                       </div>
                       {huellaTemplates.length > 0 && (
@@ -1855,9 +2752,119 @@ export const PersonalPage = () => {
                     </div>
                   ) : (
                     <div style={{ padding: '10px 14px', borderRadius: '8px', marginBottom: '16px', backgroundColor: '#fff3cd', border: '1px solid #ffeeba' }}>
-                      <span style={{ fontWeight: 500, fontSize: '0.9rem', color: '#856404' }}>Sin huella registrada en el sistema</span>
+                      <span style={{ fontWeight: 500, fontSize: '0.9rem', color: '#856404' }}>Sin plantilla guardada para replicación. (No impide checar si está enrolado en algún checador.)</span>
                     </div>
                   )}
+
+                  {/* ── Estado por dispositivo ── */}
+                  <div style={{ marginBottom: '20px', borderTop: '1px solid #e5e7eb', paddingTop: '16px' }}>
+                    <p style={{ fontWeight: 600, fontSize: '0.95rem', margin: '0 0 6px', color: '#111827' }}>
+                      Estado en cada checador
+                    </p>
+                    <p style={{ margin: '0 0 10px', fontSize: '0.82rem', color: '#6b7280' }}>
+                      Aquí se ve dónde está dado de alta el empleado y dónde checa físicamente.
+                    </p>
+                    {loadingEmpDisp ? (
+                      <p style={{ color: '#6b7280', fontSize: '0.85rem' }}>Cargando…</p>
+                    ) : (
+                      <div style={{ overflowX: 'auto' }}>
+                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                          <thead>
+                            <tr style={{ backgroundColor: '#f3f4f6', textAlign: 'left' }}>
+                              <th style={{ padding: '8px', borderBottom: '1px solid #e5e7eb' }}>Dispositivo</th>
+                              <th style={{ padding: '8px', borderBottom: '1px solid #e5e7eb' }}>Estado</th>
+                              <th style={{ padding: '8px', borderBottom: '1px solid #e5e7eb' }}>Última checada</th>
+                              <th style={{ padding: '8px', borderBottom: '1px solid #e5e7eb', textAlign: 'right' }}>Acciones</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {empleadoDispositivos
+                              .filter(d => !d.dispositivo_nombre.toLowerCase().includes('portal'))
+                              .map(d => {
+                                const tieneActividad = d.enviado || d.checadas_total > 0 || d.tiene_huella_en_bd;
+                                return (
+                                  <tr key={d.dispositivo_id} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                                    <td style={{ padding: '8px', verticalAlign: 'top' }}>
+                                      <div style={{ fontWeight: 500 }}>{d.dispositivo_nombre}</div>
+                                      {d.dispositivo_ubicacion && (
+                                        <div style={{ fontSize: '0.78rem', color: '#666' }}>{d.dispositivo_ubicacion}</div>
+                                      )}
+                                    </td>
+                                    <td style={{ padding: '8px', verticalAlign: 'top' }}>
+                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                        {d.enviado ? (
+                                          <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: '12px', backgroundColor: '#d1fae5', color: '#065f46', fontSize: '0.75rem', fontWeight: 600, alignSelf: 'flex-start' }}>
+                                            Dado de alta
+                                          </span>
+                                        ) : (
+                                          <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: '12px', backgroundColor: '#f3f4f6', color: '#6b7280', fontSize: '0.75rem', alignSelf: 'flex-start' }}>
+                                            Sin alta
+                                          </span>
+                                        )}
+                                        {d.tiene_huella_en_bd && (
+                                          <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: '12px', backgroundColor: '#dbeafe', color: '#1e40af', fontSize: '0.75rem', alignSelf: 'flex-start' }}>
+                                            Huella guardada ({d.finger_indices.map(f => f + 1).join(', ')})
+                                          </span>
+                                        )}
+                                        {d.pending_enroll_id != null && (
+                                          <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: '12px', backgroundColor: '#fef3c7', color: '#92400e', fontSize: '0.75rem', alignSelf: 'flex-start' }}>
+                                            Enroll pendiente
+                                          </span>
+                                        )}
+                                        {d.pending_delete_id != null && (
+                                          <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: '12px', backgroundColor: '#fee2e2', color: '#991b1b', fontSize: '0.75rem', alignSelf: 'flex-start' }}>
+                                            Borrado pendiente
+                                          </span>
+                                        )}
+                                      </div>
+                                    </td>
+                                    <td style={{ padding: '8px', verticalAlign: 'top', color: '#374151' }}>
+                                      {d.ultima_checada ? (
+                                        <>
+                                          <div>{new Date(d.ultima_checada).toLocaleString('es-MX')}</div>
+                                          <div style={{ fontSize: '0.78rem', color: '#6b7280' }}>
+                                            {d.checadas_total} checada{d.checadas_total === 1 ? '' : 's'}
+                                          </div>
+                                        </>
+                                      ) : (
+                                        <span style={{ color: '#9ca3af' }}>—</span>
+                                      )}
+                                    </td>
+                                    <td style={{ padding: '8px', verticalAlign: 'top', textAlign: 'right' }}>
+                                      {tieneActividad && d.pending_delete_id == null && (
+                                        <button
+                                          onClick={() => borrarDelChecador(emp, d.dispositivo_id, d.dispositivo_nombre)}
+                                          disabled={borrandoCheckador === d.dispositivo_id}
+                                          style={{
+                                            padding: '4px 10px',
+                                            borderRadius: '6px',
+                                            border: '1px solid #fecaca',
+                                            backgroundColor: '#fef2f2',
+                                            color: '#991b1b',
+                                            fontSize: '0.78rem',
+                                            cursor: borrandoCheckador === d.dispositivo_id ? 'not-allowed' : 'pointer',
+                                            opacity: borrandoCheckador === d.dispositivo_id ? 0.6 : 1,
+                                          }}
+                                        >
+                                          {borrandoCheckador === d.dispositivo_id ? 'Encolando…' : 'Borrar del checador'}
+                                        </button>
+                                      )}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            {empleadoDispositivos.filter(d => !d.dispositivo_nombre.toLowerCase().includes('portal')).length === 0 && (
+                              <tr>
+                                <td colSpan={4} style={{ padding: '12px', color: '#9ca3af', textAlign: 'center' }}>
+                                  Sin dispositivos activos.
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
 
                   {enrollStatus === 'completed' && (
                     <div style={{ padding: '16px', backgroundColor: '#d4edda', borderRadius: '8px', marginBottom: '16px', display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
@@ -2220,12 +3227,12 @@ export const PersonalPage = () => {
       {/* ── Modal Importar XLSX (solo admin) ── */}
       {isAdmin && showImport && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-          onClick={() => { setShowImport(false); setImportFile(null); setImportEmpresaId(''); setImportResult(null); }}>
+          onClick={() => { setShowImport(false); setImportFile(null); setImportEmpresaId(''); setImportActualizarExistentes(false); setImportResult(null); }}>
           <div style={{ background: '#fff', borderRadius: 14, padding: 28, minWidth: 420, maxWidth: 600, maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 8px 30px rgba(0,0,0,0.18)' }}
             onClick={e => e.stopPropagation()}>
             <h3 style={{ margin: '0 0 16px', fontSize: '1.15rem' }}>Importar Empleados desde XLSX</h3>
 
-            <button onClick={descargarPlantilla} style={{ background: 'none', border: '1px solid #6366f1', color: '#6366f1', borderRadius: 7, padding: '6px 14px', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem', marginBottom: 16 }}>
+            <button type="button" onClick={descargarPlantilla} style={{ background: 'none', border: '1px solid #6366f1', color: '#6366f1', borderRadius: 7, padding: '6px 14px', cursor: 'pointer', fontWeight: 600, fontSize: '0.85rem', marginBottom: 16 }}>
               ⬇ Descargar Plantilla
             </button>
 
@@ -2255,8 +3262,20 @@ export const PersonalPage = () => {
               {importFile && <p style={{ margin: '8px 0 0', fontSize: '0.85rem', color: '#475569' }}>{importFile.name}</p>}
             </div>
 
+            <div style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                id="import-actualizar-existentes"
+                type="checkbox"
+                checked={importActualizarExistentes}
+                onChange={e => { setImportActualizarExistentes(e.target.checked); setImportResult(null); }}
+              />
+              <label htmlFor="import-actualizar-existentes" style={{ fontSize: '0.88rem', color: '#334155', cursor: 'pointer' }}>
+                Actualizar existentes (completar campos vacíos)
+              </label>
+            </div>
+
             <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
-              <button onClick={() => { setShowImport(false); setImportFile(null); setImportEmpresaId(''); setImportResult(null); }} style={btnSecondary}>Cerrar</button>
+              <button onClick={() => { setShowImport(false); setImportFile(null); setImportEmpresaId(''); setImportActualizarExistentes(false); setImportResult(null); }} style={btnSecondary}>Cerrar</button>
               <button onClick={handleImport} disabled={!importFile || !importEmpresaId || importing}
                 style={!importFile || !importEmpresaId || importing ? { ...btnSuccess, backgroundColor: '#6366f1', opacity: 0.6, cursor: 'not-allowed' } : { ...btnSuccess, backgroundColor: '#6366f1' }}>
                 {importing ? 'Importando...' : 'Importar'}
@@ -2267,6 +3286,7 @@ export const PersonalPage = () => {
               <div style={{ marginTop: 16, fontSize: '0.88rem', lineHeight: 1.7 }}>
                 <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
                   <span style={{ background: '#dcfce7', color: '#166534', padding: '3px 10px', borderRadius: 6, fontWeight: 600 }}>Creados: {importResult.creados}</span>
+                  <span style={{ background: '#dbeafe', color: '#1d4ed8', padding: '3px 10px', borderRadius: 6, fontWeight: 600 }}>Actualizados: {importResult.actualizados || 0}</span>
                   <span style={{ background: '#fef3c7', color: '#92400e', padding: '3px 10px', borderRadius: 6, fontWeight: 600 }}>Omitidos: {importResult.omitidos}</span>
                   <span style={{ background: '#fee2e2', color: '#991b1b', padding: '3px 10px', borderRadius: 6, fontWeight: 600 }}>Errores: {importResult.errores_count}</span>
                 </div>

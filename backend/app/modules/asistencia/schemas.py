@@ -1,5 +1,5 @@
-from pydantic import BaseModel, field_serializer
-from typing import Optional, List
+from pydantic import BaseModel, field_serializer, Field, field_validator
+from typing import Optional, List, Literal
 from datetime import datetime, date
 from .models import TipoChecada, TipoIncidencia
 
@@ -34,6 +34,8 @@ class EnqueueUserRequest(BaseModel):
     """Usuario a agregar a la cola para alta remota en dispositivo"""
     numero_empleado: str
     nombre: str
+    empleado_id: Optional[int] = None
+    empresa_id: Optional[int] = None
 
 
 class UsuarioPendienteResponse(BaseModel):
@@ -66,6 +68,8 @@ class PendingEnrollResponse(BaseModel):
 
 class StartEnrollRequest(BaseModel):
     numero_empleado: str
+    empleado_id: Optional[int] = None
+    empresa_id: Optional[int] = None
 
 
 class MarkSentRequest(BaseModel):
@@ -78,12 +82,36 @@ class MarkEnrollDoneRequest(BaseModel):
 
 class UploadTemplateRequest(BaseModel):
     numero_empleado: str
+    empleado_id: Optional[int] = None
+    pin_checador: Optional[str] = None
     finger_index: int = 0
     template_data: str
 
 
 class EnqueueReplicateRequest(BaseModel):
     numero_empleado: str
+
+
+class QueueDeleteRequest(BaseModel):
+    """Solicitud para encolar borrado de un usuario en un dispositivo."""
+    empleado_id: Optional[int] = None
+    numero_empleado: Optional[str] = None
+
+
+class EmpleadoDispositivoEstado(BaseModel):
+    """Estado de un empleado en cada dispositivo activo (para ficha del empleado)."""
+    dispositivo_id: int
+    dispositivo_nombre: str
+    dispositivo_ubicacion: Optional[str] = None
+    enviado: bool = False
+    enviado_at: Optional[datetime] = None
+    pending_user_id: Optional[int] = None
+    pending_enroll_id: Optional[int] = None
+    pending_delete_id: Optional[int] = None
+    tiene_huella_en_bd: bool = False
+    finger_indices: List[int] = []
+    checadas_total: int = 0
+    ultima_checada: Optional[datetime] = None
 
 
 class PendingReplicateResponse(BaseModel):
@@ -100,6 +128,7 @@ class PendingReplicateResponse(BaseModel):
 
 class FingerprintTemplateResponse(BaseModel):
     id: int
+    empleado_id: Optional[int] = None
     numero_empleado: str
     finger_index: int
     source_device_id: Optional[int] = None
@@ -221,6 +250,9 @@ class AsistenciaResponse(AsistenciaBase):
     created_at: datetime
     empleado_nombre: Optional[str] = None
     empleado_numero: Optional[str] = None
+    # Desde empleado en BD (p. ej. administradores excluidos del listado /personal/empleados)
+    empresa_nombre: Optional[str] = None
+    departamento_nombre: Optional[str] = None
 
     @field_serializer("timestamp", "created_at")
     def serialize_datetime_mexico(self, dt: datetime):
@@ -233,6 +265,32 @@ class AsistenciaResponse(AsistenciaBase):
 
     class Config:
         from_attributes = True
+
+
+class DiaContextoLaboralResponse(BaseModel):
+    """Por cada día: tipo (incapacidad, vacaciones, festivo, jornada, etc.) y si aplica checar."""
+    fecha: str
+    tipo_dia: str
+    etiqueta: str
+    requiere_checadas: bool
+    checadas_requeridas: int
+    motivo: str
+
+
+class ReconciliarFaltasContextoDetalleItem(BaseModel):
+    incidencia_id: int
+    empleado_id: int
+    fecha: str
+    motivo_contexto: str
+
+
+class ReconciliarFaltasContextoResponse(BaseModel):
+    fecha_inicio: str
+    fecha_fin: str
+    revisadas: int
+    justificadas: int
+    omitidas_sin_empleado_o_fecha: int
+    detalle: List[ReconciliarFaltasContextoDetalleItem]
 
 
 # Schemas para Incidencia
@@ -290,6 +348,83 @@ class DiaFestivoResponse(BaseModel):
     tipo: str
     activo: bool
     created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+# --- Checadas especiales (un día, horario, checadas, alcance + exclusiones) ---
+AlcanceChecadaEspecial = Literal["global", "empresa", "departamento"]
+
+
+class ChecadaEspecialCreate(BaseModel):
+    nombre: str
+    fecha: date
+    hora_entrada: Optional[str] = None
+    hora_salida: Optional[str] = None
+    tolerancia_minutos: Optional[int] = None
+    checadas_requeridas: int = 4
+    alcance: AlcanceChecadaEspecial = "global"
+    empresa_id: Optional[int] = None
+    departamento_id: Optional[int] = None
+    empresas_excluidas: List[int] = Field(default_factory=list)
+    notas: Optional[str] = None
+    activo: bool = True
+
+    @field_validator("checadas_requeridas")
+    @classmethod
+    def _solo_2_o_4(cls, v: int) -> int:
+        if v not in (2, 4):
+            raise ValueError("checadas_requeridas debe ser 2 o 4")
+        return v
+
+
+class ChecadaEspecialUpdate(BaseModel):
+    nombre: Optional[str] = None
+    fecha: Optional[date] = None
+    hora_entrada: Optional[str] = None
+    hora_salida: Optional[str] = None
+    tolerancia_minutos: Optional[int] = None
+    checadas_requeridas: Optional[int] = None
+    alcance: Optional[AlcanceChecadaEspecial] = None
+    empresa_id: Optional[int] = None
+    departamento_id: Optional[int] = None
+    empresas_excluidas: Optional[List[int]] = None
+    notas: Optional[str] = None
+    activo: Optional[bool] = None
+
+    @field_validator("checadas_requeridas")
+    @classmethod
+    def _solo_2_o_4_opt(cls, v: Optional[int]) -> Optional[int]:
+        if v is None:
+            return v
+        if v not in (2, 4):
+            raise ValueError("checadas_requeridas debe ser 2 o 4")
+        return v
+
+
+class ChecadaEspecialResponse(BaseModel):
+    id: int
+    nombre: str
+    fecha: date
+    fecha_fin: Optional[date] = None
+    hora_entrada: Optional[str] = None
+    hora_salida: Optional[str] = None
+    tolerancia_minutos: Optional[int] = None
+    checadas_requeridas: int
+    alcance: str
+    empresa_id: Optional[int] = None
+    departamento_id: Optional[int] = None
+    empresas_incluidas: List[int] = Field(default_factory=list)
+    empresas_excluidas: List[int] = Field(default_factory=list)
+    notas: Optional[str] = None
+    activo: bool
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+    # Solo reglas muy antiguas sin columnas JSON coherentes
+    alcance_legacy: Optional[str] = None
+    empresa_id_legacy: Optional[int] = None
+    departamento_id_legacy: Optional[int] = None
 
     class Config:
         from_attributes = True

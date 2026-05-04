@@ -1,11 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, UploadFile, File, Form
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
 from datetime import datetime, timezone, timedelta, date
 from app.core.database import get_db
 from app.core.config import settings
 from app.core.security import get_current_user
-from app.core.deps import get_current_empleado_with_rol
+from app.core.deps import get_current_empleado_with_rol, require_superuser_download, require_superuser, require_superuser_or_rh_download
+from app.modules.audit.service import ActividadService
 from app.modules.personal import models as personal_models
 from app.modules.personal.service import PersonalService
 from . import schemas, service, models
@@ -229,11 +230,18 @@ def get_pending_replicate_for_device(device_id: int, db: Session = Depends(get_d
 
 
 @router.get("/fingerprint-templates/{numero_empleado}", response_model=List[schemas.FingerprintTemplateResponse])
-def get_templates_for_employee(numero_empleado: str, db: Session = Depends(get_db)):
+def get_templates_for_employee(
+    numero_empleado: str,
+    empleado_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+):
     """Ver si un empleado tiene templates de huella almacenados, con nombre del dispositivo origen"""
-    templates = db.query(models.FingerprintTemplate).filter(
-        models.FingerprintTemplate.numero_empleado == numero_empleado.strip()
-    ).all()
+    q = db.query(models.FingerprintTemplate)
+    if empleado_id is not None:
+        q = q.filter(models.FingerprintTemplate.empleado_id == int(empleado_id))
+    else:
+        q = q.filter(models.FingerprintTemplate.numero_empleado == numero_empleado.strip())
+    templates = q.all()
     # Cargar nombres de dispositivos
     device_ids = {t.source_device_id for t in templates if t.source_device_id}
     dispositivos = {d.id: d.nombre for d in db.query(models.Dispositivo).filter(
@@ -280,7 +288,13 @@ def start_enroll(
 ):
     """Iniciar registro de huella para un usuario ya enviado al dispositivo. Requiere agente en la misma red."""
     try:
-        return service.AsistenciaService.start_enroll(db, device_id, data.numero_empleado)
+        return service.AsistenciaService.start_enroll(
+            db,
+            device_id,
+            data.numero_empleado,
+            empleado_id=data.empleado_id,
+            empresa_id=data.empresa_id,
+        )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -299,6 +313,184 @@ def get_enroll_status(
     if not pe:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Enroll no encontrado")
     return pe
+
+
+# ========== ENDPOINTS POR EMPLEADO (vista 360°) ==========
+
+@router.get(
+    "/empleados/{empleado_id}/dispositivos",
+    response_model=List[schemas.EmpleadoDispositivoEstado],
+)
+def get_empleado_dispositivos(empleado_id: int, db: Session = Depends(get_db)):
+    """
+    Devuelve el estado del empleado en cada dispositivo activo:
+    - si está dado de alta (enviado), su id de cola y su pin del checador
+    - si tiene plantilla en BD para replicación
+    - cuántas checadas y última checada (indica que sí enroló físicamente)
+    - id de pending_enroll/pending_delete activos para el dispositivo
+    """
+    empleado = db.query(personal_models.Empleado).filter(
+        personal_models.Empleado.id == empleado_id
+    ).first()
+    if not empleado:
+        raise HTTPException(status_code=404, detail="Empleado no encontrado")
+
+    dispositivos = db.query(models.Dispositivo).filter(
+        models.Dispositivo.activo == True
+    ).order_by(models.Dispositivo.nombre).all()
+
+    numero = (empleado.numero_empleado or "").strip()
+    pin = (empleado.pin_checador or "").strip() if empleado.pin_checador else None
+
+    # Pre-cargar info por dispositivo en una sola consulta cada uno
+    dev_ids = [d.id for d in dispositivos]
+    if not dev_ids:
+        return []
+
+    pendientes_q = db.query(models.UsuarioPendienteDispositivo).filter(
+        models.UsuarioPendienteDispositivo.dispositivo_id.in_(dev_ids),
+        models.UsuarioPendienteDispositivo.numero_empleado == numero,
+    )
+    if pin:
+        pendientes_q = pendientes_q.filter(
+            (models.UsuarioPendienteDispositivo.pin_checador == pin)
+            | (models.UsuarioPendienteDispositivo.pin_checador.is_(None))
+        )
+    pendientes_map = {p.dispositivo_id: p for p in pendientes_q.all()}
+
+    enrolls = db.query(models.PendingEnroll).filter(
+        models.PendingEnroll.dispositivo_id.in_(dev_ids),
+        models.PendingEnroll.numero_empleado == numero,
+        models.PendingEnroll.status == "pending",
+    ).all()
+    enroll_map = {e.dispositivo_id: e for e in enrolls}
+
+    deletes = db.query(models.PendingDelete).filter(
+        models.PendingDelete.dispositivo_id.in_(dev_ids),
+        models.PendingDelete.numero_empleado == numero,
+        models.PendingDelete.procesado == False,
+    ).all()
+    delete_map = {d.dispositivo_id: d for d in deletes}
+
+    templates = db.query(models.FingerprintTemplate).filter(
+        models.FingerprintTemplate.empleado_id == empleado_id,
+    ).all()
+    templates_by_dev: dict[int, list[int]] = {}
+    for t in templates:
+        if t.source_device_id is not None:
+            templates_by_dev.setdefault(t.source_device_id, []).append(t.finger_index)
+
+    from sqlalchemy import func as sa_func
+    checadas_rows = db.query(
+        models.Asistencia.dispositivo_id,
+        sa_func.count(models.Asistencia.id),
+        sa_func.max(models.Asistencia.timestamp),
+    ).filter(
+        models.Asistencia.empleado_id == empleado_id,
+        models.Asistencia.dispositivo_id.in_(dev_ids),
+    ).group_by(models.Asistencia.dispositivo_id).all()
+    checadas_map = {row[0]: (row[1], row[2]) for row in checadas_rows}
+
+    result: list[schemas.EmpleadoDispositivoEstado] = []
+    for d in dispositivos:
+        p = pendientes_map.get(d.id)
+        e = enroll_map.get(d.id)
+        de = delete_map.get(d.id)
+        finger_idx = sorted(set(templates_by_dev.get(d.id, [])))
+        checadas_total, ultima = checadas_map.get(d.id, (0, None))
+        result.append(schemas.EmpleadoDispositivoEstado(
+            dispositivo_id=d.id,
+            dispositivo_nombre=d.nombre,
+            dispositivo_ubicacion=d.ubicacion,
+            enviado=bool(p.enviado) if p else False,
+            enviado_at=p.enviado_at if p else None,
+            pending_user_id=p.id if p else None,
+            pending_enroll_id=e.id if e else None,
+            pending_delete_id=de.id if de else None,
+            tiene_huella_en_bd=len(finger_idx) > 0,
+            finger_indices=finger_idx,
+            checadas_total=int(checadas_total or 0),
+            ultima_checada=ultima,
+        ))
+    return result
+
+
+@router.post("/devices/{device_id}/queue-delete", status_code=status.HTTP_201_CREATED)
+def queue_delete_user(
+    device_id: int,
+    data: schemas.QueueDeleteRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Encola la eliminación de un empleado del dispositivo y limpia su rastro local:
+    - Inserta fila en pending_delete (la consume el agente)
+    - Marca usuarios_pendientes_dispositivo.enviado=False (deja de considerarse 'dado de alta')
+    - Cancela cualquier pending_enroll abierto para ese empleado en ese dispositivo
+    - Borra la plantilla local en fingerprint_templates (para que no se replique)
+    """
+    dispositivo = db.query(models.Dispositivo).filter(models.Dispositivo.id == device_id).first()
+    if not dispositivo:
+        raise HTTPException(status_code=404, detail="Dispositivo no encontrado")
+
+    empleado = None
+    if data.empleado_id is not None:
+        empleado = db.query(personal_models.Empleado).filter(
+            personal_models.Empleado.id == int(data.empleado_id)
+        ).first()
+    elif data.numero_empleado:
+        empleado = db.query(personal_models.Empleado).filter(
+            personal_models.Empleado.numero_empleado == data.numero_empleado.strip()
+        ).first()
+    if not empleado:
+        raise HTTPException(status_code=400, detail="Empleado no encontrado")
+
+    numero = (empleado.numero_empleado or "").strip()
+
+    # Si ya hay un pending_delete sin procesar, reutilizarlo
+    pending_del = db.query(models.PendingDelete).filter(
+        models.PendingDelete.dispositivo_id == device_id,
+        models.PendingDelete.numero_empleado == numero,
+        models.PendingDelete.procesado == False,
+    ).first()
+    if not pending_del:
+        pending_del = models.PendingDelete(
+            dispositivo_id=device_id,
+            numero_empleado=numero,
+            procesado=False,
+        )
+        db.add(pending_del)
+
+    db.query(models.UsuarioPendienteDispositivo).filter(
+        models.UsuarioPendienteDispositivo.dispositivo_id == device_id,
+        models.UsuarioPendienteDispositivo.numero_empleado == numero,
+    ).update({
+        models.UsuarioPendienteDispositivo.enviado: False,
+        models.UsuarioPendienteDispositivo.enviado_at: None,
+    }, synchronize_session=False)
+
+    db.query(models.PendingEnroll).filter(
+        models.PendingEnroll.dispositivo_id == device_id,
+        models.PendingEnroll.numero_empleado == numero,
+        models.PendingEnroll.status == "pending",
+    ).update({
+        models.PendingEnroll.status: "failed",
+        models.PendingEnroll.completed_at: datetime.now(timezone.utc),
+    }, synchronize_session=False)
+
+    db.query(models.FingerprintTemplate).filter(
+        models.FingerprintTemplate.empleado_id == empleado.id,
+        models.FingerprintTemplate.source_device_id == device_id,
+    ).delete(synchronize_session=False)
+
+    db.commit()
+    db.refresh(pending_del)
+    return {
+        "ok": True,
+        "pending_delete_id": pending_del.id,
+        "dispositivo_id": device_id,
+        "numero_empleado": numero,
+        "empleado_id": empleado.id,
+    }
 
 
 # ========== ENDPOINTS PARA AGENTE (X-API-Key) ==========
@@ -402,23 +594,82 @@ def agent_upload_template(
     db: Session = Depends(get_db)
 ):
     """El agente sube un template de huella despues del enroll exitoso"""
+    numero = (data.numero_empleado or "").strip()
+    if not numero:
+        raise HTTPException(status_code=400, detail="numero_empleado es obligatorio")
+
+    empleado = None
+    if data.empleado_id is not None:
+        empleado = db.query(personal_models.Empleado).filter(
+            personal_models.Empleado.id == int(data.empleado_id)
+        ).first()
+        if not empleado:
+            raise HTTPException(status_code=400, detail=f"No existe empleado_id={data.empleado_id}")
+        if (empleado.numero_empleado or "").strip() != numero:
+            raise HTTPException(status_code=400, detail="empleado_id no coincide con numero_empleado")
+    elif (data.pin_checador or "").strip():
+        pin = (data.pin_checador or "").strip()
+        empleado = db.query(personal_models.Empleado).filter(
+            personal_models.Empleado.pin_checador == pin
+        ).first()
+        if not empleado:
+            raise HTTPException(status_code=400, detail=f"No existe empleado con pin_checador={pin}")
+        if (empleado.numero_empleado or "").strip() != numero:
+            raise HTTPException(status_code=400, detail="pin_checador no coincide con numero_empleado")
+    else:
+        # Compatibilidad con agentes antiguos (solo numero_empleado):
+        # - Si el número es único, resolver directo.
+        # - Si está duplicado entre empresas, usar el último enroll de este dispositivo.
+        candidatos = db.query(personal_models.Empleado).filter(
+            personal_models.Empleado.numero_empleado == numero
+        ).all()
+        if len(candidatos) == 1:
+            empleado = candidatos[0]
+        elif len(candidatos) > 1:
+            pe = db.query(models.PendingEnroll).filter(
+                models.PendingEnroll.dispositivo_id == dispositivo.id,
+                models.PendingEnroll.numero_empleado == numero,
+            ).order_by(models.PendingEnroll.created_at.desc()).first()
+            if pe and pe.pin_checador:
+                empleado = db.query(personal_models.Empleado).filter(
+                    personal_models.Empleado.pin_checador == pe.pin_checador
+                ).first()
+            if not empleado:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"numero_empleado {numero} existe en más de una empresa. "
+                        "Actualiza el agente para enviar pin_checador o empleado_id."
+                    ),
+                )
+
+    if not empleado:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No se pudo resolver el empleado para numero_empleado={numero}",
+        )
+
+    empleado_id = int(empleado.id)
+    numero_real = (empleado.numero_empleado or numero).strip()
     existing = db.query(models.FingerprintTemplate).filter(
-        models.FingerprintTemplate.numero_empleado == data.numero_empleado.strip(),
+        models.FingerprintTemplate.empleado_id == empleado_id,
         models.FingerprintTemplate.finger_index == data.finger_index,
     ).first()
     if existing:
         existing.template_data = data.template_data
         existing.source_device_id = dispositivo.id
+        existing.numero_empleado = numero_real
     else:
         tpl = models.FingerprintTemplate(
-            numero_empleado=data.numero_empleado.strip(),
+            empleado_id=empleado_id,
+            numero_empleado=numero_real,
             finger_index=data.finger_index,
             template_data=data.template_data,
             source_device_id=dispositivo.id,
         )
         db.add(tpl)
     db.commit()
-    return {"ok": True, "numero_empleado": data.numero_empleado.strip(), "finger_index": data.finger_index}
+    return {"ok": True, "numero_empleado": numero_real, "finger_index": data.finger_index}
 
 
 @router.get("/agent/pending-replicate")
@@ -915,11 +1166,15 @@ def get_checadas_mi_area(
         None,
         description="Solo superusuario: filtrar por un departamento. Sin parámetro = todos.",
     ),
+    empleado_id: Optional[int] = Query(
+        None,
+        description="Filtrar por un empleado concreto. Debe pertenecer al área permitida (o existir si es superusuario sin filtro de departamento).",
+    ),
     current_extra: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db)
 ):
     """Checadas del personal del área del gerente/supervisor autenticado. Requiere autenticación."""
-    empleado_id = current_extra["user_id"]
+    current_emp_id = current_extra["user_id"]
     is_superuser = current_extra.get("is_superuser") is True
 
     if is_superuser and departamento_id is not None:
@@ -933,7 +1188,7 @@ def get_checadas_mi_area(
         empleado_ids = None
     else:
         from app.modules.personal import service as personal_service
-        depto_ids = personal_service.PersonalService.get_departamento_ids_que_administro(db, empleado_id)
+        depto_ids = personal_service.PersonalService.get_departamento_ids_que_administro(db, current_emp_id)
         if not depto_ids:
             return []
         empleados = db.query(personal_models.Empleado).filter(
@@ -943,8 +1198,30 @@ def get_checadas_mi_area(
         if not empleado_ids:
             return []
 
+    if empleado_id is not None:
+        if empleado_ids is not None and empleado_id not in empleado_ids:
+            return []
+        if empleado_ids is None:
+            existe = (
+                db.query(personal_models.Empleado.id)
+                .filter(personal_models.Empleado.id == empleado_id)
+                .first()
+            )
+            if not existe:
+                return []
+
     fecha_inicio_dt = _parse_fecha_mexico_a_utc(fecha_inicio) if fecha_inicio else None
     fecha_fin_dt = _parse_fecha_mexico_a_utc(fecha_fin) if fecha_fin else None
+
+    if empleado_id is not None:
+        return service.AsistenciaService.get_asistencias(
+            db,
+            skip=0,
+            limit=limit,
+            empleado_id=empleado_id,
+            fecha_inicio=fecha_inicio_dt,
+            fecha_fin=fecha_fin_dt,
+        )
 
     if empleado_ids is None:
         return service.AsistenciaService.get_asistencias(
@@ -975,6 +1252,10 @@ def get_incidencias_mi_area(
         None,
         description="Solo superusuario: filtrar por un departamento. Sin parámetro = todas.",
     ),
+    empleado_id: Optional[int] = Query(
+        None,
+        description="Filtrar por un empleado concreto (mismas reglas de alcance que checadas/mi-area).",
+    ),
     current_extra: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db)
 ):
@@ -982,9 +1263,8 @@ def get_incidencias_mi_area(
     Lista incidencias: si es jefe de área, las de su equipo; si es superuser, todas.
     Requiere autenticación.
     """
-    empleado_id = current_extra["user_id"]
+    current_emp_id = current_extra["user_id"]
     is_superuser = current_extra.get("is_superuser") is True
-    is_jefe = current_extra.get("is_jefe") is True
 
     if is_superuser and departamento_id is not None:
         empleados = db.query(personal_models.Empleado).filter(
@@ -998,7 +1278,7 @@ def get_incidencias_mi_area(
     else:
         # Área que administro: departamentos donde soy jefe (gerente) o donde soy supervisor
         from app.modules.personal import service as personal_service
-        depto_ids = personal_service.PersonalService.get_departamento_ids_que_administro(db, empleado_id)
+        depto_ids = personal_service.PersonalService.get_departamento_ids_que_administro(db, current_emp_id)
         if not depto_ids:
             return []
         empleados = db.query(personal_models.Empleado).filter(
@@ -1007,6 +1287,18 @@ def get_incidencias_mi_area(
         empleado_ids = [e.id for e in empleados]
         if not empleado_ids:
             return []
+
+    if empleado_id is not None:
+        if empleado_ids is not None and empleado_id not in empleado_ids:
+            return []
+        if empleado_ids is None:
+            existe = (
+                db.query(personal_models.Empleado.id)
+                .filter(personal_models.Empleado.id == empleado_id)
+                .first()
+            )
+            if not existe:
+                return []
 
     fecha_inicio_dt = None
     fecha_fin_dt = None
@@ -1020,13 +1312,23 @@ def get_incidencias_mi_area(
             fecha_fin_dt = datetime.fromisoformat(fecha_fin)
         except Exception:
             pass
-    incidencias = service.AsistenciaService.get_incidencias(
-        db,
-        empleado_ids=empleado_ids,
-        tipo=tipo,
-        fecha_inicio=fecha_inicio_dt,
-        fecha_fin=fecha_fin_dt
-    )
+    if empleado_id is not None:
+        incidencias = service.AsistenciaService.get_incidencias(
+            db,
+            empleado_id=empleado_id,
+            empleado_ids=None,
+            tipo=tipo,
+            fecha_inicio=fecha_inicio_dt,
+            fecha_fin=fecha_fin_dt,
+        )
+    else:
+        incidencias = service.AsistenciaService.get_incidencias(
+            db,
+            empleado_ids=empleado_ids,
+            tipo=tipo,
+            fecha_inicio=fecha_inicio_dt,
+            fecha_fin=fecha_fin_dt,
+        )
     all_emp_ids = list({inc.empleado_id for inc in incidencias})
     empleados_map = {
         e.id: f"{e.nombre} {e.apellido_paterno or ''} {e.apellido_materno or ''}".strip()
@@ -1562,7 +1864,9 @@ def reporte_resumen_asistencia(
     from app.modules.vacaciones import models as vac_models
     vacaciones_rows = db.query(vac_models.SolicitudVacaciones).filter(
         vac_models.SolicitudVacaciones.empleado_id.in_(emp_ids),
-        vac_models.SolicitudVacaciones.estado == vac_models.EstadoSolicitud.APROBADA,
+        vac_models.SolicitudVacaciones.estado.in_(
+            (vac_models.EstadoSolicitud.APROBADA, vac_models.EstadoSolicitud.APROBADA_JEFE)
+        ),
         vac_models.SolicitudVacaciones.fecha_inicio <= dt(ff.year, ff.month, ff.day, 23, 59, 59),
         vac_models.SolicitudVacaciones.fecha_fin >= dt(fi.year, fi.month, fi.day),
     ).all()
@@ -1696,7 +2000,9 @@ def reporte_detalle_empleado(
     from datetime import datetime as dt_vac
     vacaciones = db.query(vac_models.SolicitudVacaciones).filter(
         vac_models.SolicitudVacaciones.empleado_id == empleado_id,
-        vac_models.SolicitudVacaciones.estado == vac_models.EstadoSolicitud.APROBADA,
+        vac_models.SolicitudVacaciones.estado.in_(
+            (vac_models.EstadoSolicitud.APROBADA, vac_models.EstadoSolicitud.APROBADA_JEFE)
+        ),
         vac_models.SolicitudVacaciones.fecha_inicio <= dt_vac(ff.year, ff.month, ff.day, 23, 59, 59),
         vac_models.SolicitudVacaciones.fecha_fin >= dt_vac(fi.year, fi.month, fi.day),
     ).all()
@@ -1843,7 +2149,9 @@ def reporte_export_detalle(
     from datetime import datetime as dt_vac
     vacaciones_all = db.query(vac_models.SolicitudVacaciones).filter(
         vac_models.SolicitudVacaciones.empleado_id.in_(emp_ids),
-        vac_models.SolicitudVacaciones.estado == vac_models.EstadoSolicitud.APROBADA,
+        vac_models.SolicitudVacaciones.estado.in_(
+            (vac_models.EstadoSolicitud.APROBADA, vac_models.EstadoSolicitud.APROBADA_JEFE)
+        ),
         vac_models.SolicitudVacaciones.fecha_inicio <= dt_vac(ff.year, ff.month, ff.day, 23, 59, 59),
         vac_models.SolicitudVacaciones.fecha_fin >= dt_vac(fi.year, fi.month, fi.day),
     ).all()
@@ -1933,15 +2241,16 @@ def reporte_export_xlsx(
     fecha_fin: str = Query(..., description="YYYY-MM-DD"),
     empresa_id: Optional[int] = None,
     departamento_id: Optional[int] = None,
+    download_token: Optional[str] = Query(None),
     db: Session = Depends(get_db),
-    _current: dict = Depends(get_current_user),
+    _current: dict = Depends(require_superuser_or_rh_download),
 ):
     """Genera XLSX: hoja 1 = resumen, luego una hoja por empresa con detalle de checadas."""
     from io import BytesIO
     from collections import defaultdict
     from datetime import date, timedelta
     from datetime import datetime as dt_cls
-    from fastapi.responses import StreamingResponse
+
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
     from openpyxl.utils import get_column_letter
@@ -1976,7 +2285,10 @@ def reporte_export_xlsx(
     dep_ids = {e.departamento_id for e in empleados if e.departamento_id}
     emp_empresa_ids = {e.empresa_id for e in empleados if e.empresa_id}
     deptos_map = {d.id: d.nombre for d in db.query(pm.Departamento).filter(pm.Departamento.id.in_(dep_ids)).all()} if dep_ids else {}
-    empresas_map = {em.id: em.nombre for em in db.query(pm.Empresa).filter(pm.Empresa.id.in_(emp_empresa_ids)).all()} if emp_empresa_ids else {}
+    _empresas_rows = db.query(pm.Empresa).filter(pm.Empresa.id.in_(emp_empresa_ids)).all() if emp_empresa_ids else []
+    empresas_map = {em.id: em.nombre for em in _empresas_rows}
+    # Etiqueta corta: usa siglas si están definidas, si no el nombre completo
+    empresas_label = {em.id: (em.siglas.strip() if em.siglas and em.siglas.strip() else em.nombre) for em in _empresas_rows}
 
     # ── Datos ──
     dt_inicio_utc, _ = mexico_date_to_utc_range(fi)
@@ -2004,7 +2316,9 @@ def reporte_export_xlsx(
     from app.modules.vacaciones import models as vac_models
     vacaciones_all = db.query(vac_models.SolicitudVacaciones).filter(
         vac_models.SolicitudVacaciones.empleado_id.in_(emp_ids),
-        vac_models.SolicitudVacaciones.estado == vac_models.EstadoSolicitud.APROBADA,
+        vac_models.SolicitudVacaciones.estado.in_(
+            (vac_models.EstadoSolicitud.APROBADA, vac_models.EstadoSolicitud.APROBADA_JEFE)
+        ),
         vac_models.SolicitudVacaciones.fecha_inicio <= dt_cls(ff.year, ff.month, ff.day, 23, 59, 59),
         vac_models.SolicitudVacaciones.fecha_fin >= dt_cls(fi.year, fi.month, fi.day),
     ).all()
@@ -2111,7 +2425,7 @@ def reporte_export_xlsx(
     # Agrupar empleados en hojas según el filtro solicitado:
     #  - Filtro por departamento  → una sola hoja con ese departamento
     #  - Filtro por empresa       → una hoja por departamento de esa empresa
-    #  - Global (sin filtro)      → una hoja por empresa
+    #  - Global (sin filtro)      → una hoja por empresa (con bloques por macro-área: Operaciones / Administración / Otras)
     grupos_detalle: dict = defaultdict(list)
     if departamento_id:
         depto_name = deptos_map.get(departamento_id, "Departamento")
@@ -2125,6 +2439,69 @@ def reporte_export_xlsx(
         for emp in empleados:
             key = empresas_map.get(emp.empresa_id, "Sin Empresa") if emp.empresa_id else "Sin Empresa"
             grupos_detalle[key].append(emp)
+
+    def clasificar_macro_area(nombre_depto: str) -> str:
+        """Operaciones vs Administración vs resto (según nombre del departamento en catálogo)."""
+        n = (nombre_depto or "").strip().lower()
+        if not n:
+            return "OTRAS ÁREAS"
+        adm_kw = (
+            "admin",
+            "administrac",
+            "rrhh",
+            "recursos humano",
+            "rh ",
+            " contab",
+            "contabi",
+            "finanz",
+            "tesorer",
+            "sistemas",
+            "tic",
+            "legal",
+            "direc",
+            "corporativ",
+            "oficina central",
+            "gerenc",
+        )
+        if any(k in n for k in adm_kw):
+            return "ADMINISTRACIÓN"
+        op_kw = (
+            "operac",
+            "venta",
+            "tienda",
+            "sucursal",
+            "almacén",
+            "almacen",
+            "distrib",
+            "producc",
+            "plant",
+            "taller",
+            "logíst",
+            "logist",
+            "bodega",
+            "mostrador",
+        )
+        if any(k in n for k in op_kw):
+            return "OPERACIONES"
+        return "OTRAS ÁREAS"
+
+    MACRO_ORDEN = ("OPERACIONES", "ADMINISTRACIÓN", "OTRAS ÁREAS")
+
+    def iter_detalle_por_area_global(emp_list: list) -> list:
+        """Secuencia de ('sec', etiqueta, n) o ('emp', empleado) para export global por empresa."""
+        buckets = {k: [] for k in MACRO_ORDEN}
+        for emp in emp_list:
+            dn = deptos_map.get(emp.departamento_id, "") if emp.departamento_id else ""
+            buckets[clasificar_macro_area(dn)].append(emp)
+        out = []
+        for m in MACRO_ORDEN:
+            if not buckets[m]:
+                continue
+            buckets[m].sort(key=lambda e: (e.apellido_paterno or "", e.nombre or ""))
+            out.append(("sec", m, len(buckets[m])))
+            for emp in buckets[m]:
+                out.append(("emp", emp))
+        return out
 
     # ── Estilos ──
     thin = Side(style="thin", color="B0B0B0")
@@ -2161,6 +2538,17 @@ def reporte_export_xlsx(
     fill_total_row = PatternFill(start_color="E2E8F0", end_color="E2E8F0", fill_type="solid")
     fill_resumen_hdr = PatternFill(start_color="2B6CB0", end_color="2B6CB0", fill_type="solid")
     fill_resumen_even = PatternFill(start_color="EBF4FF", end_color="EBF4FF", fill_type="solid")
+    font_area_title = Font(name="Calibri", size=12, bold=True, color="1A202C")
+    fill_area_operaciones = PatternFill(start_color="C6F6D5", end_color="C6F6D5", fill_type="solid")
+    fill_area_admin = PatternFill(start_color="E9D8FD", end_color="E9D8FD", fill_type="solid")
+    fill_area_otras = PatternFill(start_color="CBD5E0", end_color="CBD5E0", fill_type="solid")
+
+    def fill_por_macro_etiqueta(m: str):
+        if m == "OPERACIONES":
+            return fill_area_operaciones
+        if m == "ADMINISTRACIÓN":
+            return fill_area_admin
+        return fill_area_otras
 
     align_c = Alignment(horizontal="center", vertical="center")
     align_l = Alignment(horizontal="left", vertical="center")
@@ -2219,7 +2607,7 @@ def reporte_export_xlsx(
             idx,
             emp.numero_empleado,
             f"{emp.nombre} {emp.apellido_paterno or ''}".strip(),
-            empresas_map.get(emp.empresa_id, "") if emp.empresa_id else "",
+            empresas_label.get(emp.empresa_id, "") if emp.empresa_id else "",
             deptos_map.get(emp.departamento_id, "") if emp.departamento_id else "",
             len(dias_con_checada.get(emp.id, set())),
             dc_val,
@@ -2257,10 +2645,10 @@ def reporte_export_xlsx(
     #  HOJAS DE DETALLE (agrupadas según filtro)
     #  - Filtro departamento → 1 hoja con ese departamento
     #  - Filtro empresa      → 1 hoja por departamento
-    #  - Global              → 1 hoja por empresa
+    #  - Global (todas las empresas) → 1 hoja por empresa, bloques por macro-área
     # ═══════════════════════════════════════════════════════════════════════════
-    DET_COLS = 9
-    det_widths = [14, 7, 10, 12, 12, 10, 22, 14, 13]
+    DET_COLS = 10
+    det_widths = [14, 7, 10, 12, 12, 10, 22, 12, 28, 13]
 
     for grupo_nombre in sorted(grupos_detalle.keys()):
         emp_list = grupos_detalle[grupo_nombre]
@@ -2283,15 +2671,52 @@ def reporte_export_xlsx(
 
         row = 3
         ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=DET_COLS)
-        ws.cell(row=row, column=1, value=f"Período: {periodo_txt}   |   {len(emp_list)} empleados").font = font_periodo
+        subt_detalle = f"Período: {periodo_txt}   |   {len(emp_list)} empleados"
+        if not departamento_id and not empresa_id:
+            subt_detalle += "   |   Por área: Operaciones → Administración → Otras"
+        ws.cell(row=row, column=1, value=subt_detalle).font = font_periodo
         ws.cell(row=row, column=1).alignment = align_c
 
         row = 4
 
-        for emp in emp_list:
+        export_global_por_empresa = not departamento_id and not empresa_id
+        if export_global_por_empresa:
+            loop_items = iter_detalle_por_area_global(emp_list)
+        else:
+            loop_items = [
+                ("emp", e)
+                for e in sorted(emp_list, key=lambda x: (x.apellido_paterno or "", x.nombre or ""))
+            ]
+
+        for item in loop_items:
+            if item[0] == "sec":
+                area_label = item[1]
+                n_personas = item[2]
+                row += 1
+                ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=DET_COLS)
+                fa = fill_por_macro_etiqueta(area_label)
+                if area_label == "ADMINISTRACIÓN":
+                    texto_banner = (
+                        f"▶  ÁREA: ADMINISTRACIÓN  —  {n_personas} persona(s)\n"
+                        f"    Identificador: personal administrativo (bloque separado de Operaciones)"
+                    )
+                else:
+                    texto_banner = f"▶  ÁREA: {area_label}  —  {n_personas} persona(s)"
+                c_banner = ws.cell(row=row, column=1, value=texto_banner)
+                c_banner.font = font_area_title
+                c_banner.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+                c_banner.fill = fa
+                for col in range(1, DET_COLS + 1):
+                    cell_b = ws.cell(row=row, column=col)
+                    cell_b.fill = fa
+                    cell_b.border = border_all
+                ws.row_dimensions[row].height = 28
+                continue
+
+            emp = item[1]
             emp_name = f"{emp.nombre} {emp.apellido_paterno or ''}".strip()
             emp_depto = deptos_map.get(emp.departamento_id, "") if emp.departamento_id else ""
-            emp_empresa = empresas_map.get(emp.empresa_id, "") if emp.empresa_id else ""
+            emp_empresa = empresas_label.get(emp.empresa_id, "") if emp.empresa_id else ""
             emp_ch = checadas_idx.get(emp.id, {})
             emp_inc = incidencias_idx.get(emp.id, {})
             emp_icap = incap_idx.get(emp.id, [])
@@ -2313,7 +2738,7 @@ def reporte_export_xlsx(
             ws.row_dimensions[row].height = 24
 
             row += 1
-            for ci, h in enumerate(["Fecha", "Día", "Entrada", "Sal. Comer", "Reg. Comer", "Salida", "Incidencia", "Justificación", "Tiempo"], 1):
+            for ci, h in enumerate(["Fecha", "Día", "Entrada", "Sal. Comer", "Reg. Comer", "Salida", "Incidencia", "Justificación", "Motivo", "Tiempo"], 1):
                 cell = ws.cell(row=row, column=ci, value=h)
                 cell.font = font_header
                 cell.fill = fill_col_header
@@ -2336,7 +2761,8 @@ def reporte_export_xlsx(
                     cmap[cc["tipo"]] = cc["hora"]
 
                 inc_text = ""
-                just_texts: list[str] = []
+                just_text = ""
+                motivo_text = ""
                 if es_dom:
                     inc_text = "Descanso"
                 elif en_vac:
@@ -2347,23 +2773,21 @@ def reporte_export_xlsx(
                     inc_text = f"Festivo: {festivo}"
                 else:
                     parts = []
+                    motivos: list[str] = []
+                    todas_just = bool(di) and all(ii["justificada"] for ii in di)
+                    alguna_just = any(ii["justificada"] for ii in di)
                     for ii in di:
                         lbl = TIPO_INC.get(ii["tipo"], ii["tipo"])
                         if ii["justificada"]:
                             obs = (ii.get("comentarios") or "").strip()
-                            if obs:
-                                if obs not in just_texts:
-                                    just_texts.append(obs)
-                            else:
-                                if "Sí" not in just_texts:
-                                    just_texts.append("Sí")
+                            if obs and obs not in motivos:
+                                motivos.append(obs)
                             lbl += " (J)"
-                        else:
-                            if "No" not in just_texts:
-                                just_texts.append("No")
                         parts.append(lbl)
                     inc_text = ", ".join(parts)
-                just_text = "\n".join(just_texts)
+                    if di:
+                        just_text = "Sí" if todas_just else ("Parcial" if alguna_just else "No")
+                    motivo_text = "\n".join(motivos)
 
                 tiempo_str = ""
                 if cmap.get("entrada") and cmap.get("salida"):
@@ -2378,7 +2802,7 @@ def reporte_export_xlsx(
                 vals = [d_date.strftime("%d/%m/%Y"), DIAS_SEM[d_date.weekday()],
                         cmap.get("entrada", ""), cmap.get("salida_comer", ""),
                         cmap.get("regreso_comer", ""), cmap.get("salida", ""),
-                        inc_text, just_text, tiempo_str]
+                        inc_text, just_text, motivo_text, tiempo_str]
 
                 if es_dom:
                     fill = fill_domingo
@@ -2398,7 +2822,7 @@ def reporte_export_xlsx(
                     cell.font = font_data
                     cell.fill = fill
                     cell.border = border_all
-                    cell.alignment = align_wrap if ci == 8 else (align_c if ci >= 2 else align_l)
+                    cell.alignment = align_wrap if ci in (8, 9) else (align_c if ci >= 2 else align_l)
 
                 inc_cell = ws.cell(row=row, column=7)
                 if inc_text == "Vacaciones":
@@ -2408,9 +2832,8 @@ def reporte_export_xlsx(
                 elif "Retardo" in inc_text:
                     inc_cell.font = font_inc_retardo
 
-                # Si hay observaciones largas (varias líneas), subimos la altura para que se vea.
-                just_lines = (just_text.count("\n") + 1) if just_text else 1
-                ws.row_dimensions[row].height = int(min(18 + (just_lines - 1) * 12, 80))
+                motivo_lines = (motivo_text.count("\n") + 1) if motivo_text else 1
+                ws.row_dimensions[row].height = int(min(18 + (motivo_lines - 1) * 12, 80))
 
             row += 1
             th_val = total_min // 60
@@ -2422,8 +2845,8 @@ def reporte_export_xlsx(
                 cell.border = border_all
             ws.cell(row=row, column=7, value="TOTAL HORAS").font = font_total_lbl
             ws.cell(row=row, column=7).alignment = align_r
-            ws.cell(row=row, column=9, value=f"{th_val}:{tm_val:02d}").font = font_total_val
-            ws.cell(row=row, column=9).alignment = align_c
+            ws.cell(row=row, column=10, value=f"{th_val}:{tm_val:02d}").font = font_total_val
+            ws.cell(row=row, column=10).alignment = align_c
             ws.row_dimensions[row].height = 22
 
         row += 2
@@ -2438,11 +2861,95 @@ def reporte_export_xlsx(
     # ── Guardar ──
     output = BytesIO()
     wb.save(output)
-    output.seek(0)
+    contenido = output.getvalue()
+    output.close()
+    wb.close()
 
-    filename = f"reporte_asistencia_{fecha_inicio}_{fecha_fin}.xlsx"
-    return StreamingResponse(
-        output,
+    # Construir nombre descriptivo según el filtro aplicado
+    import re as _re
+    def _slug(s: str) -> str:
+        return _re.sub(r'[^a-zA-Z0-9]+', '_', s).strip('_')
+
+    periodo = f"{fecha_inicio}_{fecha_fin}"
+    if departamento_id:
+        dep_nombre = deptos_map.get(departamento_id, str(departamento_id))
+        emp_nombre = empresas_map.get(empresa_id, str(empresa_id)) if empresa_id else (
+            empresas_map.get(next(iter({e.empresa_id for e in empleados if e.departamento_id == departamento_id}), None), "")
+        )
+        filename = f"{_slug(emp_nombre)}_{_slug(dep_nombre)}_{periodo}.xlsx"
+    elif empresa_id:
+        emp_nombre = empresas_map.get(empresa_id, str(empresa_id))
+        filename = f"{_slug(emp_nombre)}_{periodo}.xlsx"
+    else:
+        filename = f"Reporte_General_{periodo}.xlsx"
+    from fastapi.responses import Response
+    ActividadService.registrar(
+        db,
+        nivel="info",
+        categoria="negocio",
+        mensaje="Exportación de reporte de asistencia (XLSX)",
+        contexto={
+            "fecha_inicio": fecha_inicio,
+            "fecha_fin": fecha_fin,
+            "empresa_id": empresa_id,
+            "departamento_id": departamento_id,
+            "filename": filename,
+            "total_empleados": len(empleados),
+        },
+        empleado_id=int(_current.get("user_id")) if _current and _current.get("user_id") else None,
+    )
+    return Response(
+        content=contenido,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(contenido)),
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Importación histórica: endpoints deshabilitados (410). Código en importar_historico.py
+# se conserva por si se reactiva puntualmente desde el servidor.
+# ════════════════════════════════════════════════════════════════════════════
+
+@router.post("/importar-historico/vista-previa/xlsx", tags=["importacion-historica"])
+async def importar_historico_vista_previa_xlsx(
+    file: UploadFile = File(...),
+    empresa_id: Optional[int] = Form(None),
+    db: Session = Depends(get_db),
+    _su: dict = Depends(require_superuser),
+):
+    """Importación histórica deshabilitada (antes: vista previa sin escribir en BD)."""
+    del file, empresa_id, db  # firma estable para clientes / OpenAPI
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="La importación histórica de checadas está deshabilitada.",
+    )
+
+
+@router.post("/importar-historico/xlsx", tags=["importacion-historica"])
+async def importar_historico_xlsx(
+    file: UploadFile = File(...),
+    empresa_id: Optional[int] = Form(None),
+    db: Session = Depends(get_db),
+    _su: dict = Depends(require_superuser),
+):
+    """Importación histórica deshabilitada."""
+    del file, empresa_id, db
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="La importación histórica de checadas está deshabilitada.",
+    )
+
+
+@router.get("/importar-historico/plantilla", tags=["importacion-historica"])
+def descargar_plantilla_importacion(
+    _su: dict = Depends(require_superuser_download),
+):
+    """Plantilla de importación histórica deshabilitada."""
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail="La importación histórica de checadas está deshabilitada.",
     )
