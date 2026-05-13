@@ -7,6 +7,10 @@ import logging
 from app.modules.personal import models as personal_models
 from app.modules.asistencia import models as asistencia_models
 from app.modules.asistencia.service import AsistenciaService
+from app.modules.asistencia.biometric.sync_service import (
+    checada_anterior_a_alta_en_sistema,
+    checada_anterior_a_fecha_ingreso,
+)
 from app.core.security import verify_password
 from app.core.timezone_utils import to_mexico, mexico_date_to_utc_range
 from .schemas import ChecadaRemotaResponse, EstadoChecadaRemotaResponse
@@ -58,58 +62,11 @@ def checadas_requeridas_dia(
     fecha_mex: date,
 ) -> Tuple[int, str]:
     """
-    Cuántas checadas se esperan ese día (México): 4 lun–vie, 2 sábado si trabaja sábado, 0 domingo / festivo / no laborable.
-    Siempre alineado con la lógica de faltas (procesar_dia).
+    Cuántas checadas se esperan ese día (México), incluyendo incapacidad, vacaciones y vacaciones generales.
+    Alineado con procesar_dia y con la lista de contexto de días.
     """
-    empresa = empleado.empresa
-    trabaja_festivos = bool(getattr(empresa, "trabaja_festivos", False))
-    if AsistenciaService.es_dia_festivo(db, fecha_mex) and not trabaja_festivos:
-        return 0, "festivo"
-
-    wd = fecha_mex.weekday()  # 0=lunes … 6=domingo
-    dia_num = wd + 1  # 1-7 (lunes=1 … domingo=7)
-    dias_laborales_emp = ((empleado.empresa.dias_laborales if empleado.empresa else None) or "lun-sab").strip().lower()
-
-    if wd == 6:  # domingo
-        if dias_laborales_emp == "lun-dom":
-            return 2, "domingo_laborable"
-        return 0, "domingo"
-
-    eh = (
-        db.query(asistencia_models.EmpleadoHorario)
-        .filter(
-            asistencia_models.EmpleadoHorario.empleado_id == empleado.id,
-            asistencia_models.EmpleadoHorario.activo == True,
-        )
-        .first()
-    )
-    if not eh or not eh.horario or not eh.horario.activo:
-        return 0, "sin_horario"
-
-    horario = eh.horario
-
-    if wd == 5:  # sábado
-        if not empleado.horario_sabado_id:
-            return 0, "no_sabado"
-        horario_sab = (
-            db.query(asistencia_models.Horario)
-            .filter(
-                asistencia_models.Horario.id == empleado.horario_sabado_id,
-                asistencia_models.Horario.activo == True,
-            )
-            .first()
-        )
-        if not horario_sab:
-            return 0, "no_sabado"
-        return 2, "sabado"
-
-    # Lunes a viernes
-    if horario.dias_semana:
-        dias_permitidos = [int(d.strip()) for d in horario.dias_semana.split(",") if d.strip().isdigit()]
-        if dias_permitidos and dia_num not in dias_permitidos:
-            return 0, "no_laborable"
-
-    return 4, "entre_semana"
+    ctx = AsistenciaService.contexto_dia_laboral_empleado(db, empleado, fecha_mex)
+    return ctx["checadas_requeridas"], ctx["motivo"]
 
 
 def _mensaje_dia_no_laboral(motivo: str) -> str:
@@ -119,6 +76,12 @@ def _mensaje_dia_no_laboral(motivo: str) -> str:
         "sin_horario": "No tienes horario asignado. Contacta a RH.",
         "no_sabado": "No tienes horario de sábado. No aplica checada hoy.",
         "no_laborable": "Hoy no es día laborable según tu horario.",
+        "incapacidad": "Tienes incapacidad registrada este día. No aplica registrar checada.",
+        "vacacion_solicitud": "Tienes vacaciones por solicitud aprobada. No aplica registrar checada.",
+        "vacacion_general": "Vacación general de empresa aplicada. No aplica registrar checada.",
+        "domingo_laborable": "Domingo laborable según tu empresa.",
+        "checada_especial": "Horario o checada especial. Revisa el mensaje de checadas.",
+        "jornada_reducida": "Jornada reducida. Revisa las checadas requeridas.",
     }.get(motivo, "No aplica checada hoy.")
 
 
@@ -154,6 +117,10 @@ def _auth_portal_checada(
     ).first()
     if not empleado:
         return None, "Credenciales incorrectas."
+
+    # Regla de negocio: usuarios especiales no deben registrar checadas.
+    if getattr(empleado, "exento_incidencias", False):
+        return None, "Usuario especial: no requiere registrar checadas."
 
     if not empleado.puede_checar_remoto:
         return None, "No tienes permiso para checar de forma remota."
@@ -231,9 +198,33 @@ def registrar_checada_remota(
     ts_mex = to_mexico(timestamp) or timestamp
     fecha_mex = ts_mex.date() if hasattr(ts_mex, "date") else datetime.now(timezone.utc).date()
 
+    nombre_emp = f"{empleado.nombre} {empleado.apellido_paterno or ''}".strip()
+
+    def _resp_bloqueo(mensaje: str) -> ChecadaRemotaResponse:
+        c = _contar_checadas_dia_mexico(db, empleado.id, fecha_mex)
+        req, _ = checadas_requeridas_dia(db, empleado, fecha_mex)
+        return ChecadaRemotaResponse(
+            ok=False,
+            mensaje=mensaje,
+            nombre_empleado=nombre_emp or None,
+            checadas_hoy=c,
+            requeridas_hoy=req,
+            completado=False,
+            dia_no_laboral=False,
+        )
+
+    if checada_anterior_a_alta_en_sistema(empleado, timestamp):
+        return _resp_bloqueo(
+            "No aplica checada: la marca sería anterior al alta de tu expediente en este sistema."
+        )
+
+    if checada_anterior_a_fecha_ingreso(empleado, timestamp):
+        return _resp_bloqueo(
+            "No aplica checada: aún no has iniciado labores según tu fecha de ingreso a la empresa."
+        )
+
     requeridas, motivo = checadas_requeridas_dia(db, empleado, fecha_mex)
     count = _contar_checadas_dia_mexico(db, empleado.id, fecha_mex)
-    nombre_emp = f"{empleado.nombre} {empleado.apellido_paterno or ''}".strip()
 
     if requeridas == 0:
         return ChecadaRemotaResponse(

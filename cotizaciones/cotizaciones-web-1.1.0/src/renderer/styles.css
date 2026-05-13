@@ -1,0 +1,1313 @@
+:root {
+  /* Paleta clara moderna */
+  --bg: #f1f6f8;
+  --bg-grad-start: #ffffff;
+  --bg-grad-end: #f8fafc;
+  --panel: #ffffffcc; /* semi-transparente */
+  --panel-solid: #ffffff;
+  --text: #111827;
+  --muted: #6b7280;
+  --accent: #22c55e; /* verde */
+  --accent-2: #38bdf8; /* azul cyan */
+  --border: #e5e7eb;
+  --ring: #2563eb;
+  --module-title-space: 28px; /* espacio visual para alinear columnas */
+}
+
+* { box-sizing: border-box; }
+body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+
+/* Arranque: no mostrar app ni login hasta que app.js confirme sesión (evita flash) */
+.auth-boot-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(160deg, #0c4a6e 0%, #0f172a 45%, #0a2540 100%);
+  color: #f8fafc;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+}
+.auth-boot-text {
+  opacity: 0.9;
+  animation: auth-boot-pulse 1.1s ease-in-out infinite;
+}
+@keyframes auth-boot-pulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+body:not(.auth-session-ready) .layout,
+body:not(.auth-session-ready) #login-view,
+body:not(.auth-session-ready) #setup-view {
+  display: none !important;
+}
+body.auth-session-ready .auth-boot-screen,
+body.auth-session-ready #auth-boot-screen {
+  display: none !important;
+  visibility: hidden !important;
+  pointer-events: none;
+}
+
+/* Layout con sidebar */
+.layout { display:flex; min-height: 100vh; }
+.sidebar { width: 240px; background:#ffffff; color:#ffffff; padding: 16px 12px; border-right: 1px solid var(--border); position: sticky; top:0; height:100vh; backdrop-filter: saturate(140%) blur(4px); box-shadow: 10px 2px 12px #00000008; }
+.sidebar .brand { display: none; } /* Ocultamos el elemento */
+.brand-logo {
+  padding: 10px;
+  margin-bottom: 12px;
+}
+.brand-logo img {
+  width: 100%; /* Hace que la imagen ocupe todo el ancho del contenedor */
+  height: auto; /* Mantiene la proporción de la imagen */
+} 
+.brand { font-weight: 600; margin-bottom: 12px; color: var(--text); opacity: 0.9; }
+nav { display:flex; flex-direction: column; gap:12px; } /* Aumentamos el espacio de 8px a 12px */
+nav button:not(.btn) { background:#ffffff; text-align:left; color:#111827; border:1px solid var(--border); padding: 14px 12px; border-radius:10px; cursor:pointer; transition: all .2s ease; }
+nav button.active:not(.btn) { background: solid; color:#00bed6; border-color: transparent; box-shadow: 0 8px 16px #ffffff; }
+nav button:not(.btn):hover { background:#e5e7eb; transform: translateY(-1px); }
+
+/* From Uiverse.io by cssbuttons-io — aplicado SOLO al botón Equipos */
+.btn {
+  position: relative;
+  font-size: 11px;
+  text-transform: uppercase;
+  text-decoration: none;
+  padding: 8px 14px;
+  display: inline-block;
+  cursor: pointer;
+  border-radius: 6em;
+  transition: all 0.2s;
+  border: none;
+  font-family: inherit;
+  font-weight: 500;
+  color: black;
+  background-color: #ffffff;
+}
+
+.btn:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+}
+
+.btn:active {
+  transform: translateY(-1px);
+  box-shadow: 0 5px 10px rgba(0, 0, 0, 0.2);
+}
+
+.btn::after {
+  content: "";
+  display: inline-block;
+  height: 100%;
+  width: 100%;
+  border-radius: 100px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: -1;
+  transition: all 0.4s;
+  background-color: #fff;
+}
+
+.btn:hover::after {
+  transform: scaleX(1.4) scaleY(1.6);
+  opacity: 0;
+}
+
+/* Resaltar el botón activo del sidebar con el estilo .btn */
+nav .btn.active {
+  background: var(--panel-solid);
+  color: #00bed6;
+  box-shadow: 0 4px 16px #00bed630; /* Sombra más suave */
+}
+
+main { flex:1; padding: 20px; }
+.workspace { display:grid; grid-template-columns: minmax(0, 1fr) 588px; gap: 18px; align-items: start; }
+.quotation { /* columna derecha */ margin-top: 0; position: sticky; top: 0; align-self: start; }
+.quotation .panel { max-height: calc(100vh - 24px); display: flex; flex-direction: column; overflow: hidden; }
+#quotation-items { flex: 1 1 auto; overflow: auto; min-height: 0; }
+.app-header { display:grid; grid-template-columns: 1fr auto; grid-template-areas: "title user" "date user"; align-items:center; gap: 4px; padding-bottom: 12px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+.app-header h1 { grid-area: title; margin: 0; font-size: 20px; font-weight: 700; }
+.app-header p { grid-area: date; margin: 4px 0 0; color: var(--muted); }
+.user-bar { justify-self: end; display: flex; align-items: center; gap: 8px; }
+.user-bar .user-name { font-weight: 700; }
+/* Visibilidad por módulo */
+.module { display: none; }
+.module.visible { display: block; }
+
+/* Desactivar cualquier animación previa de módulos */
+.module.enter,
+.module.closing {
+  animation: none !important;
+  transform: none !important;
+  opacity: 1 !important;
+}
+.panels { display:grid; grid-template-columns: 1fr; gap: 18px; }
+.panel { background: var(--panel); border-radius: 16px; padding: 14px; border: 1px solid var(--border); box-shadow: 0 10px 24px #00000010; backdrop-filter: blur(8px); }
+.panel-title { display:flex; align-items:center; justify-content:space-between; }
+.panel-title h2 { margin: 0 0 12px; font-size: 18px; font-weight: 700; }
+/* Botón Cliente en el título (esquina superior derecha) */
+.panel-title #select-client-btn { 
+  background: var(--panel-solid); color:#005e85; border: 1px solid var(--border); 
+  padding:8px 14px; border-radius:10px; cursor:pointer; 
+  transition: transform .15s ease, box-shadow .15s ease;
+}
+/* Info de cliente seleccionado bajo el título del panel de cotizaciones */
+.selected-client-info {
+  margin-top: -6px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+/* Línea divisoria entre cabecera y productos en panel de cotizaciones */
+.quotation-divider {
+  border-top: 1px solid var(--border);
+  margin: 8px 0 12px;
+}
+/* Vista Cotizaciones: ocultar columna de cotización y usar una sola columna */
+.cotizaciones-mode .quotation { display: none; }
+.cotizaciones-mode .workspace { grid-template-columns: 1fr; }
+/* Ocultar el título del panel derecho SOLO cuando estamos en el módulo Cotizaciones */
+.cotizaciones-mode .quotation .panel-title { display: none; }
+
+/* Cotización: filas con controles de cantidad y precio a la derecha */
+.quotation-item { display:flex; align-items:center; justify-content:flex-start; gap:10px; padding:6px 8px; }
+.quotation-item + .quotation-item { border-top: 1px solid var(--border); }
+.qi-name { flex: 1; font-weight: 500; }
+.quantity-controls { display:flex; align-items:center; gap:6px; }
+.qty-btn { width:28px; height:28px; box-sizing:border-box; display:inline-flex; align-items:center; justify-content:center; padding:0; line-height:1; border-radius:8px; border:1px solid var(--border); background:#ffffff; color:#002a3a; cursor:pointer; }
+.qty-btn:hover { background:#f2f7fa; }
+.qty-btn.minus { background:#e74c3c; border-color:#e74c3c; color:#ffffff; }
+.qty-btn.minus:hover { background:#c0392b; border-color:#c0392b; }
+.qty-btn.plus { background:#2ecc71; border-color:#2ecc71; color:#ffffff; }
+.qty-btn.plus:hover { background:#27ae60; border-color:#27ae60; }
+.qty-input { width:44px; height:28px; box-sizing:border-box; text-align:center; padding:0; line-height:28px; border:1px solid var(--border); border-radius:8px; background:#ffffff; color:#002a3a; flex:0 0 44px; min-width:44px; max-width:44px; }
+.qty-input::-webkit-outer-spin-button, .qty-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.qty-input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+.qi-price { margin-left:auto; min-width:100px; text-align:right; font-weight:600; }
+/* Ocultar cotización en Configuración y usar una sola columna */
+.configuracion-mode .quotation { display: none; }
+.configuracion-mode .workspace { grid-template-columns: 1fr; }
+
+/* Configuración: pestañas por categoría */
+.config-tabs-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.config-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 4px 6px;
+  padding: 4px 4px 12px;
+  margin: 0 0 4px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--panel-solid) 0%, #f8fafc 100%);
+  border-radius: 12px 12px 0 0;
+}
+.config-tab {
+  appearance: none;
+  margin: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.config-tab:hover {
+  color: var(--text);
+  background: rgba(15, 23, 42, 0.06);
+}
+.config-tab.active {
+  color: #005e85;
+  background: #ffffff;
+  border-color: var(--border);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+}
+#mod-configuracion .config-tab-panels.panels {
+  grid-template-columns: 1fr;
+  gap: 0;
+}
+#mod-configuracion .config-tab-panel[hidden] {
+  display: none !important;
+}
+@media (max-width: 900px) {
+  .config-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+  }
+}
+/* Ocultar el título dentro del panel SOLO en el módulo Cotizaciones */
+section#mod-cotizaciones .panel-title { display: none; }
+.panel-header { display:flex; gap:8px; align-items:center; margin-bottom: 8px; }
+.panel-header input { flex: 1; }
+.panel-header button { flex-shrink: 0; }
+.panel-header button { background:#ffffff; /* color azul oscuro */
+  color: #002a3a; /*colro de texto*/
+  border: 1px solid var(--border); 
+  padding: 10px 12px; 
+  border-radius:10px; 
+  cursor:pointer; 
+  transition: all .2s ease;
+  text-align: center;
+  font-size: 12px;
+}
+.panel-header button:hover {
+  background-color: #ffffff; /* Un azul un poco más claro al pasar el mouse */
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+.panel-footer { display:flex; align-items:center; justify-content:space-between; margin-top: 8px; }
+.footer-actions { display:flex; align-items:center; gap:8px; }
+.list { list-style:none; padding:0; margin:0; }
+.list li, .list div { padding:10px 12px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; transition: background .2s ease; }
+.list .quotation-item { justify-content:flex-start; }
+.list li:hover { background:#f9fafb; }
+.list button { background:#f3f4f6; color:#111827; border:1px solid var(--border); padding:6px 12px; border-radius:8px; cursor:pointer; transition: all .2s ease; }
+.list button:hover { background:#e5e7eb; transform: translateY(-1px); }
+
+/* Cabecera y filas de Cotizaciones (lista de guardadas) */
+.cotizaciones-header {
+  display: grid;
+  grid-template-columns: minmax(140px, 160px) minmax(160px, 200px) 1fr minmax(160px, 200px) minmax(120px, 140px) minmax(80px, 100px);
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  background: #00bed6;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.cot-list li.cot-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 160px) minmax(160px, 200px) 1fr minmax(160px, 200px) minmax(120px, 140px) minmax(80px, 100px);
+  gap: 8px;
+  align-items: center;
+  cursor: pointer;
+}
+.cot-num { font-weight: 600; color: #005e85; }
+.cot-total { text-align: center; font-weight: 700; color: #000000; }
+.cot-fecha, .cot-cliente, .cot-asesor { color: var(--text); }
+.cot-cliente, .cot-asesor { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 720px) {
+  .cotizaciones-header {
+    grid-template-columns: minmax(140px, 160px) 1fr minmax(120px, 140px) minmax(80px, 100px);
+  }
+  .cotizaciones-header .col-fecha,
+  .cotizaciones-header .col-asesor { display: none; }
+  .cot-list li.cot-row {
+    grid-template-columns: minmax(140px, 160px) 1fr minmax(120px, 140px) minmax(80px, 100px);
+  }
+  .cot-row .cot-fecha,
+  .cot-row .cot-asesor { display: none; }
+}
+
+/* Botones de acción con iconos en la lista de clientes */
+.client-actions { display:flex; gap:6px; justify-content:flex-end; }
+.cot-actions { display:flex; gap:6px; justify-content:flex-end; }
+.list .btn-icon {
+  width: 28px; height: 28px; display:inline-flex; align-items:center; justify-content:center;
+  font-size: 16px; font-weight: 700; line-height: 1;
+  background:#f3f4f6; color:#111827; border:1px solid var(--border);
+  border-radius:8px; cursor:pointer; transition: all .2s ease; padding:0;
+}
+.list .btn-icon:hover { background:#e5e7eb; transform: translateY(-1px); }
+
+/* Colores específicos para acciones */
+.list .btn-icon.select-client-btn {
+  background: var(--accent); /* verde */
+  color: #ffffff;
+  border-color: #16a34a; /* verde más intenso */
+}
+.list .btn-icon.select-client-btn:hover {
+  background: #16a34a;
+}
+.list .btn-icon.edit-client-btn {
+  background: #f59e0b; /* amarillo/amber */
+  color: #ffffff;
+  border-color: #d97706;
+}
+.list .btn-icon.edit-client-btn:hover {
+  background: #d97706;
+}
+
+/* Acción eliminar en cotizaciones */
+.list .btn-icon.delete-cot-btn {
+  background: #ef4444; /* rojo */
+  color: #ffffff;
+  border-color: #dc2626;
+}
+.list .btn-icon.delete-cot-btn:hover {
+  background: #dc2626;
+}
+
+/* Mostrar el botón editar sólo al pasar el mouse */
+.list li.client-item .btn-icon.edit-client-btn {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s ease;
+}
+.list li.client-item:hover .btn-icon.edit-client-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Miniaturas en listas de productos */
+.list li .item-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0;
+  border: 0;
+}
+.list li .item-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+}
+.list li img.thumb {
+  width: 60px;
+  height: 60px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #fff;
+  margin-right: 12px;
+  flex-shrink: 0;
+}
+.list li .item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+}
+.list li .item-name {
+  font-weight: 600;
+  color: var(--text, #111827);
+}
+.list li .item-price {
+  color: #00bed6;
+  font-weight: 700;
+  font-size: 18px;
+}
+.hint { color: var(--muted); }
+
+dialog { border:none; border-radius:12px; padding: 12px; box-sizing: border-box; background: var(--panel-solid); color: var(--text); }
+dialog::backdrop { background: rgba(0,0,0,0.5); }
+label { display:block; margin: 8px 0; }
+input:not([type="checkbox"]):not(.qty-input) { width: 100%; padding:10px; border-radius:10px; border:1px solid var(--border); background:#ffffff; color:var(--text); transition: box-shadow .2s ease, border-color .2s ease; }
+input:not([type="checkbox"]):not(.qty-input):focus { outline: none; border-color: var(--ring); box-shadow: 0 0 0 3px #38bdf830; }
+menu { display:flex; gap:8px; justify-content:flex-end; }
+
+.config-grid { display:grid; grid-template-columns: repeat(3, 1fr); gap:12px; }
+
+/* Configuración: secciones y tarjetas */
+.config-sections { display: grid; grid-template-columns: 1fr; gap: 14px; }
+.config-section h3 { margin: 0 0 8px; font-size: 16px; font-weight: 600; color: var(--text); }
+.config-items { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.config-item { background: var(--panel-solid); border: 1px solid var(--border); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.config-item .hint { margin: 0; font-size: 12px; }
+.config-item button { background: var(--panel-solid); color:#005e85; border: 1px solid var(--border); padding:8px 14px; border-radius:10px; cursor:pointer; transition: transform .15s ease, box-shadow .15s ease; }
+.config-item button:hover { transform: translateY(-1px); box-shadow: 0 1px 5px #002a3a; }
+
+@media (max-width: 760px) {
+  .config-items { grid-template-columns: 1fr; }
+}
+
+/* Botones primarios/acciones */
+.panel-footer button, #save-product, #finalize-quotation, #export-pdf, #select-client-btn, #client-close, #new-client-btn, #detalle-close, #add-product-cancel, #logout-btn { background: var(--panel-solid); color:#005e85; border: 1px solid var(--border); padding:8px 14px; border-radius:10px; cursor:pointer; transition: transform .15s ease, box-shadow .15s ease; }
+.panel-footer button:hover, #save-product:hover, #finalize-quotation:hover, #export-pdf:hover, #select-client-btn:hover, #client-close:hover, #new-client-btn:hover, #detalle-close:hover, #add-product-cancel:hover, #logout-btn:hover { transform: translateY(-1px); box-shadow: 0 1px 5px #002a3a; }
+
+/* Estado deshabilitado del botón Crear */
+.panel-footer button:disabled { opacity: 0.55; cursor: not-allowed; position: relative; }
+/* Tooltip visual removido: no se mostrará burbuja al pasar el mouse */
+
+/* Detalle de cotización: tablas y layout */
+.detalle-section { margin: 8px 0 12px; }
+.detalle-section h4 { margin: 0 0 8px; font-size: 14px; color: var(--muted); }
+.detalle-table { width: 100%; border-collapse: collapse; background: #ffffff; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.detalle-table th, .detalle-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left; }
+.detalle-table thead th { background: #00bed6; font-weight: 600; }
+.detalle-total { display:flex; align-items:center; justify-content:flex-end; gap:8px; margin-top: 6px; font-size: 15px; }
+.detalle-total strong { font-weight: 700; }
+/* Tabla de Datos: sin líneas internas para una apariencia más limpia */
+.detalle-table--clean { border: 0; }
+.detalle-table--clean th, .detalle-table--clean td { border-bottom: 0; }
+/* Datos en líneas: Cliente: valor, etc. */
+.detalle-row { display:flex; flex-wrap: wrap; gap:6px; margin: 4px 0; }
+.detalle-label { font-weight: 600; margin-right: 6px; }
+.detalle-value { color: var(--text); }
+/* Grilla de datos y columna de opciones a la derecha */
+.detalle-data-grid { display:grid; grid-template-columns: 2fr 1fr; gap:12px; align-items:flex-start; }
+.detalle-data-list { display:flex; flex-direction:column; }
+.detalle-side h5 { margin: 0 0 6px; font-size: 13px; color: var(--muted); text-align: right; }
+.detalle-side-actions { display:flex; flex-direction:column; gap:0; }
+ .detalle-option { display:flex; align-items:center; flex-direction: row; justify-content: space-between; gap:8px; font-size: 13px; color: var(--text); line-height: 1; padding: 0; width: 100%; margin: 0; }
+ .detalle-option input[type="checkbox"] { width:auto; height:16px; flex-shrink:0; outline:none; box-shadow:none; }
+ .detalle-option input[type="checkbox"]:focus, .detalle-option input[type="checkbox"]:focus-visible { outline:none; box-shadow:none; border-color: transparent; }
+.detalle-action { background: var(--panel-solid); color:#005e85; border: 1px solid var(--border); padding:8px 14px; border-radius:10px; cursor:pointer; transition: transform .15s ease, box-shadow .15s ease; }
+.detalle-action:hover { transform: translateY(-1px); box-shadow: 0 1px 5px #002a3a; }
+
+/* Bloque de total con desglose */
+.detalle-total-block { background: #ffffff; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
+.detalle-total-block .detalle-total-row { display:flex; align-items:center; justify-content:space-between; }
+.detalle-total-block .total-final strong { font-size: 16px; }
+
+/* (Se removió el estilo de botón animado y se restauraron los estilos generales) */
+
+/* Scrollbar estilizado */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: #ffffff; }
+*::-webkit-scrollbar-thumb { background: #005e85; border-radius: 10px; }
+*::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+@media (max-width: 900px) {
+  .panels { grid-template-columns: 1fr; }
+  .workspace { grid-template-columns: 1fr; }
+  .sidebar { width: 200px; }
+  .detalle-data-grid { grid-template-columns: 1fr; }
+}
+
+/* Modal Seleccionar Cliente: ancho y estructura de lista ordenada (sin paginación) */
+dialog#modal-client { width: 860px; max-width: 95vw; }
+#modal-client #client-search { margin-bottom: 8px; }
+#modal-client .modal-title-row { display:flex; align-items:center; justify-content: space-between; margin-bottom: 8px; }
+#modal-client .modal-title-row h3 { margin: 0; }
+#modal-client .modal-title-row button { background:#ffffff; color:#002a3a; border:1px solid var(--border); padding: 8px 10px; border-radius:10px; cursor:pointer; transition: all .2s ease; }
+#modal-client .modal-title-row button:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+#modal-client .client-list-header {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 2fr auto;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  background: #f8fafc;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+#modal-client #client-list { max-height: 60vh; overflow: auto; }
+.list li.client-item { 
+  display: grid; 
+  grid-template-columns: 2fr 1fr 1fr 2fr auto; 
+  gap: 8px; 
+  align-items: center;
+}
+.list li.client-item .c-name { font-weight: 600; }
+.list li.client-item .c-rfc { color: var(--muted); }
+#modal-client .client-list-header .sortable { cursor: pointer; }
+#modal-client .client-list-header .sortable:hover { text-decoration: underline; }
+
+/* Animación de aparición del Modal Seleccionar Cliente (fade-in desde el centro) */
+@keyframes modalCenterFadeIn {
+  from { transform: scale(0.92); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+#modal-client[open] {
+  animation: modalCenterFadeIn 420ms ease-out;
+  transform-origin: center;
+  will-change: transform, opacity;
+}
+#modal-client[open]::backdrop {
+  animation: backdropFadeIn 420ms ease-out;
+}
+
+/* Animación de cierre del Modal Seleccionar Cliente (fade-out hacia el centro) */
+@keyframes modalCenterFadeOut {
+  from { transform: scale(1); opacity: 1; }
+  to { transform: scale(0.92); opacity: 0; }
+}
+#modal-client.closing {
+  animation: modalCenterFadeOut 420ms ease-in;
+  transform-origin: center;
+}
+#modal-client.closing::backdrop {
+  animation: backdropFadeOut 420ms ease-in;
+}
+
+/* Modal Nuevo Cliente */
+dialog#modal-new-client { width: 560px; max-width: 95vw; }
+#modal-new-client .modal-form-grid { display:grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+#modal-new-client .modal-form-grid .full { grid-column: 1 / -1; }
+#modal-new-client .modal-actions { display:flex; gap: 8px; justify-content:flex-end; }
+/* Modal Detalle: ancho duplicado y márgenes laterales más amplios */
+#modal-detalle-cotizacion { width: 1120px; max-width: calc(100vw - 80px); margin: 0 auto; }
+/* Animación de aparición tipo cortina (de arriba hacia abajo) */
+@keyframes modalCurtainDown {
+  from { transform: translateY(-12px) scaleY(0.95); opacity: 0; clip-path: inset(0 0 100% 0); }
+  to { transform: translateY(0) scaleY(1); opacity: 1; clip-path: inset(0 0 0 0); }
+}
+@keyframes backdropFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+#modal-detalle-cotizacion[open] {
+  animation: modalCurtainDown 320ms ease-out;
+  transform-origin: top center;
+  will-change: transform, opacity, clip-path;
+}
+#modal-detalle-cotizacion[open]::backdrop {
+  animation: backdropFadeIn 320ms ease-out;
+}
+/* Animación de cierre tipo cortina (de abajo hacia arriba) */
+@keyframes modalCurtainUp {
+  from { transform: translateY(0) scaleY(1); opacity: 1; clip-path: inset(0 0 0 0); }
+  to { transform: translateY(-6px) scaleY(0.99); opacity: 0; clip-path: inset(0 0 100% 0); }
+}
+@keyframes backdropFadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+#modal-detalle-cotizacion.closing {
+  animation: modalCurtainUp 420ms ease-in-out;
+  transform-origin: bottom center;
+  will-change: transform, opacity, clip-path;
+}
+#modal-detalle-cotizacion.closing::backdrop {
+  animation: backdropFadeOut 420ms ease-in-out;
+}
+/* Título del modal: texto a la izquierda y número a la derecha */
+#detalle-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+#detalle-numero { font-weight: 600; color: #005e85; }
+/* (Se removieron estilos del tooltip tipo burbuja Uiverse para revertir UI) */
+
+/* Login: vista centrada en pantalla */
+.login-view {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+  background-image: url("./assets/Back.jpg");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  position: relative;
+}
+/* Footer del login, fijo al fondo dentro de la vista de login */
+.login-footer {
+  position: absolute;
+  bottom: 12px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 12px;
+  color: #ffffffcc;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.35);
+  padding: 4px 8px;
+}
+.login-card {
+  width: 100%;
+  max-width: 380px;
+  background: transparent;
+  border: none;
+  border-radius: 16px;
+  box-shadow: 0 12px 28px rgba(0,0,0,0.28), 0 4px 12px rgba(0,0,0,0.18);
+  padding: 16px;
+  display: flex;
+  position: relative;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+/* Animación de entrada del formulario */
+.login-card.enter {
+  animation: loginCardEnter 420ms ease-out;
+  transform-origin: top center;
+  will-change: transform, opacity;
+}
+@keyframes loginCardEnter {
+  from { opacity: 0; transform: translateY(-6px) scale(0.98); }
+  to   { opacity: 1; transform: translateY(0)    scale(1); }
+}
+/* Animación de salida al iniciar sesión */
+.login-card.closing {
+  animation: loginCardExit 360ms ease-in forwards;
+  transform-origin: top center;
+  will-change: transform, opacity;
+}
+@keyframes loginCardExit {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to   { opacity: 0; transform: translateY(-8px) scale(0.99); }
+}
+/* Fade del fondo del login al cerrar */
+.login-view.closing {
+  animation: loginViewFade 360ms ease-in forwards;
+}
+@keyframes loginViewFade {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+/* Botón en estado de carga con spinner */
+#login-submit.btn-loading {
+  position: relative;
+  color: transparent;
+  pointer-events: none;
+}
+#login-submit.btn-loading::after {
+  content: "";
+  width: 16px;
+  height: 16px;
+  border: 2px solid #ffffff;
+  border-top-color: transparent;
+  border-radius: 50%;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  animation: btnSpin 0.9s linear infinite;
+}
+@keyframes btnSpin {
+  to { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+
+.login-card h2 {
+  margin: 0 0 12px;
+  font-size: 20px;
+  font-weight: 700;
+  text-align: center;
+}
+.login-card form label {
+  display: block;
+  margin: 8px 0;
+}
+.login-card form { width: 100%; }
+.login-card #login-submit {
+  padding: 10px 20px;
+  text-transform: uppercase;
+  border-radius: 8px;
+  font-size: 17px;
+  font-weight: 500;
+  color: #000;
+  text-shadow: none;
+  background: transparent;
+  cursor: pointer;
+  box-shadow: transparent;
+  border: 1px solid #ffffff80;
+  transition: 0.5s ease;
+  user-select: none;
+  width: 100%;
+}
+.login-card #login-submit:hover,
+.login-card #login-submit:focus {
+  color: #ffffff;
+  background: #008cff;
+  border: 1px solid #008cff;
+  text-shadow: 0 0 5px #ffffff, 0 0 10px #ffffff, 0 0 20px #ffffff;
+  box-shadow: 0 0 5px #008cff, 0 0 20px #008cff, 0 0 50px #008cff, 0 0 100px #008cff;
+}
+.login-card .hint {
+   text-align: center;
+   font-size: 12px;
+   color: var(--muted);
+   margin-top: 6px;
+ }
+ /* Logo dentro de la tarjeta de login */
+ .login-logo {
+   display: flex;
+   align-items: center;
+   justify-content: center;
+ }
+ .login-logo img {
+    width: 160px;
+    height: auto;
+    display: block;
+    margin: 4px auto 8px;
+  }
+  /* Overlay semitransparente detrás del contenido de la tarjeta */
+  .login-card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.35);
+    backdrop-filter: blur(4px);
+  }
+  .login-card > * {
+    position: relative;
+    z-index: 1;
+  }
+
+/* Ocultar botones "Agregar producto" en módulos principales */
+#add-equipos-btn,
+#add-lc-btn,
+#add-insumos-btn,
+#add-acc-btn,
+#add-soluciones_lc-btn {
+  display: none !important;
+}
+.list { list-style:none; padding:0; margin:0; }
+.list li, .list div { padding:10px 12px; border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; transition: background .2s ease; }
+.list .quotation-item { justify-content:flex-start; }
+.list li:hover { background:#f9fafb; }
+.list button { background:#f3f4f6; color:#111827; border:1px solid var(--border); padding:6px 12px; border-radius:8px; cursor:pointer; transition: all .2s ease; }
+.list button:hover { background:#e5e7eb; transform: translateY(-1px); }
+
+/* Cabecera y filas de Cotizaciones (lista de guardadas) */
+.cotizaciones-header {
+  display: grid;
+  grid-template-columns: minmax(140px, 160px) minmax(160px, 200px) 1fr minmax(160px, 200px) minmax(120px, 140px) minmax(80px, 100px);
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  background: #00bed6;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.cot-list li.cot-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 160px) minmax(160px, 200px) 1fr minmax(160px, 200px) minmax(120px, 140px) minmax(80px, 100px);
+  gap: 8px;
+  align-items: center;
+  cursor: pointer;
+}
+.cot-num { font-weight: 600; color: #005e85; }
+.cot-total { text-align: center; font-weight: 700; color: #000000; }
+.cot-fecha, .cot-cliente, .cot-asesor { color: var(--text); }
+.cot-cliente, .cot-asesor { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 720px) {
+  .cotizaciones-header {
+    grid-template-columns: minmax(140px, 160px) 1fr minmax(120px, 140px) minmax(80px, 100px);
+  }
+  .cotizaciones-header .col-fecha,
+  .cotizaciones-header .col-asesor { display: none; }
+  .cot-list li.cot-row {
+    grid-template-columns: minmax(140px, 160px) 1fr minmax(120px, 140px) minmax(80px, 100px);
+  }
+  .cot-row .cot-fecha,
+  .cot-row .cot-asesor { display: none; }
+}
+
+/* Botones de acción con iconos en la lista de clientes */
+.client-actions { display:flex; gap:6px; justify-content:flex-end; }
+.cot-actions { display:flex; gap:6px; justify-content:flex-end; }
+.list .btn-icon {
+  width: 28px; height: 28px; display:inline-flex; align-items:center; justify-content:center;
+  font-size: 16px; font-weight: 700; line-height: 1;
+  background:#f3f4f6; color:#111827; border:1px solid var(--border);
+  border-radius:8px; cursor:pointer; transition: all .2s ease; padding:0;
+}
+.list .btn-icon:hover { background:#e5e7eb; transform: translateY(-1px); }
+
+/* Colores específicos para acciones */
+.list .btn-icon.select-client-btn {
+  background: var(--accent); /* verde */
+  color: #ffffff;
+  border-color: #16a34a; /* verde más intenso */
+}
+.list .btn-icon.select-client-btn:hover {
+  background: #16a34a;
+}
+.list .btn-icon.edit-client-btn {
+  background: #f59e0b; /* amarillo/amber */
+  color: #ffffff;
+  border-color: #d97706;
+}
+.list .btn-icon.edit-client-btn:hover {
+  background: #d97706;
+}
+
+/* Acción eliminar en cotizaciones */
+.list .btn-icon.delete-cot-btn {
+  background: #ef4444; /* rojo */
+  color: #ffffff;
+  border-color: #dc2626;
+}
+.list .btn-icon.delete-cot-btn:hover {
+  background: #dc2626;
+}
+
+/* Mostrar el botón editar sólo al pasar el mouse */
+.list li.client-item .btn-icon.edit-client-btn {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s ease;
+}
+.list li.client-item:hover .btn-icon.edit-client-btn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Miniaturas en listas de productos */
+.list li .item-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0;
+  border: 0;
+}
+.list li .item-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  border: 0;
+}
+.list li img.thumb {
+  width: 60px;
+  height: 60px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #fff;
+  margin-right: 12px;
+  flex-shrink: 0;
+}
+.list li .item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+}
+.list li .item-name {
+  font-weight: 600;
+  color: var(--text, #111827);
+}
+.list li .item-price {
+  color: #00bed6;
+  font-weight: 700;
+  font-size: 18px;
+}
+.hint { color: var(--muted); }
+
+dialog { border:none; border-radius:12px; padding: 12px; box-sizing: border-box; background: var(--panel-solid); color: var(--text); }
+dialog::backdrop { background: rgba(0,0,0,0.5); }
+label { display:block; margin: 8px 0; }
+input:not([type="checkbox"]):not(.qty-input) { width: 100%; padding:10px; border-radius:10px; border:1px solid var(--border); background:#ffffff; color:var(--text); transition: box-shadow .2s ease, border-color .2s ease; }
+input:not([type="checkbox"]):not(.qty-input):focus { outline: none; border-color: var(--ring); box-shadow: 0 0 0 3px #38bdf830; }
+menu { display:flex; gap:8px; justify-content:flex-end; }
+
+.config-grid { display:grid; grid-template-columns: repeat(3, 1fr); gap:12px; }
+
+/* Configuración: secciones y tarjetas */
+.config-sections { display: grid; grid-template-columns: 1fr; gap: 14px; }
+.config-section h3 { margin: 0 0 8px; font-size: 16px; font-weight: 600; color: var(--text); }
+.config-items { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.config-item { background: var(--panel-solid); border: 1px solid var(--border); border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.config-item .hint { margin: 0; font-size: 12px; }
+.config-item button { background: var(--panel-solid); color:#005e85; border: 1px solid var(--border); padding:8px 14px; border-radius:10px; cursor:pointer; transition: transform .15s ease, box-shadow .15s ease; }
+.config-item button:hover { transform: translateY(-1px); box-shadow: 0 1px 5px #002a3a; }
+
+@media (max-width: 760px) {
+  .config-items { grid-template-columns: 1fr; }
+}
+
+/* Botones primarios/acciones */
+.panel-footer button, #save-product, #finalize-quotation, #export-pdf, #select-client-btn, #client-close, #new-client-btn, #detalle-close, #add-product-cancel, #logout-btn { background: var(--panel-solid); color:#005e85; border: 1px solid var(--border); padding:8px 14px; border-radius:10px; cursor:pointer; transition: transform .15s ease, box-shadow .15s ease; }
+.panel-footer button:hover, #save-product:hover, #finalize-quotation:hover, #export-pdf:hover, #select-client-btn:hover, #client-close:hover, #new-client-btn:hover, #detalle-close:hover, #add-product-cancel:hover, #logout-btn:hover { transform: translateY(-1px); box-shadow: 0 1px 5px #002a3a; }
+
+/* Estado deshabilitado del botón Crear */
+.panel-footer button:disabled { opacity: 0.55; cursor: not-allowed; position: relative; }
+/* Tooltip visual removido: no se mostrará burbuja al pasar el mouse */
+
+/* Detalle de cotización: tablas y layout */
+.detalle-section { margin: 8px 0 12px; }
+.detalle-section h4 { margin: 0 0 8px; font-size: 14px; color: var(--muted); }
+.detalle-table { width: 100%; border-collapse: collapse; background: #ffffff; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.detalle-table th, .detalle-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left; }
+.detalle-table thead th { background: #00bed6; font-weight: 600; }
+.detalle-total { display:flex; align-items:center; justify-content:flex-end; gap:8px; margin-top: 6px; font-size: 15px; }
+.detalle-total strong { font-weight: 700; }
+/* Tabla de Datos: sin líneas internas para una apariencia más limpia */
+.detalle-table--clean { border: 0; }
+.detalle-table--clean th, .detalle-table--clean td { border-bottom: 0; }
+/* Datos en líneas: Cliente: valor, etc. */
+.detalle-row { display:flex; flex-wrap: wrap; gap:6px; margin: 4px 0; }
+.detalle-label { font-weight: 600; margin-right: 6px; }
+.detalle-value { color: var(--text); }
+/* Grilla de datos y columna de opciones a la derecha */
+.detalle-data-grid { display:grid; grid-template-columns: 2fr 1fr; gap:12px; align-items:flex-start; }
+.detalle-data-list { display:flex; flex-direction:column; }
+.detalle-side h5 { margin: 0 0 6px; font-size: 13px; color: var(--muted); text-align: right; }
+.detalle-side-actions { display:flex; flex-direction:column; gap:0; }
+ .detalle-option { display:flex; align-items:center; flex-direction: row; justify-content: space-between; gap:8px; font-size: 13px; color: var(--text); line-height: 1; padding: 0; width: 100%; margin: 0; }
+ .detalle-option input[type="checkbox"] { width:auto; height:16px; flex-shrink:0; outline:none; box-shadow:none; }
+ .detalle-option input[type="checkbox"]:focus, .detalle-option input[type="checkbox"]:focus-visible { outline:none; box-shadow:none; border-color: transparent; }
+.detalle-action { background: var(--panel-solid); color:#005e85; border: 1px solid var(--border); padding:8px 14px; border-radius:10px; cursor:pointer; transition: transform .15s ease, box-shadow .15s ease; }
+.detalle-action:hover { transform: translateY(-1px); box-shadow: 0 1px 5px #002a3a; }
+
+/* Bloque de total con desglose */
+.detalle-total-block { background: #ffffff; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
+.detalle-total-block .detalle-total-row { display:flex; align-items:center; justify-content:space-between; }
+.detalle-total-block .total-final strong { font-size: 16px; }
+
+/* (Se removió el estilo de botón animado y se restauraron los estilos generales) */
+
+/* Scrollbar estilizado */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: #ffffff; }
+*::-webkit-scrollbar-thumb { background: #005e85; border-radius: 10px; }
+*::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+@media (max-width: 900px) {
+  .panels { grid-template-columns: 1fr; }
+  .workspace { grid-template-columns: 1fr; }
+  .sidebar { width: 200px; }
+  .detalle-data-grid { grid-template-columns: 1fr; }
+}
+
+/* Modal Seleccionar Cliente: ancho y estructura de lista ordenada (sin paginación) */
+dialog#modal-client { width: 860px; max-width: 95vw; }
+#modal-client #client-search { margin-bottom: 8px; }
+#modal-client .modal-title-row { display:flex; align-items:center; justify-content: space-between; margin-bottom: 8px; }
+#modal-client .modal-title-row h3 { margin: 0; }
+#modal-client .modal-title-row button { background:#ffffff; color:#002a3a; border:1px solid var(--border); padding: 8px 10px; border-radius:10px; cursor:pointer; transition: all .2s ease; }
+#modal-client .modal-title-row button:hover { transform: translateY(-1px); box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+#modal-client .client-list-header {
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr 2fr auto;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  background: #f8fafc;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+#modal-client #client-list { max-height: 60vh; overflow: auto; }
+.list li.client-item { 
+  display: grid; 
+  grid-template-columns: 2fr 1fr 1fr 2fr auto; 
+  gap: 8px; 
+  align-items: center;
+}
+.list li.client-item .c-name { font-weight: 600; }
+.list li.client-item .c-rfc { color: var(--muted); }
+#modal-client .client-list-header .sortable { cursor: pointer; }
+#modal-client .client-list-header .sortable:hover { text-decoration: underline; }
+
+/* Animación de aparición del Modal Seleccionar Cliente (fade-in desde el centro) */
+@keyframes modalCenterFadeIn {
+  from { transform: scale(0.92); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+#modal-client[open] {
+  animation: modalCenterFadeIn 420ms ease-out;
+  transform-origin: center;
+  will-change: transform, opacity;
+}
+#modal-client[open]::backdrop {
+  animation: backdropFadeIn 420ms ease-out;
+}
+
+/* Animación de cierre del Modal Seleccionar Cliente (fade-out hacia el centro) */
+@keyframes modalCenterFadeOut {
+  from { transform: scale(1); opacity: 1; }
+  to { transform: scale(0.92); opacity: 0; }
+}
+#modal-client.closing {
+  animation: modalCenterFadeOut 420ms ease-in;
+  transform-origin: center;
+}
+#modal-client.closing::backdrop {
+  animation: backdropFadeOut 420ms ease-in;
+}
+
+/* Modal Nuevo Cliente */
+dialog#modal-new-client { width: 560px; max-width: 95vw; }
+#modal-new-client .modal-form-grid { display:grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+#modal-new-client .modal-form-grid .full { grid-column: 1 / -1; }
+#modal-new-client .modal-actions { display:flex; gap: 8px; justify-content:flex-end; }
+/* Modal Detalle: ancho duplicado y márgenes laterales más amplios */
+#modal-detalle-cotizacion { width: 1120px; max-width: calc(100vw - 80px); margin: 0 auto; }
+/* Animación de aparición tipo cortina (de arriba hacia abajo) */
+@keyframes modalCurtainDown {
+  from { transform: translateY(-12px) scaleY(0.95); opacity: 0; clip-path: inset(0 0 100% 0); }
+  to { transform: translateY(0) scaleY(1); opacity: 1; clip-path: inset(0 0 0 0); }
+}
+@keyframes backdropFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+#modal-detalle-cotizacion[open] {
+  animation: modalCurtainDown 320ms ease-out;
+  transform-origin: top center;
+  will-change: transform, opacity, clip-path;
+}
+#modal-detalle-cotizacion[open]::backdrop {
+  animation: backdropFadeIn 320ms ease-out;
+}
+/* Animación de cierre tipo cortina (de abajo hacia arriba) */
+@keyframes modalCurtainUp {
+  from { transform: translateY(0) scaleY(1); opacity: 1; clip-path: inset(0 0 0 0); }
+  to { transform: translateY(-6px) scaleY(0.99); opacity: 0; clip-path: inset(0 0 100% 0); }
+}
+@keyframes backdropFadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+#modal-detalle-cotizacion.closing {
+  animation: modalCurtainUp 420ms ease-in-out;
+  transform-origin: bottom center;
+  will-change: transform, opacity, clip-path;
+}
+#modal-detalle-cotizacion.closing::backdrop {
+  animation: backdropFadeOut 420ms ease-in-out;
+}
+/* Título del modal: texto a la izquierda y número a la derecha */
+#detalle-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+#detalle-numero { font-weight: 600; color: #005e85; }
+/* (Se removieron estilos del tooltip tipo burbuja Uiverse para revertir UI) */
+
+/* Login: vista centrada en pantalla */
+.login-view {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+  background-image: url("./assets/Back.jpg");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  position: relative;
+}
+/* Footer del login, fijo al fondo dentro de la vista de login */
+.login-footer {
+  position: absolute;
+  bottom: 12px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: 12px;
+  color: #ffffffcc;
+  text-shadow: 0 1px 2px rgba(0,0,0,0.35);
+  padding: 4px 8px;
+}
+.login-card {
+  width: 100%;
+  max-width: 380px;
+  background: transparent;
+  border: none;
+  border-radius: 16px;
+  box-shadow: 0 12px 28px rgba(0,0,0,0.28), 0 4px 12px rgba(0,0,0,0.18);
+  padding: 16px;
+  display: flex;
+  position: relative;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.login-card h2 {
+  margin: 0 0 12px;
+  font-size: 20px;
+  font-weight: 700;
+  text-align: center;
+}
+.login-card form label {
+  display: block;
+  margin: 8px 0;
+}
+.login-card form { width: 100%; }
+.login-card #login-submit {
+  padding: 10px 20px;
+  text-transform: uppercase;
+  border-radius: 8px;
+  font-size: 17px;
+  font-weight: 500;
+  color: #000;
+  text-shadow: none;
+  background: transparent;
+  cursor: pointer;
+  box-shadow: transparent;
+  border: 1px solid #ffffff80;
+  transition: 0.5s ease;
+  user-select: none;
+  width: 100%;
+}
+.login-card #login-submit:hover,
+.login-card #login-submit:focus {
+  color: #ffffff;
+  background: #008cff;
+  border: 1px solid #008cff;
+  text-shadow: 0 0 5px #ffffff, 0 0 10px #ffffff, 0 0 20px #ffffff;
+  box-shadow: 0 0 5px #008cff, 0 0 20px #008cff, 0 0 50px #008cff, 0 0 100px #008cff;
+}
+.login-card .hint {
+   text-align: center;
+   font-size: 12px;
+   color: var(--muted);
+   margin-top: 6px;
+ }
+ /* Logo dentro de la tarjeta de login */
+ .login-logo {
+   display: flex;
+   align-items: center;
+   justify-content: center;
+ }
+ .login-logo img {
+    width: 160px;
+    height: auto;
+    display: block;
+    margin: 4px auto 8px;
+  }
+  /* Overlay semitransparente detrás del contenido de la tarjeta */
+  .login-card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.35);
+    backdrop-filter: blur(4px);
+  }
+  .login-card > * {
+    position: relative;
+    z-index: 1;
+  }
+
+/* Logs del sistema */
+.log-list {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  max-height: 260px;
+  overflow: auto;
+  background: #fff;
+  border: 1px solid var(--border-color, #ddd);
+  border-radius: 10px;
+  padding: 8px;
+}
+.log-line { border-bottom: 1px solid var(--border-color, #eee); padding: 4px 0; }
+.log-line:last-child { border-bottom: none; }
+.log-level-ERROR { color: #b91c1c; }
+.log-level-CONNECTION { color: #2563eb; }
+
+/* Sistema: barra de herramientas y paginación */
+.system-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.system-toolbar .sys-inline { display: flex; align-items: center; gap: 6px; }
+.system-toolbar .sys-search { flex: 1 1 220px; min-width: 140px; }
+.system-pagination { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+#system-logs-page-info { font-size: 12px; color: #666; }
+.sidebar { display: flex; flex-direction: column; }
+.sidebar nav { flex: 1; }
+.sidebar-footer { margin-top: auto; color: var(--muted); font-size: 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+.app-version { color: var(--muted); font-size: 12px; }
+
+/* Setup inicial: vista centrada similar al login */
+.setup-view {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 24px;
+  background: linear-gradient(120deg, rgba(0, 140, 255, 0.15), rgba(0, 190, 214, 0.15));
+  position: relative;
+}
+.setup-card {
+  width: 100%;
+  max-width: 460px;
+  background: #ffffffee;
+  border-radius: 16px;
+  box-shadow: 0 12px 28px rgba(0,0,0,0.24), 0 4px 12px rgba(0,0,0,0.16);
+  padding: 18px;
+}
+.setup-card h2 { margin: 0 0 12px; font-size: 20px; font-weight: 700; text-align: center; }
+.setup-card form label { display: block; margin: 8px 0; }
+.setup-card input { width: 100%; padding: 8px 10px; border: 1px solid var(--border, #ddd); border-radius: 8px; }
+.setup-actions { display: flex; gap: 10px; margin-top: 12px; }
+#setup-test, #setup-save { flex: 1; padding: 10px; border-radius: 8px; cursor: pointer; border: 1px solid #008cff; background: #008cff; color: #fff; }
+#setup-test { border-color: #00bed6; background: #00bed6; }
+#setup-result { text-align: center; font-size: 12px; color: var(--muted); margin-top: 8px; }
+.setup-card form { width: 100%; }
+.setup-card #login-submit {
+  padding: 10px 20px;
+  text-transform: uppercase;
+  border-radius: 8px;
+  font-size: 17px;
+  font-weight: 500;
+  color: #000;
+  text-shadow: none;
+  background: transparent;
+  cursor: pointer;
+  box-shadow: transparent;
+  border: 1px solid #ffffff80;
+  transition: 0.5s ease;
+  user-select: none;
+  width: 100%;
+}
+.setup-card #login-submit:hover,
+.setup-card #login-submit:focus {
+  color: #ffffff;
+  background: #008cff;
+  border: 1px solid #008cff;
+  text-shadow: 0 0 5px #ffffff, 0 0 10px #ffffff, 0 0 20px #ffffff;
+  box-shadow: 0 0 5px #008cff, 0 0 20px #008cff, 0 0 50px #008cff, 0 0 100px #008cff;
+}
+.setup-card .hint {
+   text-align: center;
+   font-size: 12px;
+   color: var(--muted);
+   margin-top: 6px;
+ }
+ /* Logo dentro de la tarjeta de login */
+ .login-logo {
+   display: flex;
+   align-items: center;
+   justify-content: center;
+ }
+ .login-logo img {
+    width: 160px;
+    height: auto;
+    display: block;
+    margin: 4px auto 8px;
+  }
+  /* Overlay semitransparente detrás del contenido de la tarjeta */
+  .login-card::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.35);
+    backdrop-filter: blur(4px);
+  }
+  .login-card > * {
+    position: relative;
+    z-index: 1;
+  }
+
+/* Logs del sistema */
+.log-list {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  max-height: 260px;
+  overflow: auto;
+  background: #fff;
+  border: 1px solid var(--border-color, #ddd);
+  border-radius: 10px;
+  padding: 8px;
+}
+.log-line { border-bottom: 1px solid var(--border-color, #eee); padding: 4px 0; }
+.log-line:last-child { border-bottom: none; }
+.log-level-ERROR { color: #b91c1c; }
+.log-level-CONNECTION { color: #2563eb; }
+
+/* Sistema: barra de herramientas y paginación */
+.system-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.system-toolbar .sys-inline { display: flex; align-items: center; gap: 6px; }
+.system-toolbar .sys-search { flex: 1 1 220px; min-width: 140px; }
+.system-pagination { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+#system-logs-page-info { font-size: 12px; color: #666; }
+.sidebar { display: flex; flex-direction: column; }
+.sidebar nav { flex: 1; }
+.sidebar-footer { margin-top: auto; color: var(--muted); font-size: 12px; padding-top: 8px; border-top: 1px solid var(--border); }
+.app-version { color: var(--muted); font-size: 12px; }

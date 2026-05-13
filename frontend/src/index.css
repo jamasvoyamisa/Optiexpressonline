@@ -10,6 +10,16 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  min-height: 100dvh;
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+/* Regla global solicitada: todos los campos en fondo blanco */
+input,
+select,
+textarea {
+  background-color: #fff !important;
 }
 
 code {
@@ -25,4 +35,12 @@ code {
 @keyframes slideUpModal {
   from { transform: translateY(28px) scale(0.95); opacity: 0; }
   to   { transform: translateY(0) scale(1); opacity: 1; }
+}
+
+/* Tablas de datos: filas alternadas con contraste visible (impar blanca / par gris-azulado) */
+main table tbody tr:nth-child(odd) {
+  background-color: #ffffff;
+}
+main table tbody tr:nth-child(even) {
+  background-color: #e2e8f0;
 }

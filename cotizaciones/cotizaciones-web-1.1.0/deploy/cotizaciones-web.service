@@ -1,0 +1,16 @@
+[Unit]
+Description=Cotizaciones Optiexpress (Node web)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/var/www/cotizaciones
+Environment=NODE_ENV=production
+EnvironmentFile=-/var/www/cotizaciones/.env
+ExecStart=/usr/bin/node server/index.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

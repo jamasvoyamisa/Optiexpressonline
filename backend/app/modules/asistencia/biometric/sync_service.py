@@ -111,12 +111,104 @@ class SyncService:
         else:
             secuencia = TIPO_LUNES_VIERNES
 
-        if checadas_hoy < len(secuencia):
-            tipo = secuencia[checadas_hoy]
-        else:
-            tipo = models.TipoChecada.ENTRADA
+        if checadas_hoy >= len(secuencia):
+            raise ValueError(
+                f"Checada rechazada: el empleado {empleado_id} ya tiene {checadas_hoy} "
+                f"de {len(secuencia)} marcas requeridas el {dia_mex}. "
+                "No se permiten checadas adicionales ese día."
+            )
 
-        return tipo, es_domingo
+        tipo = secuencia[checadas_hoy]
+
+        # Tiempo extra: fuera del calendario laboral pactado de la empresa.
+        # Antes se marcaba todo domingo como extra; en lun-dom el domingo es día normal.
+        es_tiempo_extra = False
+        if empleado_row and empleado_row.empresa:
+            emp = empleado_row.empresa
+            dias_lab = (emp.dias_laborales or "lun-sab").strip().lower()
+            trabaja_fest = bool(getattr(emp, "trabaja_festivos", False))
+        else:
+            dias_lab = "lun-sab"
+            trabaja_fest = False
+
+        if es_domingo and dias_lab != "lun-dom":
+            es_tiempo_extra = True
+        else:
+            # Import diferido: service importa SyncService en nivel de módulo.
+            from app.modules.asistencia.service import AsistenciaService
+
+            if AsistenciaService.es_dia_festivo(db, dia_mex) and not trabaja_fest:
+                es_tiempo_extra = True
+
+        return tipo, es_tiempo_extra
+
+    @staticmethod
+    def _limpiar_incidencias_si_dia_completo(
+        db: Session,
+        empleado_id: int,
+        timestamp: datetime,
+    ) -> None:
+        """
+        Tras guardar una checada (posiblemente tardía), verifica si el día ya quedó
+        completo. Si es así, elimina cualquier FALTA o INCOMPLETA automática de ese día
+        para no dejar incidencias falsas cuando el agente estuvo apagado.
+        """
+        dia_mex = _dia_checada_mexico(timestamp)
+        dia_inicio_utc, dia_fin_utc = mexico_date_to_utc_range(dia_mex)
+
+        checadas_hoy = db.query(models.Asistencia).filter(
+            models.Asistencia.empleado_id == empleado_id,
+            models.Asistencia.timestamp >= dia_inicio_utc,
+            models.Asistencia.timestamp < dia_fin_utc,
+        ).count()
+
+        dia_semana = dia_mex.weekday()
+        es_fin_semana = dia_semana >= 5
+
+        empleado_row = (
+            db.query(personal_models.Empleado)
+            .filter(personal_models.Empleado.id == empleado_id)
+            .first()
+        )
+        ce = (
+            obtener_checada_especial_vigente(db, empleado_id, dia_mex)
+            if empleado_row
+            else None
+        )
+        if ce and ce.checadas_requeridas == 2 and dia_semana < 5:
+            requeridas = 2
+        elif ce and ce.jornada_reducida_lv and dia_semana < 5:
+            requeridas = 2
+        elif es_fin_semana:
+            requeridas = 2
+        else:
+            requeridas = 4
+
+        if checadas_hoy < requeridas:
+            return
+
+        eliminadas = (
+            db.query(models.Incidencia)
+            .filter(
+                models.Incidencia.empleado_id == empleado_id,
+                models.Incidencia.fecha >= dia_inicio_utc,
+                models.Incidencia.fecha < dia_fin_utc,
+                models.Incidencia.tipo.in_([
+                    models.TipoIncidencia.FALTA,
+                    models.TipoIncidencia.INCOMPLETA,
+                ]),
+                models.Incidencia.origen == "automatico",
+                models.Incidencia.justificada == False,
+            )
+            .all()
+        )
+        for inc in eliminadas:
+            logger.info(
+                "Incidencia automática eliminada por checadas tardías: "
+                "empleado=%s tipo=%s fecha=%s (día ahora completo: %s/%s marcas)",
+                empleado_id, inc.tipo.value, dia_mex, checadas_hoy, requeridas,
+            )
+            db.delete(inc)
 
     @staticmethod
     def _detectar_incidencia(
@@ -161,8 +253,10 @@ class SyncService:
         descripcion = None
 
         if tipo_checada == models.TipoChecada.ENTRADA:
+            if not h_ent_s:
+                return
             try:
-                h_ent, m_ent = [int(x) for x in h_ent_s.split(":")]
+                h_ent, m_ent = [int(x) for x in h_ent_s.split(":")[:2]]
             except Exception:
                 return
             hora_esperada = ts.replace(hour=h_ent, minute=m_ent, second=0, microsecond=0)
@@ -173,8 +267,10 @@ class SyncService:
                 descripcion = f"Retardo de {minutos_tarde} minuto(s). Hora entrada: {h_ent_s}, llegó: {ts.strftime('%H:%M')}"
 
         elif tipo_checada == models.TipoChecada.SALIDA:
+            if not h_sal_s:
+                return
             try:
-                h_sal, m_sal = [int(x) for x in h_sal_s.split(":")]
+                h_sal, m_sal = [int(x) for x in h_sal_s.split(":")[:2]]
             except Exception:
                 return
             hora_esperada = ts.replace(hour=h_sal, minute=m_sal, second=0, microsecond=0)
@@ -227,13 +323,23 @@ class SyncService:
         dispositivo.ultima_sync_agente = datetime.now(timezone.utc)
 
         user_id = str(sync_data.user_id).strip()
+        # 1) Prioridad absoluta: pin_checador (único globalmente).
         empleado = db.query(personal_models.Empleado).filter(
             personal_models.Empleado.pin_checador == user_id
         ).first()
+        # 2) Fallback por numero_empleado: solo si es único; nunca asumir si hay duplicados.
         if not empleado:
-            empleado = db.query(personal_models.Empleado).filter(
+            candidatos = db.query(personal_models.Empleado).filter(
                 personal_models.Empleado.numero_empleado == user_id
-            ).first()
+            ).all()
+            if len(candidatos) == 1:
+                empleado = candidatos[0]
+            elif len(candidatos) > 1:
+                logger.warning(
+                    f"Checada (agente): user_id={user_id} coincide con {len(candidatos)} empleados "
+                    "por numero_empleado y no hay match por pin_checador. Se ignora para evitar registrar "
+                    "la checada al empleado equivocado."
+                )
         if not empleado:
             logger.info(f"Checada ignorada (agente): user_id={user_id} no registrado en el sistema.")
             # Persistir latido aunque rechacemos la checada (el agente sí conectó)
@@ -288,20 +394,32 @@ class SyncService:
                 "Checada anterior a la fecha de ingreso del empleado. No se registró."
             )
 
+        ventana_inicio = timestamp - timedelta(seconds=60)
         existente = db.query(models.Asistencia).filter(
             models.Asistencia.empleado_id == empleado.id,
-            models.Asistencia.timestamp == timestamp,
+            models.Asistencia.timestamp >= ventana_inicio,
+            models.Asistencia.timestamp <= timestamp,
         ).first()
         if existente:
-            logger.info(f"Checada duplicada ignorada: empleado={sync_data.user_id}, timestamp={timestamp}")
-            # Persistir ultima_sync_agente aunque no insertemos checada nueva
+            logger.info(
+                f"Checada near-dup ignorada: empleado={sync_data.user_id} ts={timestamp} "
+                f"(ya existe a {existente.timestamp}, <60s)"
+            )
             try:
                 db.commit()
             except Exception:
                 db.rollback()
             return existente
 
-        tipo, es_tiempo_extra = SyncService._determinar_tipo(db, empleado.id, timestamp)
+        try:
+            tipo, es_tiempo_extra = SyncService._determinar_tipo(db, empleado.id, timestamp)
+        except ValueError as exc:
+            logger.warning(f"Checada ignorada (agente): {exc}")
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+            raise
 
         asistencia = models.Asistencia(
             empleado_id=empleado.id,
@@ -313,8 +431,22 @@ class SyncService:
         )
 
         db.add(asistencia)
-        db.commit()
+        try:
+            db.commit()
+        except Exception as exc:
+            db.rollback()
+            if "uq_asistencias_empleado_timestamp" in str(exc) or "Duplicate entry" in str(exc):
+                logger.info(f"Checada duplicada (IntegrityError) ignorada: emp={empleado.id} ts={timestamp}")
+                return None
+            raise
         db.refresh(asistencia)
+
+        # Si el día ya quedó completo, eliminar FALTA/INCOMPLETA automáticas previas
+        try:
+            SyncService._limpiar_incidencias_si_dia_completo(db, empleado.id, timestamp)
+            db.commit()
+        except Exception as exc:
+            logger.warning(f"Error al limpiar incidencias tras checada tardía: {exc}")
 
         # Detectar incidencias automáticas basadas en horario
         try:

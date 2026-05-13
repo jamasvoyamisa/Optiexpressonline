@@ -270,7 +270,7 @@ interface HorarioSimple {
 
 const emptyForm: FormData = {
   numero_empleado: '', nombre: '', apellido_paterno: '', apellido_materno: '',
-  email: '', telefono: '', username: '', empresa_id: undefined, departamento_id: undefined, puesto_id: undefined, curp: '', rfc: '', nss: '',
+  email: '', telefono: '', telefono_empresa_asignado: '', username: '', empresa_id: undefined, departamento_id: undefined, puesto_id: undefined, curp: '', rfc: '', nss: '',
   direccion: '', colonia: '', cp: '', ciudad: '', fecha_nacimiento: '', contacto_emergencia: '', telefono_emergencia: '',
   fecha_ingreso: '', registrar_en_checador: false, dispositivo_ids: [], password: '', horario_id: undefined, horario_sabado_id: null,
 };
@@ -716,6 +716,7 @@ export const PersonalPage = () => {
     try {
       const payload: Record<string, unknown> = {};
       for (const [key, val] of Object.entries(form)) {
+        if (key === 'telefono_empresa_asignado') continue;
         if (key === 'dispositivo_ids') {
           if (Array.isArray(val) && val.length > 0) payload[key] = val;
         } else if (key === 'horario_id' || key === 'horario_sabado_id') {
@@ -724,6 +725,15 @@ export const PersonalPage = () => {
           payload[key] = val;
         } else if (key === 'registrar_en_checador') {
           payload[key] = val;
+        }
+      }
+
+      if (isAdmin) {
+        const tw = (form.telefono_empresa_asignado || '').replace(/\D/g, '').slice(0, 15);
+        if (editingId) {
+          payload.telefono_empresa_asignado = tw || null;
+        } else if (tw) {
+          payload.telefono_empresa_asignado = tw;
         }
       }
 
@@ -1197,6 +1207,7 @@ export const PersonalPage = () => {
       apellido_materno: emp.apellido_materno || '',
       email: emp.email || '',
       telefono: emp.telefono || '',
+      telefono_empresa_asignado: emp.telefono_empresa_asignado || '',
       empresa_id: emp.empresa_id ?? undefined,
       departamento_id: emp.departamento_id ?? undefined,
       puesto_id: emp.puesto_id ?? undefined,
@@ -1640,7 +1651,7 @@ export const PersonalPage = () => {
 
       {/* ========== MODAL: FORMULARIO CREAR/EDITAR ========== */}
       {showFormModal && (
-        <div style={subModalOverlay} onClick={() => setShowFormModal(false)}>
+        <div style={subModalOverlay}>
           <div style={modalLarge} onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexShrink: 0 }}>
               <h3 style={{ margin: 0 }}>{editingId ? 'Editar Empleado' : 'Alta de Empleado'}</h3>
@@ -1784,6 +1795,21 @@ export const PersonalPage = () => {
                         ))}
                       </select>
                     </div>
+                    {isAdmin && (
+                    <div>
+                      <label style={labelStyle}>Teléfono asignado por la empresa (WhatsApp)</label>
+                      <input
+                        style={inputStyle}
+                        value={form.telefono_empresa_asignado}
+                        onChange={e => handleChange('telefono_empresa_asignado', e.target.value.replace(/\D/g, '').slice(0, 15))}
+                        placeholder="10 dígitos"
+                        maxLength={15}
+                      />
+                      <span style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 4, display: 'block' }}>
+                        Se guarda en el expediente laboral. Al crear un ticket desde el portal, TI usará este número en WhatsApp; si está vacío, se usa el teléfono personal.
+                      </span>
+                    </div>
+                    )}
                     <div>
                       <label style={labelStyle}>Horario de trabajo (Lun–Vie)</label>
                       <select
@@ -1994,6 +2020,7 @@ export const PersonalPage = () => {
               ['Departamento', emp.departamento?.nombre || getDeptoNombre(emp.departamento_id)],
               ['Jefe inmediato', nombreJefeInmediato(emp)],
               ['Puesto', emp.puesto?.nombre],
+              ...(isAdmin ? [['Tel. empresa (WhatsApp)', emp.telefono_empresa_asignado || '—']] as [string, string | undefined | null][] : []),
               ['Estado', emp.estado],
               ['Fecha de ingreso (empresa)', emp.fecha_ingreso ? new Date(emp.fecha_ingreso).toLocaleDateString('es-MX') : undefined],
               ['Fecha de Baja', emp.fecha_baja ? new Date(emp.fecha_baja).toLocaleDateString('es-MX') : undefined],
@@ -2044,7 +2071,7 @@ export const PersonalPage = () => {
         });
 
         return (
-          <div style={modalOverlay} onClick={() => setShowDetalle(false)}>
+          <div style={modalOverlay}>
             <div style={{ ...modalLarge, maxWidth: '920px' }} onClick={e => e.stopPropagation()}>
 
               {/* Header: cierre arriba a la derecha; «Dar de Baja» abajo para no confundirlo con la X */}
@@ -2602,6 +2629,21 @@ export const PersonalPage = () => {
                             {activePuestos.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
                           </select>
                         </div>
+                        {isAdmin && (
+                        <div>
+                          <label style={labelStyle}>Teléfono asignado por la empresa (WhatsApp)</label>
+                          <input
+                            style={inputStyle}
+                            value={form.telefono_empresa_asignado}
+                            onChange={e => handleChange('telefono_empresa_asignado', e.target.value.replace(/\D/g, '').slice(0, 15))}
+                            placeholder="10 dígitos"
+                            maxLength={15}
+                          />
+                          <span style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 4, display: 'block' }}>
+                            Se usa en tickets de soporte (WhatsApp); si está vacío, se usa el teléfono personal del empleado.
+                          </span>
+                        </div>
+                        )}
                         <div>
                           <label style={labelStyle}>Horario de trabajo (Lun–Vie)</label>
                           <select style={inputStyle} value={form.horario_id ?? ''} onChange={e => handleChange('horario_id', e.target.value ? Number(e.target.value) : undefined)}>

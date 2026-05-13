@@ -1,4 +1,4 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, or_
 from typing import List, Optional, Union, Tuple, Dict, Any
 from datetime import datetime, timedelta, date, timezone
@@ -234,6 +234,49 @@ class AsistenciaService:
             }
 
     @staticmethod
+    def _resolver_empleado_para_checador(
+        db: Session,
+        numero_empleado: str,
+        *,
+        empleado_id: Optional[int] = None,
+        empresa_id: Optional[int] = None,
+    ) -> Optional[personal_models.Empleado]:
+        """
+        Identifica al empleado sin ambigüedad para colas de checador / enroll.
+        No usa pin_checador como identificador: un número de empleado puede coincidir con el PIN
+        de otra persona y sobrescribir huellas o asignar enroll al equivocado.
+        """
+        numero = (numero_empleado or "").strip()
+        if not numero:
+            return None
+        pm = personal_models
+        if empleado_id is not None:
+            emp = db.query(pm.Empleado).filter(pm.Empleado.id == int(empleado_id)).first()
+            if not emp:
+                raise ValueError(f"No existe empleado con id={empleado_id}.")
+            if (emp.numero_empleado or "").strip() != numero:
+                raise ValueError("El empleado_id no coincide con el número de empleado enviado.")
+            return emp
+        if empresa_id is not None:
+            return (
+                db.query(pm.Empleado)
+                .filter(
+                    pm.Empleado.empresa_id == int(empresa_id),
+                    pm.Empleado.numero_empleado == numero,
+                )
+                .first()
+            )
+        rows = db.query(pm.Empleado).filter(pm.Empleado.numero_empleado == numero).all()
+        if len(rows) == 0:
+            return None
+        if len(rows) > 1:
+            raise ValueError(
+                "Hay más de un empleado con ese número de empleado en distintas empresas. "
+                "Envía empleado_id o empresa_id en la solicitud para no mezclar usuarios."
+            )
+        return rows[0]
+
+    @staticmethod
     def enqueue_user(db: Session, device_id: int, data: schemas.EnqueueUserRequest) -> models.UsuarioPendienteDispositivo:
         """Agregar usuario a la cola para alta remota (agente local).
         Tambien crea el empleado en el sistema si no existe, para que sus checadas se registren."""
@@ -244,14 +287,12 @@ class AsistenciaService:
         numero = data.numero_empleado.strip()
         nombre_completo = data.nombre.strip()
 
-        # Buscar primero por pin_checador (único global), luego por numero_empleado como fallback
-        empleado = db.query(personal_models.Empleado).filter(
-            personal_models.Empleado.pin_checador == numero
-        ).first()
-        if not empleado:
-            empleado = db.query(personal_models.Empleado).filter(
-                personal_models.Empleado.numero_empleado == numero
-            ).first()
+        empleado = AsistenciaService._resolver_empleado_para_checador(
+            db,
+            numero,
+            empleado_id=data.empleado_id,
+            empresa_id=data.empresa_id,
+        )
 
         if not empleado:
             partes = nombre_completo.split(" ", 2)
@@ -292,7 +333,7 @@ class AsistenciaService:
 
         pendiente = models.UsuarioPendienteDispositivo(
             dispositivo_id=device_id,
-            numero_empleado=numero,
+            numero_empleado=(empleado.numero_empleado or numero).strip(),
             pin_checador=empleado.pin_checador if empleado else None,
             nombre=nombre_completo,
             enviado=False
@@ -351,18 +392,23 @@ class AsistenciaService:
         return updated
 
     @staticmethod
-    def start_enroll(db: Session, device_id: int, numero_empleado: str) -> models.PendingEnroll:
+    def start_enroll(
+        db: Session,
+        device_id: int,
+        numero_empleado: str,
+        *,
+        empleado_id: Optional[int] = None,
+        empresa_id: Optional[int] = None,
+    ) -> models.PendingEnroll:
         """Agregar usuario a la cola de registro de huella. Si no esta enviado, lo encola automaticamente."""
         dispositivo = db.query(models.Dispositivo).filter(models.Dispositivo.id == device_id).first()
         if not dispositivo:
             raise ValueError("Dispositivo no encontrado")
 
         numero = numero_empleado.strip()
-        from app.modules.personal import models as pm
-        # Buscar por pin_checador primero (único global), luego por numero_empleado
-        empleado = db.query(pm.Empleado).filter(pm.Empleado.pin_checador == numero).first()
-        if not empleado:
-            empleado = db.query(pm.Empleado).filter(pm.Empleado.numero_empleado == numero).first()
+        empleado = AsistenciaService._resolver_empleado_para_checador(
+            db, numero, empleado_id=empleado_id, empresa_id=empresa_id
+        )
         if not empleado:
             raise ValueError(f"Empleado {numero} no encontrado en el sistema")
 
@@ -382,15 +428,17 @@ class AsistenciaService:
             empleado.pin_checador = pin
             db.commit()
 
+        # Filtrar por pin_checador (único globalmente) para evitar confundir empleados
+        # de distintas empresas con el mismo numero_empleado.
         enviado = db.query(models.UsuarioPendienteDispositivo).filter(
             models.UsuarioPendienteDispositivo.dispositivo_id == device_id,
-            models.UsuarioPendienteDispositivo.numero_empleado == empleado.numero_empleado,
+            models.UsuarioPendienteDispositivo.pin_checador == pin,
             models.UsuarioPendienteDispositivo.enviado == True
         ).first()
         if not enviado:
             existe_en_cola = db.query(models.UsuarioPendienteDispositivo).filter(
                 models.UsuarioPendienteDispositivo.dispositivo_id == device_id,
-                models.UsuarioPendienteDispositivo.numero_empleado == empleado.numero_empleado,
+                models.UsuarioPendienteDispositivo.pin_checador == pin,
             ).first()
             if not existe_en_cola:
                 nombre = f"{empleado.nombre} {empleado.apellido_paterno or ''}".strip()
@@ -405,7 +453,7 @@ class AsistenciaService:
 
         existente = db.query(models.PendingEnroll).filter(
             models.PendingEnroll.dispositivo_id == device_id,
-            models.PendingEnroll.numero_empleado == empleado.numero_empleado,
+            models.PendingEnroll.pin_checador == pin,
             models.PendingEnroll.status == "pending"
         ).first()
         if existente:
@@ -415,7 +463,7 @@ class AsistenciaService:
 
         fallido = db.query(models.PendingEnroll).filter(
             models.PendingEnroll.dispositivo_id == device_id,
-            models.PendingEnroll.numero_empleado == empleado.numero_empleado,
+            models.PendingEnroll.pin_checador == pin,
             models.PendingEnroll.status == "failed"
         ).first()
         if fallido:
@@ -491,9 +539,14 @@ class AsistenciaService:
 
         emp_ids = {a.empleado_id for a in asistencias}
         empleados = {
-            e.id: e for e in db.query(personal_models.Empleado).filter(
-                personal_models.Empleado.id.in_(emp_ids)
-            ).all()
+            e.id: e
+            for e in db.query(personal_models.Empleado)
+            .options(
+                joinedload(personal_models.Empleado.empresa),
+                joinedload(personal_models.Empleado.departamento_rel),
+            )
+            .filter(personal_models.Empleado.id.in_(emp_ids))
+            .all()
         } if emp_ids else {}
 
         result = []
@@ -501,11 +554,19 @@ class AsistenciaService:
             emp = empleados.get(a.empleado_id)
             nombre = ""
             numero = ""
+            empresa_nombre: Optional[str] = None
+            departamento_nombre: Optional[str] = None
             if emp:
                 nombre = f"{emp.nombre} {emp.apellido_paterno or ''} {emp.apellido_materno or ''}".strip()
                 numero = emp.numero_empleado or ""
+                if emp.empresa is not None:
+                    empresa_nombre = emp.empresa.nombre
+                if emp.departamento_rel is not None:
+                    departamento_nombre = emp.departamento_rel.nombre
             a.empleado_nombre = nombre
             a.empleado_numero = numero
+            a.empresa_nombre = empresa_nombre
+            a.departamento_nombre = departamento_nombre
             result.append(a)
 
         return result
@@ -807,17 +868,24 @@ class AsistenciaService:
         horario = eh.horario
 
         if wd == 5:
-            if not empleado.horario_sabado_id:
-                return 0, "no_sabado"
-            horario_sab = (
-                db.query(models.Horario)
-                .filter(
-                    models.Horario.id == empleado.horario_sabado_id,
-                    models.Horario.activo == True,
+            # Empleado trabaja sábado si:
+            #   - Tiene empleado.horario_sabado_id (legacy), o
+            #   - Su horario L-V tiene hora_salida_sabado definida (modal actual).
+            trabaja_sabado = False
+            if empleado.horario_sabado_id:
+                horario_sab = (
+                    db.query(models.Horario)
+                    .filter(
+                        models.Horario.id == empleado.horario_sabado_id,
+                        models.Horario.activo == True,
+                    )
+                    .first()
                 )
-                .first()
-            )
-            if not horario_sab:
+                if horario_sab:
+                    trabaja_sabado = True
+            if not trabaja_sabado and getattr(horario, "hora_salida_sabado", None):
+                trabaja_sabado = True
+            if not trabaja_sabado:
                 return 0, "no_sabado"
             return 2, "sabado"
 
@@ -899,7 +967,11 @@ class AsistenciaService:
             .first()
         )
         if sol:
-            estado_txt = "aprobada por RH" if sol.estado == EstadoSolicitud.APROBADA else "aprobada por jefe (pendiente RH)"
+            estado_txt = (
+                "registro formal RH"
+                if sol.estado == EstadoSolicitud.APROBADA
+                else "aprobada por jefe (saldo descontado)"
+            )
             return _base(
                 0,
                 "vacacion_solicitud",
@@ -1184,18 +1256,26 @@ class AsistenciaService:
 
             # ── Sábado (dia_num == 6): lógica especial ──
             if dia_num == 6:
-                # Si el empleado no tiene horario sabatino asignado → no labora → sin incidencia
-                if not empleado or not empleado.horario_sabado_id:
+                # Determinar si el empleado labora sábado y cuál es su salida efectiva.
+                # Prioridad:
+                #   1. empleado.horario_sabado_id → horario separado (legacy).
+                #   2. horario.hora_salida_sabado → columna del mismo horario L-V
+                #      (es como lo guarda el modal actual de crear/editar horario).
+                # Si ninguno define horario sabatino, el empleado NO labora sábados.
+                hora_salida_efectiva = None
+                tolerancia_efectiva = horario.tolerancia_minutos or 0
+                if empleado and empleado.horario_sabado_id:
+                    horario_sab = db.query(models.Horario).filter(
+                        models.Horario.id == empleado.horario_sabado_id,
+                        models.Horario.activo == True,
+                    ).first()
+                    if horario_sab:
+                        hora_salida_efectiva = horario_sab.hora_salida_sabado or horario_sab.hora_salida
+                        tolerancia_efectiva = horario_sab.tolerancia_minutos or 0
+                if hora_salida_efectiva is None and getattr(horario, "hora_salida_sabado", None):
+                    hora_salida_efectiva = horario.hora_salida_sabado
+                if hora_salida_efectiva is None:
                     continue
-                # Cargar el horario sabatino
-                horario_sab = db.query(models.Horario).filter(
-                    models.Horario.id == empleado.horario_sabado_id,
-                    models.Horario.activo == True,
-                ).first()
-                if not horario_sab:
-                    continue
-                hora_salida_efectiva = horario_sab.hora_salida
-                tolerancia_efectiva = horario_sab.tolerancia_minutos or 0
             elif dia_num == 7:
                 # Domingo: solo aplica para empresas configuradas como lun-dom.
                 if dias_laborales_empresa != "lun-dom":

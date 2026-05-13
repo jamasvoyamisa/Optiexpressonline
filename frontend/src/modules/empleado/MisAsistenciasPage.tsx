@@ -1,8 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import { Navigate } from 'react-router-dom';
 import { parseTimestampForMexico, toMexicoDateString } from '../../utils/date';
 import api from '../../services/api';
 import { useIsMobile } from '../../hooks/useIsMobile';
-import type { AsistenciaResponse } from '../../types/api';
+import { useAuth } from '../../hooks/useAuth';
+import type { AsistenciaResponse, DiaContextoLaboral } from '../../types/api';
 
 /** Quincena actual: 1–15 = quincena 1, 16–fin = quincena 2 */
 function getQuincenaActual(): { year: number; month: number; num: 1 | 2 } {
@@ -43,6 +45,46 @@ type DayRow = {
   regresoComerTs?: number;
   esTiempoExtra: boolean;
 };
+
+type DayRowConContexto = DayRow & { contexto?: DiaContextoLaboral };
+
+function diasEnQuincena(year: number, month: number, num: 1 | 2): string[] {
+  const last = num === 1 ? 15 : new Date(year, month + 1, 0).getDate();
+  const start = num === 1 ? 1 : 16;
+  const m = month + 1;
+  const out: string[] = [];
+  for (let d = start; d <= last; d++) {
+    out.push(`${year}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`);
+  }
+  return out;
+}
+
+function mergeDayRowsWithContexto(
+  q: { year: number; month: number; num: 1 | 2 },
+  checadas: AsistenciaResponse[],
+  contexto: DiaContextoLaboral[],
+): DayRowConContexto[] {
+  const byChecada = buildDayRows(checadas);
+  const mapBy = new Map(byChecada.map((r) => [r.fechaSort, r]));
+  const ctxMap = new Map(contexto.map((c) => [c.fecha.slice(0, 10), c]));
+  const dias = diasEnQuincena(q.year, q.month, q.num).sort().reverse();
+  return dias.map((fechaSort) => {
+    const base = mapBy.get(fechaSort);
+    const ctx = ctxMap.get(fechaSort);
+    if (base) {
+      return { ...base, contexto: ctx };
+    }
+    const d = new Date(`${fechaSort}T12:00:00`);
+    const fechaStr = d.toLocaleDateString('es-MX', { weekday: 'short', day: '2-digit', month: 'short', timeZone: 'America/Mexico_City' });
+    return {
+      key: fechaSort,
+      fecha: fechaStr.charAt(0).toUpperCase() + fechaStr.slice(1),
+      fechaSort,
+      esTiempoExtra: false,
+      contexto: ctx,
+    };
+  });
+}
 
 const th = { padding: '11px 13px', textAlign: 'left' as const, borderBottom: '2px solid #dee2e6', fontSize: '0.82rem', fontWeight: 600, color: '#555', backgroundColor: '#f8f9fa' };
 const td = { padding: '10px 13px', borderBottom: '1px solid #f0f0f0', fontSize: '0.9rem' };
@@ -89,8 +131,13 @@ function calcTotal(row: DayRow): string {
 }
 
 export const MisAsistenciasPage = () => {
+  const { authMe } = useAuth();
   const isMobile = useIsMobile();
+  if (authMe?.exento_incidencias) {
+    return <Navigate to="/" replace />;
+  }
   const [checadas, setChecadas] = useState<AsistenciaResponse[]>([]);
+  const [contextoDias, setContextoDias] = useState<DiaContextoLaboral[]>([]);
   const [loading, setLoading] = useState(true);
   const [quincena, setQuincena] = useState<{ year: number; month: number; num: 1 | 2 }>(() => getQuincenaActual());
 
@@ -101,15 +148,30 @@ export const MisAsistenciasPage = () => {
     params.set('limit', '500');
     params.set('fecha_inicio', inicio);
     params.set('fecha_fin', fin);
-    api.get<AsistenciaResponse[]>(`/asistencia/mis-checadas?${params}`)
-      .then((res) => setChecadas(Array.isArray(res.data) ? res.data : []))
-      .catch(() => setChecadas([]))
+    const pCtx = new URLSearchParams();
+    pCtx.set('fecha_inicio', inicio.slice(0, 10));
+    pCtx.set('fecha_fin', fin.slice(0, 10));
+    Promise.all([
+      api.get<AsistenciaResponse[]>(`/asistencia/mis-checadas?${params}`),
+      api.get<DiaContextoLaboral[]>(`/asistencia/mis-contexto-dias?${pCtx}`),
+    ])
+      .then(([checRes, ctxRes]) => {
+        setChecadas(Array.isArray(checRes.data) ? checRes.data : []);
+        setContextoDias(Array.isArray(ctxRes.data) ? ctxRes.data : []);
+      })
+      .catch(() => {
+        setChecadas([]);
+        setContextoDias([]);
+      })
       .finally(() => setLoading(false));
   };
 
   useEffect(() => { load(); }, [quincena.year, quincena.month, quincena.num]);
 
-  const dayRows = buildDayRows(checadas);
+  const dayRows = useMemo(
+    () => mergeDayRowsWithContexto(quincena, checadas, contextoDias),
+    [quincena, checadas, contextoDias],
+  );
 
   const navBtn: React.CSSProperties = {
     padding: isMobile ? '10px 18px' : '8px 14px',
@@ -118,12 +180,12 @@ export const MisAsistenciasPage = () => {
   };
 
   return (
-    <div style={{ padding: isMobile ? '16px' : '24px' }}>
-      <h1 style={{ marginBottom: '16px', fontSize: isMobile ? '1.3rem' : '1.6rem' }}>Mis asistencias</h1>
+    <div style={{ padding: isMobile ? '14px 14px 30px' : '24px' }}>
+      <h1 style={{ marginBottom: '14px', fontSize: isMobile ? '1.2rem' : '1.6rem' }}>Mis asistencias</h1>
 
       {/* Navegación de quincena */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px', marginBottom: '20px' }}>
-        <button type="button" style={navBtn} onClick={() => {
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
+        <button type="button" style={{ ...navBtn, padding: isMobile ? '10px 16px' : '8px 14px' }} onClick={() => {
           if (quincena.num === 1) {
             const pm = quincena.month - 1;
             setQuincena({ year: pm < 0 ? quincena.year - 1 : quincena.year, month: pm < 0 ? 11 : pm, num: 2 });
@@ -131,10 +193,10 @@ export const MisAsistenciasPage = () => {
             setQuincena({ ...quincena, num: 1 });
           }
         }}>←</button>
-        <span style={{ fontSize: isMobile ? '0.95rem' : '1.1rem', fontWeight: 700, color: '#1f2937', minWidth: isMobile ? '0' : '280px', textAlign: 'center', flex: isMobile ? 1 : undefined }}>
+        <span style={{ fontSize: isMobile ? '0.85rem' : '1.1rem', fontWeight: 700, color: '#1f2937', flex: 1, textAlign: 'center' }}>
           {formatQuincenaLabel(quincena.year, quincena.month, quincena.num)}
         </span>
-        <button type="button" style={navBtn} onClick={() => {
+        <button type="button" style={{ ...navBtn, padding: isMobile ? '10px 16px' : '8px 14px' }} onClick={() => {
           if (quincena.num === 2) {
             const nm = quincena.month + 1;
             setQuincena({ year: nm > 11 ? quincena.year + 1 : quincena.year, month: nm > 11 ? 0 : nm, num: 1 });
@@ -144,47 +206,50 @@ export const MisAsistenciasPage = () => {
         }}>→</button>
       </div>
 
-      {loading && checadas.length === 0 ? (
+      {loading ? (
         <p style={{ color: '#666' }}>Cargando asistencias...</p>
-      ) : dayRows.length === 0 ? (
-        <p style={{ color: '#666', padding: '24px', backgroundColor: '#f8f9fa', borderRadius: '8px' }}>
-          No hay checadas en {formatQuincenaLabel(quincena.year, quincena.month, quincena.num)}.
-        </p>
       ) : isMobile ? (
         /* ── Vista móvil: tarjetas ── */
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           {dayRows.map((row) => (
             <div key={row.key} style={{
               backgroundColor: row.esTiempoExtra ? '#fff8e1' : 'white',
-              borderRadius: '10px', padding: '14px 16px',
-              boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
-              border: '1px solid ' + (row.esTiempoExtra ? '#ffe082' : '#e5e7eb'),
+              borderRadius: 14, padding: '12px 14px',
+              boxShadow: '0 1px 4px rgba(0,0,0,0.07)',
+              border: `1.5px solid ${row.esTiempoExtra ? '#ffe082' : (!row.entrada && !row.salida ? '#f1f5f9' : '#e5e7eb')}`,
             }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                <span style={{ fontWeight: 700, color: '#1e3a5f', fontSize: '0.95rem' }}>{row.fecha}</span>
-                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                  {row.esTiempoExtra && (
-                    <span style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '0.7rem', fontWeight: 600, backgroundColor: '#ff9800', color: 'white' }}>T.EXTRA</span>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+                <div>
+                  <span style={{ fontWeight: 700, color: '#1e3a5f', fontSize: '0.92rem' }}>{row.fecha}</span>
+                  {row.contexto && (
+                    <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: 3, lineHeight: 1.3 }}>
+                      {row.contexto.etiqueta}
+                    </div>
                   )}
-                  <span style={{ fontWeight: 700, color: '#374151', fontSize: '0.9rem' }}>{calcTotal(row)}</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                  {row.esTiempoExtra && (
+                    <span style={{ padding: '2px 7px', borderRadius: 4, fontSize: '0.65rem', fontWeight: 700, backgroundColor: '#ff9800', color: '#fff' }}>T.EXTRA</span>
+                  )}
+                  <span style={{ fontWeight: 800, color: row.entrada && row.salida ? '#0ea5e9' : '#9ca3af', fontSize: '1rem' }}>{calcTotal(row)}</span>
                 </div>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 5 }}>
                 {[
-                  { label: 'Entrada', val: row.entrada, color: '#155724', bg: '#e8f5e9' },
-                  { label: 'Sal. comer', val: row.salida_comer, color: '#856404', bg: '#fff8e1' },
-                  { label: 'Reg. comer', val: row.regreso_comer, color: '#004085', bg: '#e3f2fd' },
-                  { label: 'Salida', val: row.salida, color: '#721c24', bg: '#fce4ec' },
+                  { label: '↓ Entrada', val: row.entrada, color: '#155724', bg: '#e8f5e9' },
+                  { label: '🍽 Sal.', val: row.salida_comer, color: '#856404', bg: '#fff8e1' },
+                  { label: '🔙 Reg.', val: row.regreso_comer, color: '#004085', bg: '#e3f2fd' },
+                  { label: '↑ Salida', val: row.salida, color: '#721c24', bg: '#fce4ec' },
                 ].map(({ label, val, color, bg }) => (
-                  <div key={label} style={{ backgroundColor: bg, borderRadius: '6px', padding: '8px 10px' }}>
-                    <div style={{ fontSize: '0.7rem', color: '#888', marginBottom: '2px' }}>{label}</div>
-                    <div style={{ fontWeight: 700, fontSize: '0.95rem', color: val ? color : '#ccc' }}>{val || '--:--'}</div>
+                  <div key={label} style={{ backgroundColor: bg, borderRadius: 8, padding: '5px 4px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '0.58rem', color: '#888', marginBottom: 2 }}>{label}</div>
+                    <div style={{ fontWeight: 700, fontSize: '0.8rem', color: val ? color : '#d1d5db' }}>{val || '--:--'}</div>
                   </div>
                 ))}
               </div>
             </div>
           ))}
-          <p style={{ marginTop: '4px', color: '#888', fontSize: '0.82rem', textAlign: 'center' }}>
+          <p style={{ marginTop: 4, color: '#888', fontSize: '0.82rem', textAlign: 'center' }}>
             {dayRows.length} día{dayRows.length !== 1 ? 's' : ''} · {checadas.length} checada{checadas.length !== 1 ? 's' : ''}
           </p>
         </div>
@@ -195,6 +260,7 @@ export const MisAsistenciasPage = () => {
             <thead>
               <tr>
                 <th style={th}>Fecha</th>
+                <th style={{ ...th, minWidth: 200 }}>Tipo de día</th>
                 <th style={{ ...th, textAlign: 'center', color: '#155724', backgroundColor: '#e8f5e9' }}>Entrada</th>
                 <th style={{ ...th, textAlign: 'center', color: '#856404', backgroundColor: '#fff8e1' }}>Salida comer</th>
                 <th style={{ ...th, textAlign: 'center', color: '#004085', backgroundColor: '#e3f2fd' }}>Regreso comer</th>
@@ -212,6 +278,9 @@ export const MisAsistenciasPage = () => {
                     {row.esTiempoExtra && (
                       <span style={{ marginLeft: '8px', padding: '2px 8px', borderRadius: '4px', fontSize: '0.72rem', fontWeight: 600, backgroundColor: '#ff9800', color: 'white' }}>T. EXTRA</span>
                     )}
+                  </td>
+                  <td style={{ ...td, fontSize: '0.85rem', color: '#334155', lineHeight: 1.35, verticalAlign: 'top' }}>
+                    {row.contexto?.etiqueta ?? '—'}
                   </td>
                   <td style={{ ...td, textAlign: 'center', fontWeight: 600, color: row.entrada ? '#155724' : '#ccc' }}>{row.entrada || '--:--'}</td>
                   <td style={{ ...td, textAlign: 'center', fontWeight: 600, color: row.salida_comer ? '#856404' : '#ccc' }}>{row.salida_comer || '--:--'}</td>

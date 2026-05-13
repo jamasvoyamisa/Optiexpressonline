@@ -8,12 +8,15 @@ from sqlalchemy.orm import Session, joinedload
 
 from . import models, schemas
 from app.modules.personal import models as pm
+from app.modules.vacaciones.service import _anios_antiguedad
+from app.core.timezone_utils import hoy_mexico
 
 logger = logging.getLogger(__name__)
 
 # Política estándar (empleados y RH sin excepción): solicitud desde la app / RH.
 PRESTAMO_MONTO_MAX_ESTANDAR = Decimal("6000.00")
 PRESTAMO_PLAZO_MAX_QUINCENAS = 8
+PRESTAMO_ANTIGUEDAD_MINIMA_ANIOS = 1
 
 
 ESTADOS_PRESTAMO_ACTIVO = (
@@ -53,6 +56,15 @@ def _validar_limites_prestamo(monto: Decimal, plazo_quincenas: int, permitir_exc
         raise ValueError(
             f"El plazo máximo es {PRESTAMO_PLAZO_MAX_QUINCENAS} quincenas. "
             "Para plazos mayores, use una excepción autorizada (Gerente General, Director o Administrador) en el módulo RH."
+        )
+
+
+def _validar_antiguedad_minima_prestamo(emp: pm.Empleado) -> None:
+    """Regla de negocio: el empleado debe tener al menos 1 año completo de antigüedad."""
+    anios = _anios_antiguedad(getattr(emp, "fecha_ingreso", None), hoy_mexico())
+    if anios < PRESTAMO_ANTIGUEDAD_MINIMA_ANIOS:
+        raise ValueError(
+            "No puedes solicitar préstamos hasta cumplir al menos 1 año en la empresa."
         )
 
 
@@ -260,6 +272,12 @@ def crear_solicitud(
     data: schemas.SolicitudPrestamoCreate,
     empleado_id: int,
 ) -> models.SolicitudPrestamo:
+    emp = db.query(pm.Empleado).filter(pm.Empleado.id == empleado_id).first()
+    if not emp:
+        raise ValueError("Empleado no encontrado")
+    if getattr(emp, "exento_incidencias", False):
+        raise ValueError("Los usuarios especiales no pueden solicitar préstamos.")
+    _validar_antiguedad_minima_prestamo(emp)
     _validar_limites_prestamo(data.monto, data.plazo_meses, permitir_excepcion=False)
     if _empleado_tiene_prestamo_activo(db, empleado_id):
         raise ValueError(
@@ -300,6 +318,10 @@ def crear_solicitud_rh(
     data: schemas.SolicitudPrestamoCreateRH,
     permitir_excepcion: bool = False,
 ) -> models.SolicitudPrestamo:
+    emp = db.query(pm.Empleado).filter(pm.Empleado.id == data.empleado_id).first()
+    if not emp:
+        raise ValueError("Empleado no encontrado")
+    _validar_antiguedad_minima_prestamo(emp)
     _validar_limites_prestamo(data.monto, data.plazo_meses, permitir_excepcion=permitir_excepcion)
     if _empleado_tiene_prestamo_activo(db, data.empleado_id):
         raise ValueError(

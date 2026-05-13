@@ -1,5 +1,5 @@
 from typing import Optional
-from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Enum, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Boolean, ForeignKey, DateTime, Enum, UniqueConstraint, Numeric
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import enum
@@ -16,9 +16,18 @@ class Empresa(Base):
     __tablename__ = "empresas"
 
     id = Column(Integer, primary_key=True, index=True)
-    nombre = Column(String(200), nullable=False)
+    nombre = Column(String(200), nullable=False)  # Denominación / razón social
     rfc = Column(String(13), nullable=True)
-    direccion = Column(String(500), nullable=True)
+    direccion = Column(String(500), nullable=True)  # Legado; preferir domicilio + campos fiscales
+    capital_social = Column(Numeric(20, 2), nullable=True)
+    codigo_postal = Column(String(5), nullable=True)
+    domicilio = Column(String(200), nullable=True)  # Calle / vía pública
+    numero_exterior = Column(String(30), nullable=True)
+    numero_interior = Column(String(30), nullable=True)
+    colonia = Column(String(150), nullable=True)
+    municipio = Column(String(150), nullable=True)
+    estado = Column(String(100), nullable=True)
+    regimen_fiscal = Column(String(3), nullable=True)  # c_RegimenFiscal SAT
     telefono = Column(String(20), nullable=True)
     activo = Column(Boolean, default=True)
     checadas_remotas = Column(Boolean, default=False)  # Si True, empleados pueden checar por portal web
@@ -28,6 +37,7 @@ class Empresa(Base):
     dias_laborales = Column(String(20), nullable=False, default="lun-sab")
     # Si True, la empresa labora en días festivos del calendario global.
     trabaja_festivos = Column(Boolean, nullable=False, default=False)
+    siglas = Column(String(20), nullable=True)
     rango_inicio = Column(Integer, nullable=True)
     rango_fin = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
@@ -64,6 +74,14 @@ class Departamento(Base):
     jefe = relationship("Empleado", foreign_keys=[jefe_id], backref="departamento_a_cargo")
     empleados = relationship("Empleado", back_populates="departamento_rel", foreign_keys="Empleado.departamento_id")
 
+    @property
+    def jefe_nombre(self) -> Optional[str]:
+        """Nombre del gerente/jefe del departamento (incluye usuarios especiales)."""
+        if self.jefe:
+            j = self.jefe
+            return f"{j.nombre} {j.apellido_paterno or ''} {j.apellido_materno or ''}".strip()
+        return None
+
 
 class Puesto(Base):
     """Catálogo de puestos por empresa y departamento. empresa_id/departamento_id null = puesto global (Director, Gerente General, RH)."""
@@ -99,6 +117,8 @@ class Empleado(Base):
     apellido_materno = Column(String(100))
     email = Column(String(255), unique=True, index=True)
     telefono = Column(String(20))
+    # Línea o móvil que la empresa asigna al colaborador (p. ej. para WhatsApp en tickets de soporte).
+    telefono_empresa_asignado = Column(String(20), nullable=True)
     username = Column(String(100), unique=True, nullable=True, index=True)
     password_hash = Column(String(255), nullable=True)
 
@@ -127,6 +147,15 @@ class Empleado(Base):
     exento_incidencias = Column(Boolean, default=False, nullable=False)
     # Permiso para checar desde el portal web remoto (solo el admin lo puede otorgar)
     puede_checar_remoto = Column(Boolean, default=False, nullable=False)
+    # Días LFT adeudados por vacaciones generales aplicadas antes de tener periodo vigente;
+    # al generarse el primer periodo se descuentan automáticamente vía liquidación.
+    dias_deuda_vacaciones_ley = Column(Numeric(10, 2), nullable=False, default=0)
+    # Bolsa única de días fuera de la tabla LFT (ej. saldo heredado al adoptar el sistema).
+    # No la recalcula ensure_periodos; se consume al aprobar RH (después de periodos LFT) y en vacaciones generales.
+    dias_saldo_migracion_vacaciones = Column(Numeric(10, 2), nullable=False, default=0)
+    # Token de sesión activa: al iniciar sesión se genera un UUID; si el token del JWT no coincide → 401.
+    # Garantiza sesión única por usuario (el último login invalida el anterior).
+    session_id = Column(String(64), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
@@ -137,6 +166,11 @@ class Empleado(Base):
     rol = relationship("Rol", back_populates="empleados")
     jefe = relationship("Empleado", remote_side=[id], foreign_keys=[jefe_id], backref="subordinados")
     horario_sabado = relationship("Horario", foreign_keys=[horario_sabado_id])
+    supervision_empresas_rel = relationship(
+        "EmpleadoSupervisionEmpresa",
+        back_populates="empleado",
+        cascade="all, delete-orphan",
+    )
 
     @property
     def horario_id(self) -> Optional[int]:
@@ -153,3 +187,19 @@ class Empleado(Base):
     @property
     def puesto(self):
         return self.puesto_rel
+
+    @property
+    def empresas_supervisadas_ids(self):
+        """Empresas donde este director tiene alcance (además de su empresa de registro)."""
+        return [r.empresa_id for r in (self.supervision_empresas_rel or [])]
+
+
+class EmpleadoSupervisionEmpresa(Base):
+    """Alcance multi-empresa para puesto Director (un mismo director puede supervisar varias razones sociales)."""
+    __tablename__ = "empleado_supervision_empresas"
+
+    empleado_id = Column(Integer, ForeignKey("empleados.id", ondelete="CASCADE"), primary_key=True)
+    empresa_id = Column(Integer, ForeignKey("empresas.id", ondelete="CASCADE"), primary_key=True)
+
+    empleado = relationship("Empleado", back_populates="supervision_empresas_rel")
+    empresa = relationship("Empresa")

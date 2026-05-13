@@ -188,13 +188,38 @@ def enqueue_replicate(
     if not dispositivo:
         raise HTTPException(status_code=404, detail="Dispositivo no encontrado")
 
+    # Verificar que el EMPLEADO destino tenga huella, no cualquier empleado con el mismo numero.
+    # Resolver al empleado destino vía usuarios_pendientes_dispositivo (pin_checador único).
+    upd = db.query(models.UsuarioPendienteDispositivo).filter(
+        models.UsuarioPendienteDispositivo.dispositivo_id == device_id,
+        models.UsuarioPendienteDispositivo.numero_empleado == numero,
+    ).order_by(models.UsuarioPendienteDispositivo.id.desc()).first()
+    emp = None
+    if upd and upd.pin_checador:
+        emp = db.query(personal_models.Empleado).filter(
+            personal_models.Empleado.pin_checador == upd.pin_checador
+        ).first()
+    if not emp:
+        candidatos = db.query(personal_models.Empleado).filter(
+            personal_models.Empleado.numero_empleado == numero
+        ).all()
+        if len(candidatos) == 1:
+            emp = candidatos[0]
+
+    if emp is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No se pudo resolver al empleado {numero} para este dispositivo. "
+                   "Asegúrate de haberlo enviado primero al checador."
+        )
+
     tiene_template = db.query(models.FingerprintTemplate).filter(
-        models.FingerprintTemplate.numero_empleado == numero
+        models.FingerprintTemplate.empleado_id == int(emp.id)
     ).first()
     if not tiene_template:
         raise HTTPException(
             status_code=400,
-            detail=f"El empleado {numero} no tiene huellas almacenadas en el sistema. "
+            detail=f"El empleado {numero} ({emp.nombre}) no tiene huellas almacenadas en el sistema. "
                    "Primero realiza un enroll en algún dispositivo."
         )
 
@@ -233,13 +258,32 @@ def get_pending_replicate_for_device(device_id: int, db: Session = Depends(get_d
 def get_templates_for_employee(
     numero_empleado: str,
     empleado_id: Optional[int] = Query(None),
+    pin_checador: Optional[str] = Query(None, description="Si se provee, resuelve al empleado único por pin_checador (preferido por agentes)"),
     db: Session = Depends(get_db),
 ):
-    """Ver si un empleado tiene templates de huella almacenados, con nombre del dispositivo origen"""
+    """Ver si un empleado tiene templates de huella almacenados, con nombre del dispositivo origen.
+
+    Cuando hay numero_empleado duplicado entre empresas, los agentes deben enviar
+    pin_checador (único globalmente) para evitar mezclar plantillas.
+    """
+    from app.modules.personal import models as pm
+
     q = db.query(models.FingerprintTemplate)
     if empleado_id is not None:
         q = q.filter(models.FingerprintTemplate.empleado_id == int(empleado_id))
+    elif pin_checador:
+        emp = db.query(pm.Empleado).filter(pm.Empleado.pin_checador == pin_checador.strip()).first()
+        if not emp:
+            return []
+        q = q.filter(models.FingerprintTemplate.empleado_id == int(emp.id))
     else:
+        # Sin discriminador: si numero_empleado está duplicado entre empresas, devolver vacío
+        # para que un agente viejo no asuma que ya tiene huella (y no se salte un upload válido).
+        candidatos = db.query(pm.Empleado).filter(
+            pm.Empleado.numero_empleado == numero_empleado.strip()
+        ).count()
+        if candidatos > 1:
+            return []
         q = q.filter(models.FingerprintTemplate.numero_empleado == numero_empleado.strip())
     templates = q.all()
     # Cargar nombres de dispositivos
@@ -678,7 +722,11 @@ def agent_get_pending_replicate(
     db: Session = Depends(get_db),
 ):
     """Replicaciones de huella pendientes para este dispositivo.
-    Retorna la lista con template_data incluido para que el agente los suba directamente."""
+    Retorna la lista con template_data incluido para que el agente los suba directamente.
+
+    Resuelve el empleado destino por pin_checador (único globalmente) para evitar mezclar
+    plantillas entre empresas cuando numero_empleado está duplicado.
+    """
     pending = db.query(models.PendingReplicate).filter(
         models.PendingReplicate.dispositivo_id == dispositivo.id,
         models.PendingReplicate.procesado == False,
@@ -686,16 +734,36 @@ def agent_get_pending_replicate(
 
     result = []
     for pr in pending:
+        # Resolver el empleado destino: primero por usuarios_pendientes_dispositivo (más confiable),
+        # luego por numero_empleado solo si es único.
+        upd = db.query(models.UsuarioPendienteDispositivo).filter(
+            models.UsuarioPendienteDispositivo.dispositivo_id == dispositivo.id,
+            models.UsuarioPendienteDispositivo.numero_empleado == pr.numero_empleado,
+        ).order_by(models.UsuarioPendienteDispositivo.id.desc()).first()
+
+        emp = None
+        if upd and upd.pin_checador:
+            emp = db.query(personal_models.Empleado).filter(
+                personal_models.Empleado.pin_checador == upd.pin_checador
+            ).first()
+        if not emp:
+            candidatos = db.query(personal_models.Empleado).filter(
+                personal_models.Empleado.numero_empleado == pr.numero_empleado
+            ).all()
+            if len(candidatos) == 1:
+                emp = candidatos[0]
+        if not emp:
+            # No podemos resolver con seguridad: omitimos para no replicar la huella equivocada.
+            continue
+
         templates = db.query(models.FingerprintTemplate).filter(
-            models.FingerprintTemplate.numero_empleado == pr.numero_empleado,
+            models.FingerprintTemplate.empleado_id == int(emp.id),
         ).all()
         if not templates:
             continue
-        emp = db.query(personal_models.Empleado).filter(
-            personal_models.Empleado.numero_empleado == pr.numero_empleado
-        ).first()
-        pin = str(emp.pin_checador).strip() if (emp and emp.pin_checador) else pr.numero_empleado
-        nombre = f"{emp.nombre or ''} {emp.apellido_paterno or ''}".strip() if emp else pr.numero_empleado
+
+        pin = str(emp.pin_checador).strip() if emp.pin_checador else pr.numero_empleado
+        nombre = f"{emp.nombre or ''} {emp.apellido_paterno or ''}".strip() or pr.numero_empleado
 
         for tpl in templates:
             result.append({
@@ -736,32 +804,48 @@ def agent_get_pending_templates(
     dispositivo: models.Dispositivo = Depends(_get_device_from_api_key),
     db: Session = Depends(get_db)
 ):
-    """Usuarios ya enviados a este dispositivo con template de otro dispositivo (sin cola de replicación)."""
+    """Usuarios ya enviados a este dispositivo con template de otro dispositivo (sin cola de replicación).
+
+    Resuelve el empleado por pin_checador (único globalmente) para evitar mezclar plantillas
+    entre empresas cuando hay numero_empleado duplicado.
+    """
+    from app.modules.personal import models as pm
+
     sent_users = db.query(models.UsuarioPendienteDispositivo).filter(
         models.UsuarioPendienteDispositivo.dispositivo_id == dispositivo.id,
         models.UsuarioPendienteDispositivo.enviado == True,
     ).all()
-    numero_to_user_id = {
-        (u.numero_empleado or "").strip(): (u.pin_checador or u.numero_empleado or "").strip()
-        for u in sent_users
-    }
-    numeros = list(numero_to_user_id.keys())
-    if not numeros:
+    if not sent_users:
         return []
+
+    pins = [(u.pin_checador or "").strip() for u in sent_users if (u.pin_checador or "").strip()]
+    if not pins:
+        return []
+
+    empleados = db.query(pm.Empleado).filter(pm.Empleado.pin_checador.in_(pins)).all()
+    pin_to_emp = {(e.pin_checador or "").strip(): e for e in empleados if e.pin_checador}
+    if not pin_to_emp:
+        return []
+
+    empleado_ids = [int(e.id) for e in pin_to_emp.values()]
     templates = db.query(models.FingerprintTemplate).filter(
-        models.FingerprintTemplate.numero_empleado.in_(numeros),
+        models.FingerprintTemplate.empleado_id.in_(empleado_ids),
         models.FingerprintTemplate.source_device_id != dispositivo.id,
     ).all()
+
+    emp_id_to_pin = {int(e.id): (e.pin_checador or "").strip() for e in pin_to_emp.values()}
+
     return [
         {
             "numero_empleado": t.numero_empleado,
-            "user_id": numero_to_user_id.get((t.numero_empleado or "").strip()) or t.numero_empleado,
+            "user_id": emp_id_to_pin.get(int(t.empleado_id), t.numero_empleado) if t.empleado_id else t.numero_empleado,
             "finger_index": t.finger_index,
             "template_data": t.template_data,
             "create_user_first": False,
             "pending_replicate": False,
         }
         for t in templates
+        if t.empleado_id and int(t.empleado_id) in emp_id_to_pin
     ]
 
 
@@ -770,18 +854,38 @@ def agent_get_pending_deletes(
     dispositivo: models.Dispositivo = Depends(_get_device_from_api_key),
     db: Session = Depends(get_db)
 ):
-    """Obtiene usuarios pendientes de eliminar. Incluye pin_checador para que el agente elimine por ID del dispositivo."""
+    """Obtiene usuarios pendientes de eliminar. Incluye pin_checador para que el agente elimine por ID del dispositivo.
+
+    Resuelve el pin desde usuarios_pendientes_dispositivo (única correspondencia por dispositivo)
+    para evitar borrar al usuario equivocado cuando numero_empleado está duplicado entre empresas.
+    """
     pending = db.query(models.PendingDelete).filter(
         models.PendingDelete.dispositivo_id == dispositivo.id,
         models.PendingDelete.procesado == False,
     ).all()
     result = []
     for p in pending:
-        emp = db.query(personal_models.Empleado).filter(
-            personal_models.Empleado.numero_empleado == p.numero_empleado
-        ).first()
-        pin = emp.pin_checador if emp else p.numero_empleado
-        result.append({"id": p.id, "numero_empleado": p.numero_empleado, "pin_checador": pin or p.numero_empleado})
+        pin = None
+        upd = db.query(models.UsuarioPendienteDispositivo).filter(
+            models.UsuarioPendienteDispositivo.dispositivo_id == dispositivo.id,
+            models.UsuarioPendienteDispositivo.numero_empleado == p.numero_empleado,
+        ).order_by(models.UsuarioPendienteDispositivo.id.desc()).first()
+        if upd and upd.pin_checador:
+            pin = str(upd.pin_checador).strip()
+        else:
+            candidatos = db.query(personal_models.Empleado).filter(
+                personal_models.Empleado.numero_empleado == p.numero_empleado
+            ).all()
+            if len(candidatos) == 1 and candidatos[0].pin_checador:
+                pin = str(candidatos[0].pin_checador).strip()
+            elif len(candidatos) > 1:
+                # No podemos resolver con seguridad: omitimos para no borrar el usuario equivocado.
+                continue
+        result.append({
+            "id": p.id,
+            "numero_empleado": p.numero_empleado,
+            "pin_checador": pin or p.numero_empleado,
+        })
     return result
 
 
@@ -1087,12 +1191,15 @@ def cleanup_employees(
     for emp in all_emps:
         if emp.numero_empleado not in keep_numeros:
             db.query(models.Asistencia).filter(models.Asistencia.empleado_id == emp.id).delete()
-            db.query(models.UsuarioPendienteDispositivo).filter(
-                models.UsuarioPendienteDispositivo.numero_empleado == emp.numero_empleado
-            ).delete()
-            db.query(models.PendingEnroll).filter(
-                models.PendingEnroll.numero_empleado == emp.numero_empleado
-            ).delete()
+            # Filtrar por pin_checador del empleado para no afectar a otro empleado con el mismo
+            # numero_empleado en otra empresa.
+            upd_filter = [models.UsuarioPendienteDispositivo.numero_empleado == emp.numero_empleado]
+            pe_filter = [models.PendingEnroll.numero_empleado == emp.numero_empleado]
+            if emp.pin_checador:
+                upd_filter.append(models.UsuarioPendienteDispositivo.pin_checador == emp.pin_checador)
+                pe_filter.append(models.PendingEnroll.pin_checador == emp.pin_checador)
+            db.query(models.UsuarioPendienteDispositivo).filter(*upd_filter).delete(synchronize_session=False)
+            db.query(models.PendingEnroll).filter(*pe_filter).delete(synchronize_session=False)
             deleted_names.append(f"{emp.numero_empleado} ({emp.nombre})")
             db.delete(emp)
     db.commit()

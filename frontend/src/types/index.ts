@@ -9,6 +9,17 @@ export type {
   EmpresaResponse,
   EmpresaCreate,
   EmpresaUpdate,
+  UsuarioEspecialCreate,
+  SoporteTicketClaseResponse,
+  SoporteTicketClaseCreate,
+  SoporteTicketClaseUpdate,
+  SoporteTicketTipoResponse,
+  SoporteTicketTipoCreate,
+  SoporteTicketTipoUpdate,
+  ActividadLogResponse,
+  ActividadLogListResponse,
+  ActividadPurgeRequest,
+  ActividadPurgeResponse,
   DepartamentoResponse,
   DepartamentoCreate,
   DepartamentoUpdate,
@@ -16,6 +27,7 @@ export type {
   PuestoCreate,
   VacacionGeneralCreate,
   VacacionGeneralResponse,
+  VacacionGeneralAplicacionDetalle,
   AplicarVacacionGeneralResultado,
 } from './api';
 
@@ -42,6 +54,8 @@ export interface SolicitudVacaciones {
   estado: string;
   jefe_aprobador_id?: number | null;
   jefe_aprobador_nombre?: string | null;
+  /** Puesto (catálogo RH) de quien autorizó la solicitud */
+  jefe_aprobador_puesto?: string | null;
   aprobador_es_jefe_directo?: boolean | null;
   fecha_aprobacion?: string | null;
   comentarios_aprobacion?: string | null;

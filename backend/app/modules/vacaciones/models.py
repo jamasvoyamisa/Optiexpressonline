@@ -7,7 +7,7 @@ from app.core.database import Base
 
 class EstadoSolicitud(str, enum.Enum):
     PENDIENTE = "pendiente"
-    APROBADA_JEFE = "aprobada_jefe"   # Aprobada por jefe directo, pendiente confirmación RH
+    APROBADA_JEFE = "aprobada_jefe"  # Aprobada por jefe; saldo descontado; RH es registro formal o auto 24h antes
     APROBADA = "aprobada"
     RECHAZADA = "rechazada"
     CANCELADA = "cancelada"
@@ -92,6 +92,8 @@ class VacacionGeneral(Base):
     alcance = Column(String(20), nullable=False)  # global, empresa, departamento
     empresa_id = Column(Integer, ForeignKey("empresas.id"), nullable=True)
     departamento_id = Column(Integer, ForeignKey("departamentos.id"), nullable=True)
+    # Si se define, los empleados de esta empresa no entran en el alcance (p. ej. global menos una empresa).
+    empresa_excluida_id = Column(Integer, ForeignKey("empresas.id"), nullable=True)
     dias_cuenta_ley = Column(Numeric(5, 2), nullable=False)
     dias_regalo_empresa = Column(Numeric(5, 2), nullable=False, default=0)
     activo = Column(Boolean, default=True, nullable=False)

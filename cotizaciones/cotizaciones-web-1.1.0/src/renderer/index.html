@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cotizaciones Optiexpress</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <link rel="icon" href="./assets/logo.ico" type="image/x-icon" />
+  </head>
+  <body>
+    <!-- Hasta validar sesión no se muestra el layout ni el login (evita flash del contenido interno) -->
+    <div id="auth-boot-screen" class="auth-boot-screen" aria-busy="true" aria-live="polite">
+      <span class="auth-boot-text">Cargando…</span>
+    </div>
+    <div id="login-view" class="login-view" style="display:none">
+      <div class="login-card">
+        <div class="login-logo">
+          <img src="./assets/logo.png" alt="Logo de la Empresa" />
+        </div>
+        <h2>Iniciar Sesión</h2>
+        <h2>Sistema de Cotizaciones Optiexpress</h2>
+        <form id="login-form">
+          <label>Usuario <input id="login-username" placeholder="Usuario" autocomplete="username" required /></label>
+          <label>Contraseña <input id="login-password" type="password" placeholder="Contraseña" autocomplete="current-password" required /></label>
+          <button id="login-submit" type="submit">Entrar</button>
+        </form>
+        
+      </div>
+      <footer class="login-footer">Derechos Reservados Grupo Cristal</footer>
+    </div>
+    
+    <!-- Setup inicial de base de datos -->
+    <div id="setup-view" class="setup-view" style="display:none">
+      <div class="setup-card">
+        <h2>Configuración de Base de Datos</h2>
+        <form id="setup-form">
+          <label>Host <input id="db-host" placeholder="localhost" /></label>
+          <label>Puerto <input id="db-port" type="number" placeholder="3306" /></label>
+          <label>Usuario <input id="db-user" placeholder="usuario" /></label>
+          <label>Contraseña <input id="db-password" type="password" placeholder="contraseña" /></label>
+          <label>Base de datos <input id="db-name" placeholder="cotizaciones" /></label>
+          <label><input id="db-ssl" type="checkbox" /> Usar SSL</label>
+          <div class="setup-actions">
+            <button id="setup-test" type="button">Probar conexión</button>
+            <button id="setup-save" type="button">Guardar</button>
+          </div>
+          <p id="setup-result" class="hint" style="display:none"></p>
+        </form>
+      </div>
+    </div>
+    
+    <div class="layout" style="display:none">
+      <aside class="sidebar">
+        <div class="brand-logo">
+          <img src="./assets/logo.png" alt="Logo de la Empresa" />
+        </div>
+        <nav>
+          <button data-module="equipos" class="active btn">Equipos</button>
+          <button data-module="lentes_contacto" class="btn">Lentes de Contacto</button>
+          <button data-module="soluciones_lc" class="btn">Soluciones LC</button>
+          <button data-module="insumos" class="btn">Insumos</button>
+          <button data-module="accesorios" class="btn">Accesorios</button>
+          <button data-module="cotizaciones" class="btn">Cotizaciones</button>
+          <button data-module="configuracion" class="btn">Configuración</button>
+        </nav>
+        <div class="sidebar-footer">
+           <span id="app-version" class="app-version"></span>
+         </div>
+      </aside>
+
+      <main>
+      <header class="app-header">
+        <h1>Sistema De Cotizaciones Optiexpress</h1>
+        <p id="current-date"></p>
+        <div id="user-bar" class="user-bar" style="display:none">
+          <span id="user-name" class="user-name"></span>
+          <button id="logout-btn">Salir</button>
+        </div>
+      </header>
+      <div class="workspace">
+        <div class="content-modules">
+          <!-- Paneles por módulo -->
+          <section id="mod-equipos" class="module visible">
+            <div class="panels">
+              <div class="panel">
+                <div class="panel-title"><h2>Equipos</h2></div>
+                <div class="panel-header">
+                  <input id="search-equipos" placeholder="Buscar equipos..." />
+                  <button id="add-equipos-btn">Agregar producto</button>
+                </div>
+                <ul id="equipos-list" class="list"></ul>
+              </div>
+            </div>
+          </section>
+
+          <!-- Reutilizamos el mismo layout para otros módulos -->
+          <section id="mod-lentes_contacto" class="module">
+            <div class="panels">
+              <div class="panel">
+                <div class="panel-title"><h2>Lentes de Contacto</h2></div>
+                <div class="panel-header">
+                  <input id="search-lc" placeholder="Buscar lentes de contacto..." />
+                  <button id="add-lc-btn">Agregar producto</button>
+                </div>
+                <ul id="lc-list" class="list"></ul>
+              </div>
+            </div>
+          </section>
+
+          <section id="mod-insumos" class="module">
+            <div class="panels">
+              <div class="panel">
+                <div class="panel-title"><h2>Insumos</h2></div>
+                <div class="panel-header">
+                  <input id="search-insumos" placeholder="Buscar insumos..." />
+                  <button id="add-insumos-btn">Agregar producto</button>
+                </div>
+                <ul id="insumos-list" class="list"></ul>
+              </div>
+            </div>
+          </section>
+
+          <section id="mod-accesorios" class="module">
+            <div class="panels">
+              <div class="panel">
+                <div class="panel-title"><h2>Accesorios</h2></div>
+                <div class="panel-header">
+                  <input id="search-acc" placeholder="Buscar accesorios..." />
+                  <button id="add-acc-btn">Agregar producto</button>
+                </div>
+                <ul id="acc-list" class="list"></ul>
+              </div>
+            </div>
+          </section>
+
+          <section id="mod-soluciones_lc" class="module">
+            <div class="panels">
+              <div class="panel">
+                <div class="panel-title"><h2>Soluciones LC</h2></div>
+                <div class="panel-header">
+                  <input id="search-soluciones_lc" placeholder="Buscar soluciones LC..." />
+                  <button id="add-soluciones_lc-btn">Agregar producto</button>
+                </div>
+                <ul id="soluciones_lc-list" class="list"></ul>
+              </div>
+            </div>
+          </section>
+
+          <section id="mod-cotizaciones" class="module">
+            <h2>Cotizaciones</h2>
+            <div class="cotizaciones-header">
+              <div class="cot-col col-num">Número</div>
+              <div class="cot-col col-fecha">Fecha</div>
+              <div class="cot-col col-cliente">Cliente</div>
+              <div class="cot-col col-asesor">Asesor</div>
+              <div class="cot-col col-total">Total</div>
+              <div class="cot-col col-acciones">Acción</div>
+            </div>
+            <ul id="cotizaciones-list" class="list cot-list"></ul>
+          </section>
+
+          <section id="mod-configuracion" class="module">
+            <div class="config-tabs-wrap">
+              <div class="config-tabs" role="tablist" aria-label="Secciones de configuración">
+                <button type="button" class="config-tab active" role="tab" id="tab-cfg-equipos" aria-selected="true" aria-controls="cfg-panel-equipos" data-tab="equipos">Equipos</button>
+                <button type="button" class="config-tab" role="tab" id="tab-cfg-lc" aria-selected="false" aria-controls="cfg-panel-lc" data-tab="lc">Lentes de contacto</button>
+                <button type="button" class="config-tab" role="tab" id="tab-cfg-soluciones_lc" aria-selected="false" aria-controls="cfg-panel-soluciones_lc" data-tab="soluciones_lc">Soluciones LC</button>
+                <button type="button" class="config-tab" role="tab" id="tab-cfg-insumos" aria-selected="false" aria-controls="cfg-panel-insumos" data-tab="insumos">Insumos</button>
+                <button type="button" class="config-tab" role="tab" id="tab-cfg-accesorios" aria-selected="false" aria-controls="cfg-panel-accesorios" data-tab="accesorios">Accesorios</button>
+                <button type="button" class="config-tab" role="tab" id="tab-cfg-clientes" aria-selected="false" aria-controls="cfg-panel-clientes" data-tab="clientes">Clientes</button>
+                <button type="button" class="config-tab" role="tab" id="tab-cfg-usuarios" aria-selected="false" aria-controls="cfg-panel-usuarios" data-tab="usuarios">Usuarios</button>
+                <button type="button" class="config-tab" role="tab" id="tab-cfg-sistema" aria-selected="false" aria-controls="cfg-panel-sistema" data-tab="sistema">Sistema</button>
+              </div>
+            <div class="panels config-tab-panels">
+              <div id="cfg-panel-equipos" role="tabpanel" aria-labelledby="tab-cfg-equipos" class="panel config-tab-panel is-active" data-panel="equipos">
+                <div class="panel-title"><h2>Gestión de Equipos</h2></div>
+                <div class="panel-header">
+                  <input id="config-equipos-search" placeholder="Buscar equipos..." />
+                  <button id="config-add-equipos-btn">Agregar producto</button>
+                  <button id="import-equipos-btn">Importar Equipos (CSV/XLSX)</button>
+                  <input id="equipos-file-input" type="file" accept=".csv,.xlsx" style="display:none" />
+                </div>
+                <ul id="config-equipos-list" class="list"></ul>
+                <div class="panel-footer">
+                  <span id="config-equipos-page-info">Página 1/1</span>
+                  <div class="footer-actions">
+                    <button id="config-equipos-prev">Anterior</button>
+                    <button id="config-equipos-next">Siguiente</button>
+                  </div>
+                </div>
+              </div>
+
+              <div id="cfg-panel-lc" role="tabpanel" aria-labelledby="tab-cfg-lc" class="panel config-tab-panel" data-panel="lc" hidden>
+                <div class="panel-title"><h2>Gestión de Lentes de Contacto</h2></div>
+                <div class="panel-header">
+                  <input id="config-lc-search" placeholder="Buscar lentes de contacto..." />
+                  <button id="config-add-lc-btn">Agregar producto</button>
+                  <button id="config-import-lc-btn">Importar (CSV/XLSX)</button>
+                  <input id="config-import-lc-file" type="file" accept=".csv,.xlsx" style="display:none" />
+                </div>
+                <ul id="config-lc-list" class="list"></ul>
+                <div class="panel-footer">
+                  <span id="config-lc-page-info">Página 1/1</span>
+                  <div class="footer-actions">
+                    <button id="config-lc-prev">Anterior</button>
+                    <button id="config-lc-next">Siguiente</button>
+                  </div>
+                </div>
+              </div>
+
+              <div id="cfg-panel-soluciones_lc" role="tabpanel" aria-labelledby="tab-cfg-soluciones_lc" class="panel config-tab-panel" data-panel="soluciones_lc" hidden>
+                <div class="panel-title"><h2>Gestión de Soluciones LC</h2></div>
+                <div class="panel-header">
+                  <input id="config-soluciones_lc-search" placeholder="Buscar soluciones LC..." />
+                  <button id="config-add-soluciones_lc-btn">Agregar producto</button>
+                  <button id="config-import-soluciones_lc-btn">Importar (CSV/XLSX)</button>
+                  <input id="config-import-soluciones_lc-file" type="file" accept=".csv,.xlsx" style="display:none" />
+                </div>
+                <ul id="config-soluciones_lc-list" class="list"></ul>
+                <div class="panel-footer">
+                  <span id="config-soluciones_lc-page-info">Página 1/1</span>
+                  <div class="footer-actions">
+                    <button id="config-soluciones_lc-prev">Anterior</button>
+                    <button id="config-soluciones_lc-next">Siguiente</button>
+                  </div>
+                </div>
+              </div>
+
+              <div id="cfg-panel-insumos" role="tabpanel" aria-labelledby="tab-cfg-insumos" class="panel config-tab-panel" data-panel="insumos" hidden>
+                <div class="panel-title"><h2>Gestión de Insumos</h2></div>
+                <div class="panel-header">
+                  <input id="config-insumos-search" placeholder="Buscar insumos..." />
+                  <button id="config-add-insumos-btn">Agregar producto</button>
+                  <button id="config-import-insumos-btn">Importar (CSV/XLSX)</button>
+                  <input id="config-import-insumos-file" type="file" accept=".csv,.xlsx" style="display:none" />
+                </div>
+                <ul id="config-insumos-list" class="list"></ul>
+                <div class="panel-footer">
+                  <span id="config-insumos-page-info">Página 1/1</span>
+                  <div class="footer-actions">
+                    <button id="config-insumos-prev">Anterior</button>
+                    <button id="config-insumos-next">Siguiente</button>
+                  </div>
+                </div>
+              </div>
+
+              <div id="cfg-panel-accesorios" role="tabpanel" aria-labelledby="tab-cfg-accesorios" class="panel config-tab-panel" data-panel="accesorios" hidden>
+                <div class="panel-title"><h2>Gestión de Accesorios</h2></div>
+                <div class="panel-header">
+                  <input id="config-accesorios-search" placeholder="Buscar accesorios..." />
+                  <button id="config-add-accesorios-btn">Agregar producto</button>
+                  <button id="config-import-accesorios-btn">Importar (CSV/XLSX)</button>
+                  <input id="config-import-accesorios-file" type="file" accept=".csv,.xlsx" style="display:none" />
+                </div>
+                <ul id="config-accesorios-list" class="list"></ul>
+                <div class="panel-footer">
+                  <span id="config-accesorios-page-info">Página 1/1</span>
+                  <div class="footer-actions">
+                    <button id="config-accesorios-prev">Anterior</button>
+                    <button id="config-accesorios-next">Siguiente</button>
+                  </div>
+                </div>
+              </div>
+
+              <div id="cfg-panel-clientes" role="tabpanel" aria-labelledby="tab-cfg-clientes" class="panel config-tab-panel" data-panel="clientes" hidden>
+                <div class="panel-title"><h2>Gestión de Clientes</h2></div>
+                <div class="panel-header">
+                  <input id="config-clientes-search" placeholder="Buscar clientes..." />
+                  <button id="config-add-clientes-btn">Agregar cliente</button>
+                  <button id="config-import-clientes-btn">Importar (CSV/XLSX)</button>
+                  <input id="config-import-clientes-file" type="file" accept=".csv,.xlsx" style="display:none" />
+                </div>
+                <ul id="config-clientes-list" class="list"></ul>
+                <div class="panel-footer">
+                  <span id="config-clientes-page-info">Página 1/1</span>
+                  <div class="footer-actions">
+                    <button id="config-clientes-prev">Anterior</button>
+                    <button id="config-clientes-next">Siguiente</button>
+                  </div>
+                </div>
+              </div>
+
+              <div id="cfg-panel-usuarios" role="tabpanel" aria-labelledby="tab-cfg-usuarios" class="panel config-tab-panel" data-panel="usuarios" hidden>
+                <div class="panel-title"><h2>Usuarios</h2></div>
+                <div class="panel-header">
+                  <input id="config-users-search" placeholder="Buscar usuarios..." />
+                  <button id="config-add-user-btn">Agregar usuario</button>
+                </div>
+                <ul id="config-users-list" class="list"></ul>
+              </div>
+
+              <div id="cfg-panel-sistema" role="tabpanel" aria-labelledby="tab-cfg-sistema" class="panel config-tab-panel" data-panel="sistema" hidden>
+                <div class="panel-title"><h2>Sistema</h2></div>
+                <div class="panel-content">
+                  <div class="panel-header">
+                    <div class="system-toolbar">
+                      <label class="sys-inline">
+                        <input type="checkbox" id="system-logs-realtime" checked>
+                        Tiempo real
+                      </label>
+                      <input id="system-logs-search" class="sys-search" placeholder="Filtrar..." />
+                      <button id="system-logs-clear" class="btn">Limpiar</button>
+                      <button id="system-logs-copy" class="btn">Copiar todo</button>
+                      <button id="system-logs-export" class="btn">Exportar .txt</button>
+                    </div>
+                    <div class="system-pagination">
+                      <button id="system-logs-page-prev" class="btn">◀</button>
+                      <span id="system-logs-page-info">Página 1/1</span>
+                      <button id="system-logs-page-next" class="btn">▶</button>
+                    </div>
+                  </div>
+                  <div id="system-logs" class="log-list" aria-live="polite"></div>
+                </div>
+              </div>
+            </div>
+            </div>
+          </section>
+        </div>
+
+        <aside class="quotation">
+          <div class="panel">
+            <div class="panel-title">
+              <h2>Cotizaciones</h2>
+              <button id="select-client-btn">Cliente</button>
+            </div>
+            <div id="selected-client-info" class="selected-client-info"><strong>Cliente:</strong> Sin cliente seleccionado</div>
+            <div class="quotation-divider"></div>
+            <div id="quotation-items" class="list"></div>
+              <div class="panel-footer">
+                <div class="footer-actions">
+                  <button id="crear-cotizacion-btn">Crear</button>
+                </div>
+                <span id="quotation-total">Total: $0.00</span>
+              </div>
+          </div>
+        </aside>
+      </div>
+      </main>
+    </div>
+
+    <!-- Modales -->
+    <dialog id="modal-add-product">
+      <form method="dialog" id="form-add-product">
+        <h3>Agregar producto</h3>
+        <label>Nombre <input name="nombre" required /></label>
+        <label>Precio <input name="precio" type="number" min="0" step="0.01" required /></label>
+        <label>Imagen (miniatura)
+          <input name="imagen" type="file" accept="image/*" />
+        </label>
+        <label>
+          <input id="remove-image" name="removeImage" type="checkbox" /> Quitar imagen (solo edición)
+        </label>
+        <menu>
+          <button id="add-product-cancel" value="cancel">Cancelar</button>
+          <button id="save-product" value="default">Guardar</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="modal-client">
+      <div class="modal-title-row">
+        <h3>Seleccionar cliente</h3>
+        <button id="new-client-btn">Nuevo</button>
+      </div>
+      <input id="client-search" placeholder="Buscar por nombre o RFC" />
+      <div class="client-list-header">
+        <span class="sortable" data-sort-key="nombre">Nombre</span>
+        <span class="sortable" data-sort-key="rfc">RFC</span>
+        <span>Teléfono</span>
+        <span>Email</span>
+        <span>Acción</span>
+      </div>
+      <ul id="client-list" class="list"></ul>
+      <menu>
+        <button id="client-close">Cerrar</button>
+      </menu>
+    </dialog>
+
+    <!-- Modal Nuevo Cliente -->
+    <dialog id="modal-new-client">
+      <form id="form-new-client" method="dialog">
+        <h3>Nuevo cliente</h3>
+        <div class="modal-form-grid">
+          <label>Nombre
+            <input id="new-client-nombre" type="text" required />
+          </label>
+          <label>RFC
+            <input id="new-client-rfc" type="text" />
+          </label>
+          <label>Teléfono
+            <input id="new-client-telefono" type="text" />
+          </label>
+          <label>Email
+            <input id="new-client-email" type="email" />
+          </label>
+          <label class="full">Dirección
+            <input id="new-client-direccion" type="text" />
+          </label>
+        </div>
+        <menu class="modal-actions">
+          <button id="new-client-cancel" type="button">Cancelar</button>
+          <button id="new-client-save" type="button">Guardar</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <!-- Modal Usuario (crear/editar) -->
+    <dialog id="modal-user">
+      <form id="form-user" method="dialog">
+        <h3 id="user-modal-title">Nuevo usuario</h3>
+        <div class="modal-form-grid">
+          <label>Usuario
+            <input id="user-username" type="text" required />
+          </label>
+          <label>Nombre
+            <input id="user-nombre" type="text" />
+          </label>
+          <label>Email
+            <input id="user-email" type="email" />
+          </label>
+          <label>Rol
+            <select id="user-role-select">
+              <option value="user">Usuario</option>
+              <option value="admin">Admin</option>
+            </select>
+          </label>
+          <label class="full">Departamento (define el folio: PREFIJO-COT-número)
+            <select id="user-departamento-select">
+              <option value="DEA">DEA</option>
+              <option value="OPTS">OPTS</option>
+              <option value="CDMX">CDMX</option>
+            </select>
+          </label>
+          <label class="full">Contraseña (dejar en blanco para no cambiar)
+            <input id="user-password" type="password" />
+          </label>
+        </div>
+        <menu class="modal-actions">
+          <button id="user-cancel" type="button">Cancelar</button>
+          <button id="user-save" type="button">Guardar</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <!-- Modal de detalle de cotización -->
+    <dialog id="modal-detalle-cotizacion">
+      <h3 id="detalle-title">Detalle de cotización <span id="detalle-numero"></span></h3>
+      <div id="detalle-cotizacion-content">
+        <!-- Se renderiza dinámicamente el detalle actual de la cotización -->
+      </div>
+      <menu>
+        <button id="detalle-close">Cerrar</button>
+        <button id="finalize-quotation">Guardar cotización</button>
+        <button id="export-pdf">Exportar PDF</button>
+      </menu>
+    </dialog>
+
+    <script src="./api-client.js"></script>
+    <script src="./app.js"></script>
+  </body>
+  </html>

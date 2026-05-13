@@ -4,7 +4,7 @@ from typing import Optional
 from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from app.core.config import settings
 from app.core.database import get_db
 
@@ -54,18 +54,8 @@ def decode_access_token(token: str) -> Optional[dict]:
         return None
 
 
-async def get_current_user(
-    token: str = Depends(oauth2_scheme),
-    db: Session = Depends(get_db),
-):
-    """
-    Dependency para obtener usuario actual desde token JWT.
-    Valida:
-      1. Firma y expiración del JWT.
-      2. Que el campo `sid` (session_id) del token coincida con el registrado en DB
-         → si no coincide, otro dispositivo ha iniciado sesión después y el token
-         actual ya no es válido (sesión única por usuario).
-    """
+async def _validate_token(token: str, db: Session) -> dict:
+    """Lógica compartida de validación JWT (header o query param)."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="No se pudieron validar las credenciales",
@@ -75,6 +65,10 @@ async def get_current_user(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Tu sesión fue cerrada porque iniciaste sesión desde otro dispositivo.",
         headers={"WWW-Authenticate": "Bearer"},
+    )
+    admin_only_exception = HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Acceso suspendido temporalmente: solo Administrador, Gerente o Supervisor puede ingresar.",
     )
 
     payload = decode_access_token(token)
@@ -87,16 +81,55 @@ async def get_current_user(
     if user_id is None:
         raise credentials_exception
 
-    # ── Validación de sesión única ──
-    # Solo si el JWT incluye `sid` (tokens nuevos tras el despliegue de esta versión).
+    from app.modules.personal.models import Empleado, Rol
+    emp = db.query(Empleado).options(joinedload(Empleado.puesto_rel)).filter(Empleado.id == int(user_id)).first()
+    if emp is None:
+        raise credentials_exception
+
+    # Bloqueo temporal opcional: limita acceso solo a Administrador/Gerente/Supervisor.
+    if settings.LOGIN_MAINTENANCE_RESTRICTED:
+        allowed = False
+        if emp.rol_id:
+            rol = db.query(Rol).filter(Rol.id == emp.rol_id).first()
+            if rol and rol.nombre in ("Administrador", "Superuser"):
+                allowed = True
+        if not allowed:
+            pn = (emp.puesto_rel.nombre if emp.puesto_rel else "") or ""
+            pl = pn.strip().lower()
+            if "gerente" in pl or "supervisor" in pl:
+                allowed = True
+        if not allowed:
+            raise admin_only_exception
+
     sid_token = payload.get("sid")
-    if sid_token:
-        from app.modules.personal.models import Empleado
-        emp = db.query(Empleado).filter(Empleado.id == int(user_id)).first()
-        if emp is None:
-            raise credentials_exception
-        # session_id en DB puede ser None si nunca se actualizó (legacy); en ese caso no bloquear.
-        if emp.session_id and emp.session_id != sid_token:
-            raise session_kicked_exception
+    if sid_token and emp.session_id and emp.session_id != sid_token:
+        raise session_kicked_exception
 
     return {"user_id": user_id, "payload": payload}
+
+
+async def get_current_user_download(
+    download_token: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Acepta el token desde el query param ?download_token=xxx
+    para descargas directas (sin JS/fetch intermedio).
+    """
+    if not download_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No autenticado",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return await _validate_token(download_token, db)
+
+
+async def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(get_db),
+):
+    """
+    Dependency para obtener usuario actual desde token JWT (header Authorization: Bearer).
+    """
+    return await _validate_token(token, db)

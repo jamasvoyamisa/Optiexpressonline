@@ -126,6 +126,7 @@ A continuación se describe cómo se usa el módulo de vacaciones en la aplicaci
    - **periodo_actual**: días disponibles, tomados y fecha límite de goce del periodo más reciente.
    - **periodo_anterior**: lo mismo del periodo que vence antes (por vencer).
    - **dias_disponibles**, **dias_tomados**, **dias_pendientes**: totales.
+   - **saldo_dias_lft_neto**, **dias_saldo_migracion_vacaciones**, **saldo_total_con_migracion**: ver sección 7 (migración).
    - **fecha_limite_goce**: fecha hasta la cual debe usar los días (sobre todo los del periodo anterior) para no perderlos.
 
 3. **Crear una solicitud**  
@@ -216,7 +217,42 @@ Al dar de alta un empleado en **Recursos Humanos** (Personal) se registra su **f
 
 ---
 
-## 7. Resumen rápido
+## 7. Saldo de migración (días fuera de la tabla LFT)
+
+### 7.1 Qué es
+
+Algunos colaboradores pueden traer **días de vacaciones ya devengados** en otro sistema, contrato o política anterior. Esos días **no caben** en el tope del ajuste de “saldo LFT neto” (que solo reparte entre periodos cuyo `dias_derecho` viene de la ley).
+
+Por eso existe un campo aparte en el empleado: **`dias_saldo_migracion_vacaciones`**. Es una **bolsa única** de días que RH/admin puede fijar **una vez** (o corregir si hubo error), con cualquier cantidad razonable (ej. 55 días).
+
+### 7.2 Cómo se comporta el sistema con este cambio
+
+| Aspecto | Comportamiento |
+|--------|----------------|
+| **Balance en API** | Además de `saldo_dias_lft_neto`, la respuesta incluye `dias_saldo_migracion_vacaciones` y `saldo_total_con_migracion` (= LFT neto + migración). |
+| **Nuevas solicitudes** | El tope de días que el colaborador puede pedir usa **LFT neto + saldo de migración**, menos lo ya reservado en solicitudes pendientes o aprobadas por jefe. |
+| **Confirmación RH** | Al aprobar definitivamente una solicitud, el sistema **descuenta primero** de los **periodos LFT** (misma regla: primero el que vence antes), y **solo si aún faltan días**, descuenta del **saldo de migración**. |
+| **Vacaciones generales** (días que cuentan como ley) | Si después de descontar periodos LFT (con adelanto permitido) sobran días de ley por aplicar, se intenta cubrir con **saldo de migración** antes de cargar **adeudo** (`dias_deuda_vacaciones_ley`). |
+| **Periodos por aniversario** | Siguen generándose y actualizándose **solo con la tabla LFT**. La migración **no** aumenta `dias_derecho` de ningún periodo: al cumplir el siguiente aniversario, los días nuevos son **únicamente los de la ley**. |
+| **Ajuste admin** | `PUT .../vacaciones/admin/empleado/{id}/saldo-migracion-vacaciones` con `{ "dias_saldo_migracion_vacaciones": N }` (solo superusuario). Valores negativos se guardan como **0**. |
+
+### 7.3 Actuar frente a RH y colaboradores
+
+- **Comunicar** que los días de migración son **extra-ley** para homologar saldo viejo; los plazos de **18 meses** y la tabla de la LFT siguen aplicando a los **periodos LFT** mostrados en la app.
+- Cuando el saldo de migración llegue a **0**, el flujo es el mismo que antes: solo periodos LFT, adeudos por vacaciones generales si aplica, y el ajuste de saldo LFT neto restringido al derecho vigente.
+- Si al confirmar RH aparece error de días insuficientes, puede ser porque **entre la solicitud y la confirmación** bajó el saldo (por otro movimiento); hay que revisar balance y solicitudes.
+
+### 7.4 API (resumen)
+
+| Método y ruta | Uso |
+|----------------|-----|
+| `PUT /api/v1/vacaciones/admin/empleado/{empleado_id}/saldo-migracion-vacaciones` | Fija el saldo de migración (cuerpo: `dias_saldo_migracion_vacaciones`). Solo administrador. |
+
+Los endpoints `mi-balance` y `balance/{empleado_id}` devuelven los nuevos campos junto con el resto del balance.
+
+---
+
+## 8. Resumen rápido
 
 | Concepto | Aplicación |
 |----------|------------|
@@ -227,10 +263,11 @@ Al dar de alta un empleado en **Recursos Humanos** (Personal) se registra su **f
 | **Periodo anterior** | Bloque con fecha límite más próxima; conviene usarlo primero. |
 | **Periodo actual** | Bloque del aniversario más reciente; vence después. |
 | **Al aprobar solicitudes** | Se descuentan primero del periodo anterior, luego del actual. |
+| **Saldo migración** | Bolsa opcional fuera de la LFT (carga admin); al confirmar RH se usa **después** de los periodos LFT. Los nuevos aniversarios solo suman días según la ley. |
 
 ---
 
-## 8. Referencias
+## 9. Referencias
 
 - Ley Federal del Trabajo (México), artículos 76 y 78 (Vacaciones Dignas).
 - Reforma publicada en el DOF; el sistema implementa la tabla de días progresivos y el plazo de 18 meses para el goce de las vacaciones.

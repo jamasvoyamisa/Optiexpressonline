@@ -33,9 +33,14 @@ const TIPO_ICONO: Record<string, string> = {
 
 const MS_1_DIA = 24 * 60 * 60 * 1000;
 const NOMBRE_DISPOSITIVO_PORTAL = 'Portal Checadas Remotas';
+/** Mismo nombre que en backend `importar_historico.DISPOSITIVO_IMPORTACION_NOMBRE`; queda inactivo a propósito. */
+const NOMBRE_DISPOSITIVO_IMPORTACION_HISTORICA = 'Importación Histórica';
 
-/** Dispositivos que no deben generar alertas de conexión (portal web no tiene agente) */
-const esDispositivoPortal = (d: Dispositivo) => (d.nombre || '').trim() === NOMBRE_DISPOSITIVO_PORTAL;
+/** Sin agente local o virtuales que no deben monitorearse (no alertas inactivo / sin conexión). */
+const esDispositivoSinAlertasConexion = (d: Dispositivo) => {
+  const n = (d.nombre || '').trim();
+  return n === NOMBRE_DISPOSITIVO_PORTAL || n === NOMBRE_DISPOSITIVO_IMPORTACION_HISTORICA;
+};
 
 function timeAgo(dateStr: string): string {
   // Sin 'Z': el navegador lo trata como hora local (México), que es como lo guarda el servidor
@@ -52,7 +57,7 @@ function timeAgo(dateStr: string): string {
 export const NotificationBell = ({ dispositivos = [] }: Props) => {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
-  const dispositivosConAlertas = dispositivos.filter(d => !esDispositivoPortal(d));
+  const dispositivosConAlertas = dispositivos.filter(d => !esDispositivoSinAlertasConexion(d));
   const inactivos = dispositivosConAlertas.filter(d => !d.activo);
   const sinConexion = dispositivosConAlertas.filter(d => {
     const u = d.ultima_sync_agente;

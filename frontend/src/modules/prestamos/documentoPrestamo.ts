@@ -285,6 +285,24 @@ export const generarDocumentoPrestamo = (
     color: #111;
   }
 
+  .terminos-box {
+    margin-top: 0.4cm;
+    border: 1px solid #fed7aa;
+    background: #fff7ed;
+    border-radius: 6px;
+    padding: 10px 12px;
+    color: #7c2d12;
+  }
+  .terminos-title {
+    font-size: 9.5pt;
+    font-weight: 700;
+    margin-bottom: 5px;
+  }
+  .terminos-text {
+    font-size: 8.4pt;
+    line-height: 1.45;
+  }
+
   /* ── Firmas ── */
   .firmas-top {
     display: flex;
@@ -533,6 +551,16 @@ export const generarDocumentoPrestamo = (
     <div class="motivo-lbl">Pagos parciales propuestos:</div>
     <div class="motivo-line">${sol.descuento_quincenal ? formatMonto(sol.descuento_quincenal) : ''}</div>
     <div class="motivo-line"></div>
+  </div>
+
+  <div class="terminos-box">
+    <div class="terminos-title">Términos de la solicitud</div>
+    <div class="terminos-text">
+      Esta solicitud de préstamo está sujeta a aprobación conforme a las políticas internas vigentes de la empresa.
+      El registro y la firma de este formato no garantizan autorización ni depósito automático.
+      La evaluación considera, entre otros criterios, antigüedad laboral, historial del colaborador y capacidad de descuento vía nómina.
+      En caso de aprobación, el monto, plazo y descuento quincenal autorizados serán los que se determinen formalmente en el proceso interno.
+    </div>
   </div>
 
   <!-- ── Firmas (3 columnas) ── -->

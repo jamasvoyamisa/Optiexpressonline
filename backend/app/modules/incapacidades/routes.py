@@ -6,6 +6,7 @@ from datetime import date
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.core.config import settings
+from app.modules.audit.negocio import registrar_negocio
 from . import service, schemas
 
 router = APIRouter(prefix=f"{settings.API_V1_PREFIX}/incapacidades", tags=["incapacidades"])
@@ -33,7 +34,15 @@ def crear(
 ):
     registrado_por = int(current["user_id"])
     try:
-        return service.crear_incapacidad(db, data, registrado_por)
+        out = service.crear_incapacidad(db, data, registrado_por)
+        inc = out.get("incapacidad")
+        iid = getattr(inc, "id", None) if inc is not None else None
+        registrar_negocio(
+            db,
+            empleado_id=registrado_por,
+            mensaje=f"Incapacidad registrada id={iid} empleado_afectado={data.empleado_id} período {data.fecha_inicio}–{data.fecha_fin}",
+        )
+        return out
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -55,11 +64,16 @@ def actualizar(
     incapacidad_id: int,
     data: schemas.IncapacidadUpdate,
     db: Session = Depends(get_db),
-    _current: dict = Depends(get_current_user),
+    current: dict = Depends(get_current_user),
 ):
     inc = service.actualizar_incapacidad(db, incapacidad_id, data)
     if not inc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incapacidad no encontrada")
+    registrar_negocio(
+        db,
+        empleado_id=int(current["user_id"]),
+        mensaje=f"Incapacidad actualizada id={incapacidad_id}",
+    )
     return inc
 
 
@@ -67,8 +81,13 @@ def actualizar(
 def cancelar(
     incapacidad_id: int,
     db: Session = Depends(get_db),
-    _current: dict = Depends(get_current_user),
+    current: dict = Depends(get_current_user),
 ):
     inc = service.cancelar_incapacidad(db, incapacidad_id)
     if not inc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incapacidad no encontrada")
+    registrar_negocio(
+        db,
+        empleado_id=int(current["user_id"]),
+        mensaje=f"Incapacidad cancelada id={incapacidad_id}",
+    )

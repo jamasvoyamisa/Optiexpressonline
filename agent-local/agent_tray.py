@@ -22,6 +22,7 @@ sys.path.insert(0, str(AGENT_DIR))
 
 import pystray
 from PIL import Image, ImageDraw, ImageFont
+from single_instance import SingleInstanceLock
 
 VERSION = "1.0.0"
 APP_NAME = "Optiexpress Agent"
@@ -314,9 +315,42 @@ class AgentTray:
             logger.warning("config.yaml no encontrado, esperando configuración del usuario")
 
 
+def _show_already_running_dialog():
+    """Muestra un diálogo nativo informando que ya hay otra instancia."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(
+                0,
+                "El Agente Optiexpress ya está en ejecución.\n\n"
+                "Revisa el icono en la bandeja del sistema (junto al reloj). "
+                "Si no lo ves, abre el Administrador de tareas y cierra el "
+                "proceso 'Optiexpress Agent' antes de volver a iniciarlo.\n\n"
+                "Iniciar dos agentes a la vez duplica las checadas enviadas "
+                "al servidor.",
+                "Optiexpress Agent — Ya está en ejecución",
+                0x00000010 | 0x00040000,  # MB_ICONERROR | MB_TOPMOST
+            )
+        else:
+            print(
+                "ERROR: Ya hay otra instancia del agente corriendo. "
+                "Iniciar dos agentes a la vez duplica las checadas enviadas al servidor.",
+                file=sys.stderr,
+            )
+    except Exception:
+        pass
+
+
 def main():
-    tray = AgentTray()
-    tray.run()
+    lock = SingleInstanceLock("optiexpress-agent")
+    if not lock.acquire():
+        _show_already_running_dialog()
+        sys.exit(1)
+    try:
+        tray = AgentTray()
+        tray.run()
+    finally:
+        lock.release()
 
 
 if __name__ == "__main__":

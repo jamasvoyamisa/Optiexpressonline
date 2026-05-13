@@ -1,0 +1,15 @@
+[Unit]
+Description=Cotizaciones Optiexpress (Node Express)
+After=network.target mysql.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/optiexpress/cotizaciones-web
+EnvironmentFile=-/opt/optiexpress/cotizaciones-web/.env
+ExecStart=/usr/bin/node server/index.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

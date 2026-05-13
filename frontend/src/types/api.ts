@@ -34,14 +34,36 @@ export interface AsistenciaResponse {
   created_at?: string;
   empleado_nombre?: string;
   empleado_numero?: string;
+  empresa_nombre?: string | null;
+  departamento_nombre?: string | null;
+}
+
+/** Por día: contexto laboral (incapacidad, vacaciones, festivo, jornada…). Ver GET /asistencia/mis-contexto-dias */
+export interface DiaContextoLaboral {
+  fecha: string;
+  tipo_dia: string;
+  etiqueta: string;
+  requiere_checadas: boolean;
+  checadas_requeridas: number;
+  motivo: string;
 }
 
 // ========== EMPRESA ==========
 export interface EmpresaResponse {
   id: number;
   nombre: string;
+  siglas?: string | null;
   rfc?: string | null;
   direccion?: string | null;
+  capital_social?: string | null;
+  codigo_postal?: string | null;
+  domicilio?: string | null;
+  numero_exterior?: string | null;
+  numero_interior?: string | null;
+  colonia?: string | null;
+  municipio?: string | null;
+  estado?: string | null;
+  regimen_fiscal?: string | null;
   telefono?: string | null;
   activo: boolean;
   checadas_remotas?: boolean;
@@ -55,8 +77,18 @@ export interface EmpresaResponse {
 
 export interface EmpresaCreate {
   nombre: string;
+  siglas?: string;
   rfc?: string;
   direccion?: string;
+  capital_social?: number | string;
+  codigo_postal?: string;
+  domicilio?: string;
+  numero_exterior?: string;
+  numero_interior?: string;
+  colonia?: string;
+  municipio?: string;
+  estado?: string;
+  regimen_fiscal?: string;
   telefono?: string;
   checadas_remotas?: boolean;
   dias_laborales?: 'lun-sab' | 'lun-dom';
@@ -65,13 +97,118 @@ export interface EmpresaCreate {
 
 export interface EmpresaUpdate {
   nombre?: string;
+  siglas?: string;
   rfc?: string;
   direccion?: string;
+  capital_social?: number | string;
+  codigo_postal?: string;
+  domicilio?: string;
+  numero_exterior?: string;
+  numero_interior?: string;
+  colonia?: string;
+  municipio?: string;
+  estado?: string;
+  regimen_fiscal?: string;
   telefono?: string;
   activo?: boolean;
   checadas_remotas?: boolean;
   dias_laborales?: 'lun-sab' | 'lun-dom';
   trabaja_festivos?: boolean;
+}
+
+export interface UsuarioEspecialCreate {
+  nombre: string;
+  apellido_paterno?: string;
+  apellido_materno?: string;
+  email?: string;
+  telefono?: string;
+  username?: string;
+  password?: string;
+  empresa_id: number;
+  departamento_id: number;
+  puesto_id: number;
+  fecha_ingreso?: string;
+  /** Si el puesto es Director: empresas que supervisa (la empresa principal siempre se incluye en backend). */
+  empresas_supervision_ids?: number[];
+}
+
+/** Catálogo SAT c_RegimenFiscal (GET /personal/regimenes-fiscales-sat) */
+export interface RegimenFiscalSatItem {
+  code: string;
+  descripcion: string;
+}
+
+export interface SoporteTicketClaseResponse {
+  id: number;
+  nombre: string;
+  activo: boolean;
+}
+
+export interface SoporteTicketClaseCreate {
+  nombre: string;
+  activo?: boolean;
+}
+
+export interface SoporteTicketClaseUpdate {
+  nombre?: string;
+  activo?: boolean;
+}
+
+export interface SoporteTicketTipoResponse {
+  id: number;
+  nombre: string;
+  clase_id?: number | null;
+  clase_nombre?: string | null;
+  activo: boolean;
+}
+
+export interface SoporteTicketTipoCreate {
+  nombre: string;
+  clase_id?: number | null;
+  activo?: boolean;
+}
+
+export interface SoporteTicketTipoUpdate {
+  nombre?: string;
+  clase_id?: number | null;
+  activo?: boolean;
+}
+
+/** GET /audit/actividad (solo administrador) */
+export interface ActividadLogResponse {
+  id: number;
+  created_at: string;
+  nivel: string;
+  categoria: string;
+  mensaje: string;
+  contexto?: string | null;
+  empleado_id?: number | null;
+  empleado_numero?: string | null;
+  empleado_nombre?: string | null;
+  empleado_username?: string | null;
+  ip_cliente?: string | null;
+  metodo_http?: string | null;
+  ruta?: string | null;
+  codigo_http?: number | null;
+  duracion_ms?: number | null;
+}
+
+export interface ActividadLogListResponse {
+  items: ActividadLogResponse[];
+  total: number;
+}
+
+export type ActividadPurgeModo = 'categoria' | 'antiguos' | 'todo';
+
+export interface ActividadPurgeRequest {
+  modo: ActividadPurgeModo;
+  categoria?: string | null;
+  dias?: number | null;
+  confirmacion?: string | null;
+}
+
+export interface ActividadPurgeResponse {
+  eliminados: number;
 }
 
 // ========== PUESTO ==========
@@ -130,6 +267,8 @@ export interface EmpleadoResponse {
   apellido_materno?: string | null;
   email?: string | null;
   telefono?: string | null;
+  /** Línea o móvil que la empresa asigna al colaborador (prioritario en tickets de soporte / WhatsApp). */
+  telefono_empresa_asignado?: string | null;
   username?: string | null;
   empresa_id?: number | null;
   departamento_id?: number | null;
@@ -160,6 +299,8 @@ export interface EmpleadoResponse {
   updated_at?: string | null;
   empresa?: EmpresaResponse | null;
   departamento?: DepartamentoResponse | null;
+  /** Director: empresas donde tiene alcance (vacío si no aplica o legado sin filas). */
+  empresas_supervisadas_ids?: number[] | null;
 }
 
 export interface EmpleadoCreate {
@@ -169,6 +310,7 @@ export interface EmpleadoCreate {
   apellido_materno?: string;
   email?: string;
   telefono?: string;
+  telefono_empresa_asignado?: string;
   username?: string;
   empresa_id?: number;
   departamento_id?: number;
@@ -199,6 +341,8 @@ export interface VacacionGeneralCreate {
   alcance: AlcanceVacacionGeneral;
   empresa_id?: number | null;
   departamento_id?: number | null;
+  /** Empleados de esta empresa no entran en el alcance (p. ej. global menos una empresa). */
+  empresa_excluida_id?: number | null;
   dias_cuenta_ley: number;
   dias_regalo_empresa?: number;
   activo?: boolean;
@@ -213,18 +357,88 @@ export interface VacacionGeneralResponse {
   alcance: string;
   empresa_id?: number | null;
   departamento_id?: number | null;
+  empresa_excluida_id?: number | null;
   dias_cuenta_ley: string;
   dias_regalo_empresa: string;
   activo: boolean;
   notas?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+  /** True si ya se aplicó al menos a un empleado. */
+  aplicado?: boolean;
+  /** Cantidad de empleados con registro de aplicación. */
+  empleados_aplicados?: number;
+}
+
+export interface VacacionGeneralAplicacionDetalle {
+  empleado_id: number;
+  motivo?: string;
+  error?: string;
+  nombre_empleado?: string | null;
+  numero_empleado?: string | null;
+  empresa_nombre?: string | null;
 }
 
 export interface AplicarVacacionGeneralResultado {
   vacacion_general_id: number;
   empleados_totales: number;
   aplicados: number;
-  omitidos: { empleado_id: number; motivo: string }[];
-  errores: { empleado_id: number; error: string }[];
+  omitidos: VacacionGeneralAplicacionDetalle[];
+  errores: VacacionGeneralAplicacionDetalle[];
+}
+
+// ========== CHECADAS ESPECIALES ==========
+export type AlcanceChecadaEspecial = 'global' | 'empresa' | 'departamento';
+
+export interface ChecadaEspecialCreate {
+  nombre: string;
+  fecha: string;
+  hora_entrada?: string | null;
+  hora_salida?: string | null;
+  tolerancia_minutos?: number | null;
+  checadas_requeridas: number;
+  alcance: AlcanceChecadaEspecial;
+  empresa_id?: number | null;
+  departamento_id?: number | null;
+  empresas_excluidas: number[];
+  notas?: string | null;
+  activo?: boolean;
+}
+
+export interface ChecadaEspecialResponse {
+  id: number;
+  nombre: string;
+  fecha: string;
+  fecha_fin?: string | null;
+  hora_entrada?: string | null;
+  hora_salida?: string | null;
+  tolerancia_minutos?: number | null;
+  checadas_requeridas: number;
+  alcance: string;
+  empresa_id?: number | null;
+  departamento_id?: number | null;
+  empresas_incluidas: number[];
+  empresas_excluidas: number[];
+  notas?: string | null;
+  activo: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+  alcance_legacy?: string | null;
+  empresa_id_legacy?: number | null;
+  departamento_id_legacy?: number | null;
+}
+
+export interface ChecadaEspecialUpdate {
+  nombre?: string;
+  fecha?: string;
+  hora_entrada?: string | null;
+  hora_salida?: string | null;
+  tolerancia_minutos?: number | null;
+  checadas_requeridas?: number;
+  alcance?: AlcanceChecadaEspecial;
+  empresa_id?: number | null;
+  departamento_id?: number | null;
+  empresas_excluidas?: number[];
+  notas?: string | null;
+  activo?: boolean;
 }

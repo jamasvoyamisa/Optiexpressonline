@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Demo de Fuentes</title>
+    <link rel="stylesheet" href="./styles.css"/>
+    <style>
+      .container { max-width: 920px; margin: 20px auto; padding: 12px; }
+      .title { font-size: 20px; font-weight: 700; margin: 0 0 12px; }
+      .note { color: #6b7280; font-size: 13px; margin-bottom: 12px; }
+      .sample { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+      .label { font-size: 12px; color: #6b7280; margin-bottom: 8px; }
+      .line { font-size: 16px; margin: 6px 0; }
+      .font-isidora { font-family: 'Isidora', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+      .font-system { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; }
+      .font-segoe { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+      .font-roboto { font-family: 'Roboto', system-ui, -apple-system, 'Segoe UI', sans-serif; }
+      .font-sans { font-family: sans-serif; }
+    </style>
+  </head>
+  <body>
+    <main class="container">
+      <h1 class="title">Demostración de Fuentes</h1>
+      <p class="note">Si “Isidora” no está cargada, verás la fuente de sistema.</p>
+
+      <section class="sample font-isidora">
+        <div class="label">Isidora (requiere archivos .woff2 y @font-face)</div>
+        <div class="line">Título: Sistema De Cotizaciones Optiexpress</div>
+        <div class="line">Texto: Lorem ipsum dolor sit amet, 1234567890.</div>
+      </section>
+
+      <section class="sample font-system">
+        <div class="label">System UI (Windows: Segoe UI)</div>
+        <div class="line">Título: Sistema De Cotizaciones Optiexpress</div>
+        <div class="line">Texto: Lorem ipsum dolor sit amet, 1234567890.</div>
+      </section>
+
+      <section class="sample font-segoe">
+        <div class="label">Segoe UI</div>
+        <div class="line">Título: Sistema De Cotizaciones Optiexpress</div>
+        <div class="line">Texto: Lorem ipsum dolor sit amet, 1234567890.</div>
+      </section>
+
+      <section class="sample font-roboto">
+        <div class="label">Roboto</div>
+        <div class="line">Título: Sistema De Cotizaciones Optiexpress</div>
+        <div class="line">Texto: Lorem ipsum dolor sit amet, 1234567890.</div>
+      </section>
+
+      <section class="sample font-sans">
+        <div class="label">Sans-serif (genérico)</div>
+        <div class="line">Título: Sistema De Cotizaciones Optiexpress</div>
+        <div class="line">Texto: Lorem ipsum dolor sit amet, 1234567890.</div>
+      </section>
+    </main>
+  </body>
+  </html>

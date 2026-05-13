@@ -1,0 +1,615 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0" />
+  <title>Portal de Soporte - Optiexpress</title>
+  <style>
+    *, *::before, *::after {
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      margin: 0;
+      min-height: 100dvh;
+      min-height: -webkit-fill-available;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 22px;
+      background-position: center;
+      background-size: cover;
+      background-repeat: no-repeat;
+      position: relative;
+      overflow-x: hidden;
+      -webkit-tap-highlight-color: transparent;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(15,32,87,.45) 0%, rgba(14,122,181,.32) 100%);
+      pointer-events: none;
+    }
+    .wrap {
+      position: relative;
+      z-index: 2;
+      width: 100%;
+      max-width: 760px;
+      margin-left: auto;
+      margin-right: auto;
+      background: rgba(255,255,255,0.14);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255,255,255,0.28);
+      border-radius: 18px;
+      padding: 24px;
+      box-shadow: 0 10px 40px rgba(0,0,0,.28);
+    }
+    .app-header {
+      display: none;
+    }
+    h1 { margin: 0 0 10px; font-size: 1.2rem; color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.22); text-align: center; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    label { font-size: .85rem; color: rgba(255,255,255,.92); display:block; margin-bottom: 4px; font-weight: 600; }
+    input, select, textarea { width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 8px; padding: 9px; font-size: 14px; }
+    input, select { height: 42px; }
+    textarea { min-height: 120px; resize: vertical; }
+    .full { grid-column: 1 / -1; }
+    button { background: linear-gradient(135deg, rgba(14,165,233,.95) 0%, rgba(6,100,175,.95) 100%); border: 0; color: #fff; border-radius: 10px; padding: 12px 14px; cursor: pointer; font-weight: 700; min-height: 44px; }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    .ok { color: #166534; background: #dcfce7; border: 1px solid #86efac; border-radius: 8px; padding: 8px; margin-top: 10px; }
+    .err { color: #991b1b; background: #fee2e2; border: 1px solid #fca5a5; border-radius: 8px; padding: 8px; margin-top: 10px; }
+    .logo-wrap { display: flex; justify-content: center; margin-bottom: 14px; }
+    .logo-wrap img { max-width: 190px; height: auto; object-fit: contain; }
+    .section-title {
+      margin: 10px 0 6px;
+      color: rgba(255,255,255,.9);
+      font-size: .78rem;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      font-weight: 700;
+    }
+    .submit-sticky {
+      display: none;
+    }
+    .files-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .files-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-top: 4px;
+    }
+    .attach-btn {
+      min-height: 34px;
+      height: 34px;
+      min-width: 120px;
+      width: auto;
+      padding: 6px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,.35);
+      background: rgba(255,255,255,.18);
+      color: #fff;
+      font-size: .84rem;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: none;
+    }
+    .attach-btn:hover {
+      background: rgba(255,255,255,.24);
+    }
+    .file-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(255,255,255,.9);
+      color: #0f172a;
+      border: 1px solid #cbd5e1;
+      border-radius: 999px;
+      padding: 5px 8px 5px 10px;
+      font-size: .78rem;
+      max-width: 100%;
+    }
+    .file-chip span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 210px;
+    }
+    .file-chip button {
+      min-height: 20px;
+      height: 20px;
+      min-width: 20px;
+      width: 20px;
+      border-radius: 50%;
+      padding: 0;
+      border: none;
+      background: #e2e8f0;
+      color: #334155;
+      font-weight: 800;
+      line-height: 1;
+      cursor: pointer;
+      box-shadow: none;
+    }
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 40;
+      background: rgba(2, 6, 23, .55);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    .modal-card {
+      width: 100%;
+      max-width: 420px;
+      background: #fff;
+      border-radius: 14px;
+      padding: 18px;
+      box-shadow: 0 14px 35px rgba(0,0,0,.28);
+      border: 1px solid #e2e8f0;
+    }
+    .modal-title {
+      margin: 0 0 8px;
+      font-size: 1.02rem;
+      font-weight: 800;
+      color: #0f172a;
+    }
+    .modal-body {
+      margin: 0 0 14px;
+      color: #334155;
+      font-size: .92rem;
+      line-height: 1.4;
+      white-space: pre-line;
+    }
+    .modal-ok .modal-title { color: #166534; }
+    .modal-err .modal-title { color: #991b1b; }
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+    }
+    .modal-actions button {
+      min-height: 40px;
+      padding: 8px 14px;
+    }
+    @media (max-width: 900px) {
+      .wrap {
+        max-width: 680px;
+      }
+      .grid { grid-template-columns: 1fr; gap: 12px; }
+      .full {
+        grid-column: auto;
+      }
+    }
+    @media (max-width: 640px) {
+      html, body {
+        width: 100%;
+        max-width: 100%;
+        overflow-x: hidden;
+      }
+      body {
+        padding: 0;
+        align-items: center;
+        justify-content: center;
+        min-height: 100dvh;
+        min-height: -webkit-fill-available;
+      }
+      .app-header {
+        display: none;
+      }
+      .wrap {
+        width: calc(100vw - 24px);
+        max-width: 420px;
+        margin: 16px auto calc(16px + env(safe-area-inset-bottom));
+        border-radius: 16px;
+        padding: 18px 16px 84px;
+      }
+      h1 {
+        font-size: 1rem;
+      }
+      label {
+        font-size: .82rem;
+      }
+      input, select {
+        height: 44px;
+      }
+      input, select, textarea {
+        font-size: 16px;
+      }
+      textarea {
+        min-height: 110px;
+      }
+      .logo-wrap {
+        margin-bottom: 10px;
+      }
+      .logo-wrap img {
+        max-width: 160px;
+      }
+      button {
+        width: 100%;
+        min-height: 44px;
+      }
+      .submit-inline {
+        display: none;
+      }
+      .files-row {
+        align-items: stretch;
+      }
+      .attach-btn {
+        width: 100%;
+        min-height: 42px;
+      }
+      .submit-sticky {
+        display: block;
+        position: fixed;
+        left: 0;
+        right: 0;
+        width: 100%;
+        bottom: 0;
+        z-index: 7;
+        padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+        box-sizing: border-box;
+        background: linear-gradient(180deg, rgba(15,23,42,0) 0%, rgba(15,23,42,.58) 26%, rgba(15,23,42,.72) 100%);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+      }
+      .submit-sticky button {
+        box-shadow: 0 8px 24px rgba(0,0,0,.26);
+      }
+      .modal-card {
+        max-width: 360px;
+      }
+    }
+  </style>
+  <link rel="icon" type="image/png" href="/api/v1/soporte/portal/favicon.png">
+  <link rel="apple-touch-icon" href="/api/v1/soporte/portal/favicon.png">
+  <link rel="apple-touch-icon" sizes="57x57"   href="/api/v1/soporte/portal/favicon.png">
+  <link rel="apple-touch-icon" sizes="72x72"   href="/api/v1/soporte/portal/favicon.png">
+  <link rel="apple-touch-icon" sizes="76x76"   href="/api/v1/soporte/portal/favicon.png">
+  <link rel="apple-touch-icon" sizes="114x114" href="/api/v1/soporte/portal/favicon.png">
+  <link rel="apple-touch-icon" sizes="120x120" href="/api/v1/soporte/portal/favicon.png">
+  <link rel="apple-touch-icon" sizes="144x144" href="/api/v1/soporte/portal/favicon.png">
+  <link rel="apple-touch-icon" sizes="152x152" href="/api/v1/soporte/portal/favicon.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/api/v1/soporte/portal/favicon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Soporte TI">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="application-name" content="Soporte TI">
+</head>
+<body>
+  <div class="app-header">
+    <img src="/api/v1/soporte/portal/logo" alt="Grupo Cristal" />
+  </div>
+  <div class="wrap">
+    <div class="logo-wrap">
+      <img src="/api/v1/soporte/portal/logo" alt="Grupo Cristal" />
+    </div>
+    <h1>Ticket de soporte de sistema</h1>
+    <p style="margin-top:0;color:rgba(255,255,255,.84);font-size:.9rem;text-align:center;">Ingresa con tu <strong>número de empleado</strong> y <strong>contraseña</strong> del sistema. Tu empresa y área se tomarán de tu registro.</p>
+    <form id="frm" novalidate>
+      <div class="grid">
+        <div class="full">
+          <p class="section-title">Identificación</p>
+        </div>
+        <div><label>Empresa *</label>
+          <select id="empresa" required>
+            <option value="">Cargando empresas...</option>
+          </select>
+        </div>
+        <div><label>Usuario de sistema *</label>
+          <input id="usuario" type="text" required autocomplete="username" placeholder="Tu usuario del sistema" />
+        </div>
+        <div class="full"><label>Contraseña *</label>
+          <input id="password" type="password" required autocomplete="current-password" placeholder="La misma que usas en el sistema" />
+        </div>
+        <div class="full">
+          <p class="section-title">Solicitud</p>
+        </div>
+        <div><label>Prioridad</label>
+          <select id="prioridad">
+            <option value="baja">Baja</option>
+            <option value="media" selected>Media</option>
+            <option value="alta">Alta</option>
+            <option value="critica">Crítica</option>
+          </select>
+        </div>
+        <div><label>Categoría *</label>
+          <select id="clase_id" required>
+            <option value="">Cargando categorías...</option>
+          </select>
+        </div>
+        <div><label>Tipo de ticket *</label>
+          <select id="tipo_ticket_id" required disabled>
+            <option value="">Selecciona una categoría primero</option>
+          </select>
+        </div>
+        <div class="full"><label>Título *</label><input id="titulo" required /></div>
+        <div class="full"><label>Descripción *</label><textarea id="descripcion" required></textarea></div>
+        <div class="full">
+          <label>Adjuntos (imagen/documento, opcional)</label>
+          <input id="adjuntos" type="file" multiple accept=".png,.jpg,.jpeg,.webp,.pdf,.doc,.docx,.xls,.xlsx,.txt" style="display:none;" />
+          <div class="files-row">
+            <button id="adjuntos-trigger" type="button" class="attach-btn">Adjuntar archivos</button>
+            <div id="files-list" class="files-list"></div>
+          </div>
+        </div>
+      </div>
+      <div class="submit-inline" style="margin-top:12px;"><button id="btn-submit" type="submit" disabled>Enviar ticket</button></div>
+    </form>
+  </div>
+  <div class="submit-sticky">
+    <button id="btn-submit-sticky" type="button" disabled>Enviar ticket</button>
+  </div>
+  <div id="result-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-hidden="true">
+    <div id="result-modal-card" class="modal-card">
+      <h3 id="result-modal-title" class="modal-title">Aviso</h3>
+      <p id="result-modal-body" class="modal-body"></p>
+      <div class="modal-actions">
+        <button id="result-modal-close" type="button">Aceptar</button>
+      </div>
+    </div>
+  </div>
+  <script>
+    const frm = document.getElementById('frm');
+    const submitBtn = document.getElementById('btn-submit');
+    const submitBtnSticky = document.getElementById('btn-submit-sticky');
+    const resultModal = document.getElementById('result-modal');
+    const resultModalCard = document.getElementById('result-modal-card');
+    const resultModalTitle = document.getElementById('result-modal-title');
+    const resultModalBody = document.getElementById('result-modal-body');
+    const resultModalClose = document.getElementById('result-modal-close');
+    const tipoSelect = document.getElementById('tipo_ticket_id');
+    const claseSelect = document.getElementById('clase_id');
+    const empresaSelect = document.getElementById('empresa');
+    const numeroEmpleadoInput = document.getElementById('usuario');
+    const passwordInput = document.getElementById('password');
+    const tituloInput = document.getElementById('titulo');
+    const descripcionInput = document.getElementById('descripcion');
+    const adjuntosInput = document.getElementById('adjuntos');
+    const adjuntosTrigger = document.getElementById('adjuntos-trigger');
+    const filesList = document.getElementById('files-list');
+    let selectedFiles = [];
+
+    if (adjuntosTrigger) {
+      adjuntosTrigger.addEventListener('click', () => adjuntosInput.click());
+    }
+
+    function actualizarEstadoSubmit() {
+      const listo =
+        !!empresaSelect.value &&
+        !!(numeroEmpleadoInput.value || '').trim() &&
+        !!(passwordInput.value || '').trim() &&
+        !!claseSelect.value &&
+        !!tipoSelect.value &&
+        !!tituloInput.value.trim() &&
+        !!descripcionInput.value.trim();
+      submitBtn.disabled = !listo;
+      if (submitBtnSticky) submitBtnSticky.disabled = !listo;
+    }
+
+    if (submitBtnSticky) {
+      submitBtnSticky.addEventListener('click', () => frm.requestSubmit());
+    }
+
+    function syncFileInputFromSelection() {
+      const dt = new DataTransfer();
+      selectedFiles.forEach((f) => dt.items.add(f));
+      adjuntosInput.files = dt.files;
+    }
+
+    function renderSelectedFiles() {
+      if (!filesList) return;
+      filesList.innerHTML = '';
+      selectedFiles.forEach((file, idx) => {
+        const chip = document.createElement('div');
+        chip.className = 'file-chip';
+        const name = document.createElement('span');
+        name.textContent = file.name;
+        chip.appendChild(name);
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.setAttribute('aria-label', `Quitar ${file.name}`);
+        remove.textContent = 'x';
+        remove.addEventListener('click', () => {
+          selectedFiles.splice(idx, 1);
+          syncFileInputFromSelection();
+          renderSelectedFiles();
+        });
+        chip.appendChild(remove);
+        filesList.appendChild(chip);
+      });
+    }
+
+    adjuntosInput.addEventListener('change', () => {
+      const incoming = Array.from(adjuntosInput.files || []);
+      if (!incoming.length) return;
+      selectedFiles = [...selectedFiles, ...incoming];
+      syncFileInputFromSelection();
+      renderSelectedFiles();
+    });
+
+    function mostrarModalResultado(tipo, titulo, mensaje) {
+      resultModalTitle.textContent = titulo;
+      resultModalBody.textContent = mensaje;
+      resultModalCard.classList.remove('modal-ok', 'modal-err');
+      resultModalCard.classList.add(tipo === 'ok' ? 'modal-ok' : 'modal-err');
+      resultModal.style.display = 'flex';
+      resultModal.setAttribute('aria-hidden', 'false');
+    }
+
+    function cerrarModalResultado() {
+      resultModal.style.display = 'none';
+      resultModal.setAttribute('aria-hidden', 'true');
+    }
+
+    resultModalClose.addEventListener('click', cerrarModalResultado);
+    resultModal.addEventListener('click', (e) => {
+      if (e.target === resultModal) cerrarModalResultado();
+    });
+
+    async function aplicarFondoAleatorio() {
+      try {
+        const r = await fetch('/api/v1/soporte/portal/backgrounds');
+        const data = await r.json();
+        if (!r.ok) throw new Error('No se pudo cargar fondos');
+        const items = Array.isArray(data?.items) ? data.items : [];
+        if (!items.length) return;
+        const pick = items[Math.floor(Math.random() * items.length)];
+        document.body.style.backgroundImage = `url('${pick}')`;
+      } catch {
+        document.body.style.background = 'linear-gradient(135deg, #0f2057 0%, #1a4a8a 40%, #0e7ab5 70%, #0ea5c9 100%)';
+      }
+    }
+    aplicarFondoAleatorio();
+
+    async function cargarCatalogoEmpresas() {
+      try {
+        const r = await fetch('/api/v1/soporte/portal/catalogo');
+        const data = await r.json();
+        if (!r.ok) throw new Error('No se pudo cargar catálogo');
+        const empresas = Array.isArray(data?.empresas) ? data.empresas : [];
+        if (!empresas.length) {
+          empresaSelect.innerHTML = '<option value="">No hay empresas disponibles</option>';
+          return;
+        }
+        empresaSelect.innerHTML = '<option value="">Seleccionar empresa</option>' +
+          empresas.map((e) => `<option value="${e.id}">${e.nombre}</option>`).join('');
+      } catch {
+        empresaSelect.innerHTML = '<option value="">Error al cargar empresas</option>';
+      }
+    }
+
+    async function cargarClases() {
+      try {
+        const r = await fetch('/api/v1/soporte/portal/clases');
+        const clases = await r.json();
+        if (!r.ok) throw new Error('No se pudo cargar categorías');
+        const items = Array.isArray(clases) ? clases : [];
+        if (!items.length) {
+          claseSelect.innerHTML = '<option value="">No hay categorías configuradas</option>';
+          return;
+        }
+        claseSelect.innerHTML = '<option value="">Seleccionar categoría</option>' +
+          items.map((c) => `<option value="${c.id}">${c.nombre}</option>`).join('');
+      } catch {
+        claseSelect.innerHTML = '<option value="">Error al cargar categorías</option>';
+      }
+    }
+
+    async function cargarTiposPorClase(claseId) {
+      tipoSelect.innerHTML = '<option value="">Cargando tipos...</option>';
+      tipoSelect.disabled = true;
+      try {
+        const url = claseId ? `/api/v1/soporte/portal/tipos?clase_id=${claseId}` : '/api/v1/soporte/portal/tipos';
+        const r = await fetch(url);
+        const tipos = await r.json();
+        if (!r.ok) throw new Error('No se pudo cargar tipos');
+        const items = Array.isArray(tipos) ? tipos : [];
+        if (!items.length) {
+          tipoSelect.innerHTML = '<option value="">No hay tipos en esta categoría</option>';
+        } else {
+          tipoSelect.innerHTML = '<option value="">Seleccionar tipo</option>' +
+            items.map((t) => `<option value="${t.id}">${t.nombre}</option>`).join('');
+          tipoSelect.disabled = false;
+        }
+      } catch {
+        tipoSelect.innerHTML = '<option value="">Error al cargar tipos</option>';
+      }
+      actualizarEstadoSubmit();
+    }
+
+    claseSelect.addEventListener('change', () => {
+      const claseId = claseSelect.value;
+      tipoSelect.value = '';
+      if (claseId) {
+        cargarTiposPorClase(claseId);
+      } else {
+        tipoSelect.innerHTML = '<option value="">Selecciona una categoría primero</option>';
+        tipoSelect.disabled = true;
+      }
+      actualizarEstadoSubmit();
+    });
+
+    cargarCatalogoEmpresas();
+    cargarClases();
+
+    empresaSelect.addEventListener('change', actualizarEstadoSubmit);
+    numeroEmpleadoInput.addEventListener('input', actualizarEstadoSubmit);
+    passwordInput.addEventListener('input', actualizarEstadoSubmit);
+    claseSelect.addEventListener('change', actualizarEstadoSubmit);
+    tipoSelect.addEventListener('change', actualizarEstadoSubmit);
+    tituloInput.addEventListener('input', actualizarEstadoSubmit);
+    descripcionInput.addEventListener('input', actualizarEstadoSubmit);
+    actualizarEstadoSubmit();
+
+    frm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      actualizarEstadoSubmit();
+      if (submitBtn.disabled) {
+        mostrarModalResultado('err', 'Faltan datos', 'Completa todos los campos obligatorios para enviar el ticket.');
+        return;
+      }
+      const empresaId = Number(empresaSelect.value);
+      const body = {
+        empresa_id: empresaId,
+        usuario: (numeroEmpleadoInput.value || '').trim(),
+        password: passwordInput.value,
+
+        titulo: document.getElementById('titulo').value.trim(),
+        descripcion: document.getElementById('descripcion').value.trim(),
+        prioridad: document.getElementById('prioridad').value,
+        tipo_ticket_id: Number(document.getElementById('tipo_ticket_id').value) || null,
+      };
+      try {
+        const r = await fetch('/api/v1/soporte/portal/tickets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data?.detail || 'Error al crear ticket');
+        const files = [...selectedFiles];
+        let uploaded = 0;
+        if (files.length > 0) {
+          const formData = new FormData();
+          files.forEach((f) => formData.append('files', f));
+          const up = await fetch(`/api/v1/soporte/portal/tickets/${data.id}/adjuntos`, {
+            method: 'POST',
+            body: formData,
+          });
+          const upData = await up.json().catch(() => ({}));
+          if (!up.ok) throw new Error(upData?.detail || 'Ticket creado, pero falló la carga de adjuntos');
+          uploaded = Array.isArray(upData) ? upData.length : 0;
+        }
+        mostrarModalResultado(
+          'ok',
+          'Ticket registrado',
+          `Folio: ${data.folio}${uploaded ? `\nAdjuntos cargados: ${uploaded}` : ''}`
+        );
+        frm.reset();
+        passwordInput.value = '';
+        numeroEmpleadoInput.value = '';
+        tipoSelect.innerHTML = '<option value="">Selecciona una categoría primero</option>';
+        tipoSelect.disabled = true;
+        selectedFiles = [];
+        syncFileInputFromSelection();
+        renderSelectedFiles();
+        actualizarEstadoSubmit();
+      } catch (err) {
+        const texto = (err && typeof err === 'object' && 'message' in err)
+          ? String(err.message || 'Error')
+          : 'Error';
+        mostrarModalResultado('err', 'No se pudo registrar', texto);
+      }
+    });
+  </script>
+</body>
+</html>

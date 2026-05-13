@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import api from '../../services/api';
 import { Asistencia, Dispositivo, Empleado } from '../../types';
 import { parseTimestampForMexico, toMexicoDateString } from '../../utils/date';
@@ -9,6 +9,8 @@ interface AsistenciaConEmpleado extends Asistencia {
   dispositivo?: Dispositivo;
 }
 
+const FILAS_POR_PAGINA = 50;
+
 export const AsistenciaPage = () => {
   const [checadas, setChecadas] = useState<AsistenciaConEmpleado[]>([]);
   const [dispositivos, setDispositivos] = useState<Dispositivo[]>([]);
@@ -16,6 +18,7 @@ export const AsistenciaPage = () => {
   const [loading, setLoading] = useState(true);
   const hoy = toMexicoDateString(new Date());
   const [filtros, setFiltros] = useState({ empleado_id: '', dispositivo_id: '', fecha_inicio: hoy, fecha_fin: hoy });
+  const [pagina, setPagina] = useState(1);
   const filtrosRef = useRef(filtros);
   filtrosRef.current = filtros;
 
@@ -34,10 +37,13 @@ export const AsistenciaPage = () => {
       if (f.dispositivo_id) params.append('dispositivo_id', f.dispositivo_id);
       if (f.fecha_inicio) params.append('fecha_inicio', f.fecha_inicio + 'T00:00:00');
       if (f.fecha_fin) params.append('fecha_fin', f.fecha_fin + 'T23:59:59');
+      const empleadosParams = new URLSearchParams();
+      empleadosParams.set('limit', '5000');
+      empleadosParams.set('incluir_exentos', 'true');
       const [checadasRes, dispositivosRes, empleadosRes] = await Promise.all([
         api.get(`/asistencia/checadas?${params.toString()}`),
         api.get('/asistencia/devices'),
-        api.get('/personal/empleados'),
+        api.get(`/personal/empleados?${empleadosParams.toString()}`),
       ]);
       setChecadas(checadasRes.data);
       setDispositivos(dispositivosRes.data);
@@ -50,6 +56,7 @@ export const AsistenciaPage = () => {
   };
 
   const handleFiltros = () => {
+    setPagina(1);
     setLoading(true);
     loadData();
   };
@@ -110,7 +117,7 @@ export const AsistenciaPage = () => {
     return `${h}h ${m}m`;
   };
 
-  const dayRows: DayRow[] = (() => {
+  const dayRows: DayRow[] = useMemo(() => {
     const map = new Map<string, DayRow>();
     for (const c of checadas) {
       const d = parseTimestampForMexico(c.timestamp);
@@ -119,8 +126,8 @@ export const AsistenciaPage = () => {
       const empNombre = getEmpleadoNombre(c);
       const emp = empleados.find(e => e.id === c.empleado_id);
       const numeroEmp = emp?.numero_empleado ?? c.empleado_numero ?? '-';
-      const depto = emp?.departamento?.nombre || '-';
-      const empresaNombre = emp?.empresa?.nombre || '-';
+      const depto = emp?.departamento?.nombre || c.departamento_nombre || '-';
+      const empresaNombre = emp?.empresa?.nombre || c.empresa_nombre || '-';
       const key = `${c.empleado_id}_${fechaSort}`;
       if (!map.has(key)) {
         map.set(key, { key, numeroEmpleado: String(numeroEmp), empleadoNombre: empNombre, empresa: empresaNombre, departamento: depto, fecha: fechaStr, fechaSort, esTiempoExtra: false, totalHoras: '--' });
@@ -141,7 +148,16 @@ export const AsistenciaPage = () => {
     const list = Array.from(map.values());
     list.forEach(row => { row.totalHoras = calcularHorasDelDia(row); });
     return list.sort((a, b) => b.fechaSort.localeCompare(a.fechaSort) || a.empleadoNombre.localeCompare(b.empleadoNombre));
-  })();
+  }, [checadas, empleados]);
+
+  const totalPaginas = Math.max(1, Math.ceil(dayRows.length / FILAS_POR_PAGINA));
+  const paginaSegura = Math.min(pagina, totalPaginas);
+  const inicio = (paginaSegura - 1) * FILAS_POR_PAGINA;
+  const dayRowsPagina = dayRows.slice(inicio, inicio + FILAS_POR_PAGINA);
+
+  useEffect(() => {
+    setPagina(p => Math.min(p, totalPaginas));
+  }, [totalPaginas]);
 
   if (loading && checadas.length === 0) return <div style={{ padding: '20px' }}>Cargando...</div>;
 
@@ -202,6 +218,32 @@ export const AsistenciaPage = () => {
         <p style={{ color: '#666', textAlign: 'center', padding: '40px 0' }}>No hay checadas registradas.</p>
       ) : (
         <div style={{ overflowX: 'auto' }}>
+          {dayRows.length > FILAS_POR_PAGINA && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', marginBottom: '12px', padding: '0 4px' }}>
+              <span style={{ color: '#555', fontSize: '0.9rem' }}>
+                Mostrando {inicio + 1}–{Math.min(inicio + FILAS_POR_PAGINA, dayRows.length)} de {dayRows.length} registros
+              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <button
+                  type="button"
+                  disabled={paginaSegura <= 1}
+                  onClick={() => setPagina(p => Math.max(1, p - 1))}
+                  style={{ padding: '6px 14px', border: '1px solid #ccc', borderRadius: '6px', background: paginaSegura <= 1 ? '#f5f5f5' : 'white', cursor: paginaSegura <= 1 ? 'not-allowed' : 'pointer' }}
+                >
+                  Anterior
+                </button>
+                <span style={{ color: '#333', fontSize: '0.9rem' }}>Página {paginaSegura} de {totalPaginas}</span>
+                <button
+                  type="button"
+                  disabled={paginaSegura >= totalPaginas}
+                  onClick={() => setPagina(p => Math.min(totalPaginas, p + 1))}
+                  style={{ padding: '6px 14px', border: '1px solid #ccc', borderRadius: '6px', background: paginaSegura >= totalPaginas ? '#f5f5f5' : 'white', cursor: paginaSegura >= totalPaginas ? 'not-allowed' : 'pointer' }}
+                >
+                  Siguiente
+                </button>
+              </div>
+            </div>
+          )}
           <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
             <thead>
               <tr style={{ backgroundColor: '#f8f9fa' }}>
@@ -218,7 +260,7 @@ export const AsistenciaPage = () => {
               </tr>
             </thead>
             <tbody>
-              {dayRows.map(row => (
+              {dayRowsPagina.map(row => (
                 <tr key={row.key} style={{
                   borderBottom: '1px solid #eee',
                   backgroundColor: row.esTiempoExtra ? '#fff8e1' : 'transparent',

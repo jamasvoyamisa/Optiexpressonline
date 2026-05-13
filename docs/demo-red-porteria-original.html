@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Demo red porteria (original)</title>
+  <style>
+    body{margin:0;padding:24px;font-family:Inter,system-ui;background:#081226;color:#e9f4ff}
+    h1{margin:0 0 8px}.sub{margin:0 0 16px;color:#9cb3c7}
+    .card{border:1px solid #2a3f66;border-radius:12px;overflow:hidden;margin-bottom:14px}
+    .head{padding:10px 12px;background:#0d1b34}.head p{margin:4px 0 0;color:#9cb3c7}
+    canvas{display:block;width:100%;height:320px;background:#030918}
+  </style>
+</head>
+<body>
+  <h1>Demo: Red tipo porteria (2 propuestas)</h1>
+  <p class="sub">Version original base.</p>
+  <section class="card">
+    <div class="head"><strong>Propuesta A - Malla geometrica</strong><p>Cuadricula uniforme con perspectiva</p></div>
+    <canvas id="canvasGrid"></canvas>
+  </section>
+  <section class="card">
+    <div class="head"><strong>Propuesta B - Red elastica</strong><p>Nodos conectados con efecto tension</p></div>
+    <canvas id="canvasNodes"></canvas>
+  </section>
+  <script>
+  (function () {
+    const canvas = document.getElementById('canvasGrid');
+    const ctx = canvas.getContext('2d');
+    const mouse = {x:-9999,y:-9999};
+    function resize(){const dpr=Math.min(window.devicePixelRatio||1,2);canvas.width=Math.floor(canvas.clientWidth*dpr);canvas.height=Math.floor(canvas.clientHeight*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);}
+    function draw(t){
+      const w=canvas.clientWidth,h=canvas.clientHeight;
+      ctx.clearRect(0,0,w,h);
+      const cols=34,rows=16,sx=w/cols,sy=h/rows,radius=90,force=16;
+      ctx.strokeStyle='rgba(190,230,255,.65)';ctx.shadowColor='rgba(126,203,255,.55)';ctx.shadowBlur=8;ctx.lineWidth=1;
+      for(let c=0;c<=cols;c++){ctx.beginPath();for(let r=0;r<=rows;r++){let x=c*sx,y=r*sy;const depth=Math.sin((r/rows)*Math.PI)*8;x+=(c-cols/2)*0.04*depth;const dx=x-mouse.x,dy=y-mouse.y,d=Math.hypot(dx,dy);if(d<radius){const k=1-d/radius;x+=(dx/(d||1))*k*force;y+=(dy/(d||1))*k*force;}y+=Math.sin(t*0.0015+c*0.2+r*0.15)*1.2;if(r===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);}ctx.stroke();}
+      for(let r=0;r<=rows;r++){ctx.beginPath();for(let c=0;c<=cols;c++){let x=c*sx,y=r*sy;const depth=Math.sin((r/rows)*Math.PI)*8;x+=(c-cols/2)*0.04*depth;const dx=x-mouse.x,dy=y-mouse.y,d=Math.hypot(dx,dy);if(d<radius){const k=1-d/radius;x+=(dx/(d||1))*k*force;y+=(dy/(d||1))*k*force;}y+=Math.sin(t*0.0015+c*0.2+r*0.15)*1.2;if(c===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);}ctx.stroke();}
+      requestAnimationFrame(draw);
+    }
+    canvas.addEventListener('mousemove',e=>{const r=canvas.getBoundingClientRect();mouse.x=e.clientX-r.left;mouse.y=e.clientY-r.top;});
+    canvas.addEventListener('mouseleave',()=>{mouse.x=-9999;mouse.y=-9999;});
+    window.addEventListener('resize',resize);resize();requestAnimationFrame(draw);
+  })();
+  (function () {
+    const canvas = document.getElementById('canvasNodes');
+    const ctx = canvas.getContext('2d');
+    const mouse = {x:-9999,y:-9999};let nodes=[];
+    const COLS=28,ROWS=13,SPRING=.08,DAMP=.86,PUSH_RADIUS=95,PUSH_FORCE=1.5;
+    function idx(c,r){return r*(COLS+1)+c;}
+    function resize(){const dpr=Math.min(window.devicePixelRatio||1,2);canvas.width=Math.floor(canvas.clientWidth*dpr);canvas.height=Math.floor(canvas.clientHeight*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);const w=canvas.clientWidth,h=canvas.clientHeight,sx=w/COLS,sy=h/ROWS;nodes=[];for(let r=0;r<=ROWS;r++)for(let c=0;c<=COLS;c++){const x=c*sx,y=r*sy;nodes.push({ox:x,oy:y,x,y,vx:0,vy:0});}}
+    function update(){for(const n of nodes){n.vx+=(n.ox-n.x)*SPRING;n.vy+=(n.oy-n.y)*SPRING;const dx=n.x-mouse.x,dy=n.y-mouse.y,d=Math.hypot(dx,dy);if(d<PUSH_RADIUS){const k=1-d/PUSH_RADIUS;n.vx+=(dx/(d||1))*k*PUSH_FORCE;n.vy+=(dy/(d||1))*k*PUSH_FORCE;}n.vx*=DAMP;n.vy*=DAMP;n.x+=n.vx;n.y+=n.vy;}}
+    function draw(){const w=canvas.clientWidth,h=canvas.clientHeight;ctx.clearRect(0,0,w,h);ctx.strokeStyle='rgba(150,220,255,.62)';ctx.lineWidth=1;ctx.shadowColor='rgba(100,180,255,.45)';ctx.shadowBlur=7;for(let r=0;r<=ROWS;r++){ctx.beginPath();for(let c=0;c<=COLS;c++){const n=nodes[idx(c,r)];if(c===0)ctx.moveTo(n.x,n.y);else ctx.lineTo(n.x,n.y);}ctx.stroke();}for(let c=0;c<=COLS;c++){ctx.beginPath();for(let r=0;r<=ROWS;r++){const n=nodes[idx(c,r)];if(r===0)ctx.moveTo(n.x,n.y);else ctx.lineTo(n.x,n.y);}ctx.stroke();}}
+    function loop(){update();draw();requestAnimationFrame(loop);}
+    canvas.addEventListener('mousemove',e=>{const r=canvas.getBoundingClientRect();mouse.x=e.clientX-r.left;mouse.y=e.clientY-r.top;});
+    canvas.addEventListener('mouseleave',()=>{mouse.x=-9999;mouse.y=-9999;});
+    window.addEventListener('resize',resize);resize();requestAnimationFrame(loop);
+  })();
+  </script>
+</body>
+</html>

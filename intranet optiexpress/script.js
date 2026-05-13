@@ -1,7 +1,6 @@
 // Avisos: imágenes de la carpeta images/Avisos/
 const avisos = [
-    { imagen: 'images/Avisos/16 de marzo.jpeg', titulo: '16 de marzo' },
-    { imagen: 'images/Avisos/marzo.jpg', titulo: 'Marzo' },
+    { imagen: 'images/Avisos/cumpleanos-mayo.jpg', titulo: 'Cumpleaños mayo' },
     { imagen: 'images/Avisos/dias-feriados-oficiales.jpg', titulo: 'Días Feriados Oficiales' },
     { imagen: 'images/Avisos/dias-feriados-no-oficiales.jpg', titulo: 'Días Feriados No Oficiales' }
 ];
@@ -13,7 +12,28 @@ const promocionesActivas = [
     { imagen: 'images/promos/stock-eje-biofinity-torico.jpg', titulo: 'Stock Biofinity Tórico' }
 ];
 
-// Función para renderizar avisos (página Avisos e index)
+/**
+ * Cuántas imágenes cargar con prioridad (eager). Avisos tiene 4 ítems en grid;
+ * promociones suele tener 3. El resto va en lazy.
+ */
+const IMAGENES_PRIORITARIAS_GRID = 4;
+
+/**
+ * Prioriza carga de imágenes visibles (eager + fetchPriority) y difiere el resto (lazy).
+ */
+function configurarCargaImagen(img, index) {
+    img.decoding = 'async';
+    img.sizes = '(max-width: 768px) 96vw, min(33vw, 520px)';
+    if (index < IMAGENES_PRIORITARIAS_GRID) {
+        img.loading = 'eager';
+        img.fetchPriority = index === 0 ? 'high' : 'auto';
+    } else {
+        img.loading = 'lazy';
+        img.fetchPriority = 'low';
+    }
+}
+
+// Función para renderizar avisos (carrusel en la página de inicio)
 function renderizarAvisos() {
     const carouselWrapper = document.getElementById('carouselWrapper');
     if (!carouselWrapper) return;
@@ -24,15 +44,13 @@ function renderizarAvisos() {
     }
     avisos.forEach((item, index) => {
         const slide = document.createElement('div');
-        slide.className = 'carousel-slide';
-        slide.style.animationDelay = `${index * 0.5}s`;
+        slide.className = 'carousel-slide carousel-slide--avisos';
+        slide.style.animationDelay = `${index * 0.12}s`;
         const img = document.createElement('img');
         img.src = item.imagen;
         img.alt = item.titulo;
         img.className = 'promocion-imagen';
-        img.loading = index === 0 ? 'eager' : 'lazy';
-        if (index === 0) img.fetchPriority = 'high';
-        img.decoding = 'async';
+        configurarCargaImagen(img, index);
         img.onerror = function() { console.error('Error cargando imagen:', this.src); };
         const wrapper = document.createElement('div');
         wrapper.className = 'promocion-imagen-wrapper';
@@ -53,15 +71,13 @@ function renderizarPromocionesActivas() {
     }
     promocionesActivas.forEach((item, index) => {
         const slide = document.createElement('div');
-        slide.className = 'carousel-slide';
-        slide.style.animationDelay = `${index * 0.5}s`;
+        slide.className = 'carousel-slide carousel-slide--promos';
+        slide.style.animationDelay = `${index * 0.1}s`;
         const img = document.createElement('img');
         img.src = item.imagen;
         img.alt = item.titulo;
         img.className = 'promocion-imagen';
-        img.loading = index === 0 ? 'eager' : 'lazy';
-        if (index === 0) img.fetchPriority = 'high';
-        img.decoding = 'async';
+        configurarCargaImagen(img, index);
         img.onerror = function() { console.error('Error cargando imagen:', this.src); };
         const div = document.createElement('div');
         div.className = 'promocion-imagen-wrapper';
@@ -71,38 +87,124 @@ function renderizarPromocionesActivas() {
     });
 }
 
+/** Jubilación Arcelia Gómez Ibarra — landing. */
+const MOSTRAR_POPUP_JUBILACION_ARCELIA = true;
+/**
+ * Ventana en calendario México (YYYY-MM-DD): desde “hoy” de activación hasta “mañana” 23:59.
+ * Ajusta estas fechas si repites el aviso otro año.
+ */
+const JUBILACION_ARCELIA_DESDE_MX = '2026-04-29';
+const JUBILACION_ARCELIA_HASTA_MX = '2026-04-30';
+
+/** Día de las Madres 2026 — landing.
+ *  Visible del 7 al 10 de mayo de 2026 (jueves a domingo).
+ */
+const MOSTRAR_POPUP_DIA_MADRES_2026 = true;
+const DIA_MADRES_DESDE_MX = '2026-05-07';
+const DIA_MADRES_HASTA_MX = '2026-05-10';
+
+function _mexicoYmd(d = new Date()) {
+    return new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'America/Mexico_City',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+    }).format(d);
+}
+
+function popupJubilacionArceliaHabilitadoHoy() {
+    if (!MOSTRAR_POPUP_JUBILACION_ARCELIA) return false;
+    const ahoraMx = _mexicoYmd();
+    return ahoraMx >= JUBILACION_ARCELIA_DESDE_MX && ahoraMx <= JUBILACION_ARCELIA_HASTA_MX;
+}
+
+function popupDiaMadres2026HabilitadoHoy() {
+    if (!MOSTRAR_POPUP_DIA_MADRES_2026) return false;
+    const ahoraMx = _mexicoYmd();
+    return ahoraMx >= DIA_MADRES_DESDE_MX && ahoraMx <= DIA_MADRES_HASTA_MX;
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     renderizarAvisos();
     renderizarPromocionesActivas();
-    // Popup de cumpleaños solo en la página inicial (index)
+    // Popup de cumpleaños en la página de inicio
     const path = (window.location.pathname || '').replace(/\/$/, '') || '/';
-    if (path === '/' || path === '/index.html' || path.endsWith('index.html')) {
-        setTimeout(verificarCumpleaneros, 500); // breve delay para que la página cargue primero
+    const esIndex = path === '/' || path === '/index.html' || path.endsWith('index.html');
+    if (esIndex) {
+        if (popupJubilacionArceliaHabilitadoHoy()) {
+            setTimeout(mostrarPopupJubilacionArcelia, 2400);
+        }
+        const paramsLanding = new URLSearchParams(window.location.search || '');
+        const mostrarMadres = popupDiaMadres2026HabilitadoHoy() || paramsLanding.get('ver_madres') === '1';
+        if (mostrarMadres) {
+            // Día de las Madres PRIMERO; al cerrarse, lanzamos el popup de cumpleañeros.
+            setTimeout(() => mostrarPopupDiaMadres2026({ onCerrar: verificarCumpleaneros }), 800);
+        } else {
+            setTimeout(verificarCumpleaneros, 500);
+        }
     }
 });
 
 // ──────────────────────────────────────────────────────
 // Popup público de cumpleaños
 // ──────────────────────────────────────────────────────
-// En producción (mismo dominio) usa ruta relativa; en local usa backend en 9081
-const BACKEND_URL = (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1')
-    ? '' : 'http://localhost:9081';
+// Opcional: antes de cargar script.js → window.LANDING_API_BASE = 'https://tu-dominio' (sin / final)
+// En producción con nginx (mismo origen para /api) suele ir vacío. En local o LAN: puerto 9081 del mismo host.
+function getLandingApiBase() {
+    if (typeof window === 'undefined') return '';
+    if (typeof window.LANDING_API_BASE === 'string' && window.LANDING_API_BASE.trim()) {
+        return window.LANDING_API_BASE.replace(/\/$/, '');
+    }
+    const proto = window.location.protocol;
+    const h = window.location.hostname;
+    // Dominio público: API detrás del mismo host (nginx → backend)
+    if (h === 'intranetoptiexpress.net' || h === 'www.intranetoptiexpress.net') {
+        return '';
+    }
+    const loopback =
+        h === 'localhost' ||
+        h === '127.0.0.1' ||
+        h === '[::1]' ||
+        h === '';
+    const isPrivateLan =
+        /^10\.\d+\.\d+\.\d+$/.test(h) ||
+        /^192\.168\.\d+\.\d+$/.test(h) ||
+        /^172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+$/.test(h);
+    // Solo en dev típico (misma máquina o LAN): API en :9081. En producción con dominio, /api va por nginx (base '').
+    if (loopback || isPrivateLan) {
+        const host = h === '' ? '127.0.0.1' : h;
+        return `${proto}//${host}:9081`;
+    }
+    return '';
+}
+const BACKEND_URL = getLandingApiBase();
 
 async function verificarCumpleaneros() {
-    const hoy = new Date().toISOString().slice(0, 10);
+    const params = new URLSearchParams(window.location.search || '');
+    const forzarPopup = params.get('ver_cumple') === '1';
+    const debug = params.has('debug');
+    // Fecha en hora México (no UTC) para que la clave no se adelante entre 6pm y medianoche
+    const hoy = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' }); // YYYY-MM-DD
     const vistaKey = `cumpleanos_visto_${hoy}`;
-    if (sessionStorage.getItem(vistaKey)) return;
+    if (!forzarPopup && sessionStorage.getItem(vistaKey)) return;
 
+    const url = `${BACKEND_URL}/api/v1/landing/cumpleaneros-hoy`;
     try {
-        const res = await fetch(`${BACKEND_URL}/api/v1/landing/cumpleaneros-hoy`);
-        if (!res.ok) return;
+        const res = await fetch(url);
+        if (!res.ok) {
+            if (debug) console.warn('[landing] cumpleañeros HTTP', res.status, url);
+            return;
+        }
         const data = await res.json();
-        if (!data.cumpleaneros || data.cumpleaneros.length === 0) return;
+        if (!data.cumpleaneros || data.cumpleaneros.length === 0) {
+            if (debug) console.info('[landing] sin cumpleañeros hoy', data);
+            return;
+        }
 
-        sessionStorage.setItem(vistaKey, '1');
+        if (!forzarPopup) sessionStorage.setItem(vistaKey, '1');
         mostrarPopupCumpleanosPublico(data.cumpleaneros);
     } catch (e) {
-        // Silencioso: si el backend no responde no interrumpir la landing
+        if (debug) console.warn('[landing] cumpleañeros error', e, url);
     }
 }
 
@@ -260,4 +362,150 @@ function mostrarPopupCumpleanosPublico(personas) {
     });
 
     setTimeout(() => overlay.classList.add('activo'), 300);
+}
+
+// ──────────────────────────────────────────────────────
+// Popup jubilación — Arcelia Gómez Ibarra (landing)
+// ──────────────────────────────────────────────────────
+function mostrarPopupJubilacionArcelia() {
+    const params = new URLSearchParams(window.location.search || '');
+    const forzar = params.get('ver_jubilacion') === '1';
+    if (!forzar && !popupJubilacionArceliaHabilitadoHoy()) return;
+
+    const anterior = document.getElementById('jubilacionOverlay');
+    if (anterior) anterior.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'jubilacionOverlay';
+    overlay.className = 'jubi-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'jubi-titulo');
+    overlay.innerHTML = `
+    <div class="jubi-card">
+        <button type="button" class="jubi-cerrar" aria-label="Cerrar mensaje">✕</button>
+        <div class="jubi-festivo" aria-hidden="true">
+            <span class="jubi-confeti">✨</span>
+            <span class="jubi-confeti">🎉</span>
+            <span class="jubi-confeti">⭐</span>
+            <span class="jubi-confeti">🎊</span>
+            <span class="jubi-confeti">✨</span>
+            <span class="jubi-confeti">⭐</span>
+            <span class="jubi-confeti">🎉</span>
+        </div>
+        <div class="jubi-ornamento" aria-hidden="true">✦</div>
+        <p class="jubi-rubrica">A nombre de Distribuidora Europea</p>
+        <h2 id="jubi-titulo" class="jubi-titulo">Gracias por tu legado</h2>
+        <div class="jubi-cuerpo">
+            <p>Queremos expresar nuestro más sincero <strong>agradecimiento a Arcelia Gómez Ibarra</strong> por su entrega, profesionalismo y dedicación ejemplar.</p>
+            <p>Su trabajo ha sido un pilar fundamental para nuestra organización, y su calidad humana, un ejemplo para todos los que tuvimos el honor de trabajar a su lado.</p>
+            <p>Le deseamos una <strong>jubilación llena de paz, salud y momentos felices</strong>. Su huella permanece en nuestra empresa.</p>
+            <p class="jubi-cierre">¡Gracias por todo, Arcelia!</p>
+        </div>
+        <footer class="jubi-firma">
+            <span class="jubi-firma-line"></span>
+            <p>Atentamente,</p>
+            <p class="jubi-firma-bold">Dirección y Personal de Grupo Cristal</p>
+        </footer>
+        <div class="jubi-logo-wrap">
+            <img src="images/GPOCristal.png" alt="Grupo Cristal" class="jubi-logo" width="280" height="80" loading="lazy" decoding="async">
+        </div>
+    </div>`;
+
+    document.body.appendChild(overlay);
+
+    const cerrar = () => {
+        overlay.classList.remove('activo');
+        setTimeout(() => overlay.remove(), 350);
+    };
+    overlay.querySelector('.jubi-cerrar')?.addEventListener('click', cerrar);
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) cerrar();
+    });
+
+    requestAnimationFrame(() => overlay.classList.add('activo'));
+}
+
+// ──────────────────────────────────────────────────────
+// Popup Día de las Madres 2026 (landing)
+// ──────────────────────────────────────────────────────
+/**
+ * Muestra el popup de Día de las Madres. Acepta un callback opcional `onCerrar`
+ * que se ejecuta cuando el usuario cierra el modal (para encadenar el popup
+ * de cumpleañeros del día sin que se tapen entre sí).
+ */
+function mostrarPopupDiaMadres2026(opciones) {
+    const params = new URLSearchParams(window.location.search || '');
+    const forzar = params.get('ver_madres') === '1';
+    const onCerrar = (opciones && typeof opciones.onCerrar === 'function') ? opciones.onCerrar : null;
+    if (!forzar && !popupDiaMadres2026HabilitadoHoy()) {
+        // Si no se va a mostrar, igualmente continuamos la cadena (cumpleañeros).
+        if (onCerrar) onCerrar();
+        return;
+    }
+
+    const anterior = document.getElementById('diaMadres2026Overlay');
+    if (anterior) anterior.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'diaMadres2026Overlay';
+    overlay.className = 'mama-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'mama-titulo');
+    overlay.innerHTML = `
+    <div class="mama-card">
+        <button type="button" class="mama-cerrar" aria-label="Cerrar mensaje">✕</button>
+        <div class="mama-festivo" aria-hidden="true">
+            <span class="mama-petalo">🌸</span>
+            <span class="mama-petalo">🌷</span>
+            <span class="mama-petalo">💖</span>
+            <span class="mama-petalo">🌺</span>
+            <span class="mama-petalo">🌸</span>
+            <span class="mama-petalo">💐</span>
+            <span class="mama-petalo">🌷</span>
+            <span class="mama-petalo">✨</span>
+        </div>
+        <div class="mama-ornamento" aria-hidden="true">❀ ❀ ❀</div>
+        <p class="mama-rubrica">A todas las madres de Grupo Cristal</p>
+        <h2 id="mama-titulo" class="mama-titulo">Feliz Día de las Madres</h2>
+        <div class="mama-cuerpo">
+            <p><strong>Ser madre</strong> es transformar el tiempo en abrazos, los sueños en impulso para otros, y cada pequeño esfuerzo en amor incondicional. Es estar presente en las risas, en las ausencias, en la calma y en la tormenta. Es construir día a día un mundo mejor desde la ternura y la fortaleza.</p>
+            <p>En <strong>Grupo Cristal</strong> reconocemos y admiramos esa fuerza inmensa que llevas dentro. Sabemos que detrás de cada logro, de cada trabajo bien hecho, de cada meta alcanzada, hay historias de madres que también trasnocharon, madres que también soñaron para sus hijos, madres que supieron equilibrar el corazón y la responsabilidad.</p>
+            <p>Este <strong>10 de mayo</strong> no solo celebramos tu día, te agradecemos. Porque tu ejemplo nos recuerda que crecer como empresa también significa valorar lo que realmente importa: el amor, la entrega y la empatía.</p>
+            <p>Gracias por ser <em>fuente de vida, inspiración y equilibrio</em>. Desde nuestro equipo, te enviamos un respetuoso y cálido abrazo.</p>
+            <p class="mama-cierre">¡Feliz Día de las Madres!</p>
+        </div>
+        <footer class="mama-firma">
+            <span class="mama-firma-line"></span>
+            <p>Atentamente,</p>
+            <p class="mama-firma-bold">Dirección y Personal de Grupo Cristal</p>
+        </footer>
+        <div class="mama-logo-wrap">
+            <img src="images/GPOCristal.png" alt="Grupo Cristal" class="mama-logo" width="280" height="80" loading="lazy" decoding="async">
+        </div>
+    </div>`;
+
+    document.body.appendChild(overlay);
+
+    let onCerrarLanzado = false;
+    const lanzarOnCerrar = () => {
+        if (onCerrarLanzado) return;
+        onCerrarLanzado = true;
+        if (onCerrar) {
+            // Pequeña pausa para que se note la transición de cierre antes del siguiente popup.
+            setTimeout(onCerrar, 400);
+        }
+    };
+    const cerrar = () => {
+        overlay.classList.remove('activo');
+        setTimeout(() => overlay.remove(), 350);
+        lanzarOnCerrar();
+    };
+    overlay.querySelector('.mama-cerrar')?.addEventListener('click', cerrar);
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) cerrar();
+    });
+
+    requestAnimationFrame(() => overlay.classList.add('activo'));
 }

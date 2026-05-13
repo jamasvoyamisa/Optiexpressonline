@@ -22,6 +22,8 @@ interface SolicitudPrestamo {
   plazo_meses: number;
   motivo?: string | null;
   descuento_quincenal?: string | null;
+  /** Saldo pendiente de liquidar (solo préstamos ya depositados; lo calcula el servidor). */
+  saldo_restante?: string | number | null;
   estado: string;
   aprobado_por_id?: number | null;
   fecha_aprobacion?: string | null;
@@ -99,6 +101,15 @@ const formatMonto = (v: string | number) => {
   const n = typeof v === 'string' ? parseFloat(v) : v;
   if (isNaN(n)) return '—';
   return new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(n);
+};
+
+/** Saldo por pagar vía nómina; solo aplica cuando el préstamo ya está depositado. */
+const formatSaldoPrestamo = (sol: SolicitudPrestamo) => {
+  if (sol.estado !== 'depositado') return '—';
+  if (sol.saldo_restante == null || sol.saldo_restante === '') return '—';
+  const n = typeof sol.saldo_restante === 'string' ? parseFloat(sol.saldo_restante) : sol.saldo_restante;
+  if (isNaN(n)) return '—';
+  return formatMonto(n);
 };
 
 const nombreEmpleado = (e?: Empleado | null) => {
@@ -446,6 +457,12 @@ export const PrestamosPage = () => {
                 <th style={{ ...th, textAlign: 'right' }}>Monto</th>
                 <th style={{ ...th, textAlign: 'center' }}>Plazo</th>
                 <th style={{ ...th, textAlign: 'right' }}>Descuento/q</th>
+                <th
+                  style={{ ...th, textAlign: 'right' }}
+                  title="Capital pendiente por liquidar (préstamos depositados; estimación por quincenas calendario)"
+                >
+                  Saldo
+                </th>
                 <th style={th}>Motivo</th>
                 <th style={{ ...th, textAlign: 'center' }}>Estado</th>
                 <th style={th}>Ref. bancaria</th>
@@ -478,6 +495,9 @@ export const PrestamosPage = () => {
                     <td style={{ ...td, textAlign: 'right', fontWeight: 600 }}>{formatMonto(sol.monto)}</td>
                     <td style={{ ...td, textAlign: 'center' }}>{sol.plazo_meses} quincenas</td>
                     <td style={{ ...td, textAlign: 'right', color: '#0369a1' }}>{sol.descuento_quincenal ? formatMonto(sol.descuento_quincenal) : '—'}</td>
+                    <td style={{ ...td, textAlign: 'right', fontWeight: 600, color: sol.estado === 'depositado' ? '#0f766e' : '#9ca3af' }}>
+                      {formatSaldoPrestamo(sol)}
+                    </td>
                     <td style={{ ...td, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={sol.motivo ?? ''}>
                       {sol.motivo || '—'}
                     </td>

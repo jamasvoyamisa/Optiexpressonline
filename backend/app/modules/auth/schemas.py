@@ -7,8 +7,13 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+
 class TokenResponse(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str = "bearer"
     user: dict
     me: Optional[dict] = None  # Mismo payload que GET /auth/me, para no hacer otra petición

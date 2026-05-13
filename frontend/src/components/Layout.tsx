@@ -16,6 +16,7 @@ import { useAuth } from '../hooks/useAuth';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { NotificationBell } from './NotificationBell';
 import api from '../services/api';
+import { isNominaEnabled } from '../config/features';
 import type { Dispositivo } from '../types';
 
 interface LayoutProps {
@@ -33,6 +34,8 @@ const sidebarIcons: Record<string, JSX.Element> = {
   '/mi-area': <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>,
   '/solicitudes-vacaciones': <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>,
   '/configuracion': <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,
+  '/soporte': <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>,
+  '/nomina': <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>,
 };
 
 const NavIcon = ({ path }: { path: string }) => {
@@ -53,14 +56,17 @@ const superAdminNavItems = [
   { to: '/rh', label: 'Recursos Humanos' },
   { to: '/asistencia', label: 'Asistencia' },
   { to: '/mi-area', label: 'Incidencias y solicitudes' },
+  { to: '/soporte', label: 'Soporte TI' },
 ];
 
 const superAdminItems = [
+  { to: '/nomina', label: 'Nómina' },
   { to: '/configuracion', label: 'Configuración' },
 ];
 
 const miAreaNavItem = { to: '/mi-area', label: 'Mi Área' };
-const solicitudesVacacionesNavItem = { to: '/solicitudes-vacaciones', label: 'Solicitudes a aprobar' };
+const solicitudesVacacionesNavItem = { to: '/solicitudes-vacaciones', label: 'Solicitudes a confirmar' };
+const PRESTAMOS_ANTIGUEDAD_MINIMA_ANIOS = 1;
 
 export const Layout = ({ children }: LayoutProps) => {
   const { isAuthenticated, authMe, loading, logout } = useAuth();
@@ -115,12 +121,22 @@ export const Layout = ({ children }: LayoutProps) => {
   }, []);
 
   const isRH = authMe?.is_rh ?? false;
+  const isDirector = authMe?.is_director ?? false;
+  const isTI = authMe?.is_ti ?? false;
+  const esUsuarioEspecial = authMe?.exento_incidencias === true;
   const puedeVerMiArea = authMe?.puede_ver_mi_area ?? false;
   const puedeVerDashboard = (authMe?.puede_ver_dashboard ?? false) || (authMe?.puede_ver_mi_area ?? false);
   const puedeVerSolicitudesVacaciones = isSuperuser || (authMe?.is_director === true) || (authMe?.is_gerente_general === true) || isRH;
   const showFullAdmin = isSuperuser;
-  const showRH = isRH && !isSuperuser;
-  const showMiAreaOnly = !showFullAdmin && !showRH && puedeVerMiArea;
+  const puedeVerPrestamos = (authMe?.anios_empresa ?? 0) >= PRESTAMOS_ANTIGUEDAD_MINIMA_ANIOS;
+  /** Director o RH (no admin): ven módulo Recursos Humanos como pestañas empleado + RH */
+  const showRHNav = (isRH || isDirector) && !isSuperuser;
+  const showMiAreaOnly = !showFullAdmin && !showRHNav && puedeVerMiArea;
+  const empleadoNavLinks = esUsuarioEspecial
+    ? empleadoNavItems.filter(
+        (i) => i.to !== '/mis-asistencias' && i.to !== '/mis-vacaciones' && i.to !== '/mis-prestamos',
+      )
+    : empleadoNavItems.filter((i) => i.to !== '/mis-prestamos' || puedeVerPrestamos);
 
   useEffect(() => {
     if (!isAuthenticated || !showFullAdmin) return;
@@ -198,9 +214,9 @@ export const Layout = ({ children }: LayoutProps) => {
                 <NavIcon path={item.to} />{item.label}
               </Link>
             ))
-          : showRH
+          : showRHNav
           ? [
-              ...empleadoNavItems.map(item => (
+              ...empleadoNavLinks.map(item => (
                 <Link key={item.to} to={item.to} style={linkStyle(item.to)}>
                   <NavIcon path={item.to} />{item.label}
                 </Link>
@@ -210,7 +226,7 @@ export const Layout = ({ children }: LayoutProps) => {
               </Link>,
             ]
           : [
-              ...empleadoNavItems.map(item => (
+              ...empleadoNavLinks.map(item => (
                 <Link key={item.to} to={item.to} style={linkStyle(item.to)}>
                   <NavIcon path={item.to} />{item.label}
                 </Link>
@@ -220,19 +236,24 @@ export const Layout = ({ children }: LayoutProps) => {
                   <NavIcon path={miAreaNavItem.to} />{miAreaNavItem.label}
                 </Link>
               ] : []),
+              ...(isTI ? [
+                <Link key="/soporte" to="/soporte" style={linkStyle('/soporte')}>
+                  <NavIcon path="/soporte" />Soporte TI
+                </Link>
+              ] : []),
             ]
         }
       </nav>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-        {showFullAdmin && superAdminItems.map(item => (
+        {showFullAdmin && superAdminItems.filter((i) => i.to !== '/nomina' || isNominaEnabled).map(item => (
           <Link key={item.to} to={item.to} style={linkStyle(item.to)}>
             <NavIcon path={item.to} />{item.label}
           </Link>
         ))}
       </div>
       <div style={{ marginTop: 'auto', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.2)', fontSize: '0.7rem', color: 'rgba(255,255,255,0.5)' }}>
-        v1.0.0
+        v1.5.1
       </div>
     </>
   );

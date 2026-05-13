@@ -4,11 +4,14 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import type { AuthMe } from '../hooks/useAuth';
+import { JubilacionArceliaModal } from './JubilacionArceliaModal';
+import { DiaMadres2026Modal } from './DiaMadres2026Modal';
 
 
 const getDefaultRoute = (me: AuthMe | null): string => {
   if (me?.puede_ver_dashboard) return '/dashboard';
   if (me?.puede_ver_mi_area) return '/mi-area';
+  if (me?.exento_incidencias) return '/mis-datos';
   return '/mis-asistencias';
 };
 
@@ -21,14 +24,15 @@ export const Login = () => {
   const { login, isAuthenticated, authMe, loading: authLoading } = useAuth();
   const navigate = useNavigate();
 
+  const forzarJubilacion = searchParams.get('ver_jubilacion') === '1';
+  const forzarDiaMadres = searchParams.get('ver_madres') === '1';
+
   useEffect(() => {
-    const reason = sessionStorage.getItem('logout_reason');
-    if (reason === 'inactivity') {
-      sessionStorage.removeItem('logout_reason');
-      setError('Sesión cerrada por inactividad. Por favor inicia sesión de nuevo.');
-      return;
-    }
-    if (searchParams.get('session_expired') === '1') {
+    const reason = searchParams.get('reason');
+    if (reason === 'session_kicked') {
+      setError('Tu sesión fue cerrada porque iniciaste sesión desde otro dispositivo.');
+      setSearchParams({}, { replace: true });
+    } else if (reason === 'session_expired' || searchParams.get('session_expired') === '1') {
       setError('Tu sesión ha expirado. Por favor inicia sesión de nuevo.');
       setSearchParams({}, { replace: true });
     }
@@ -77,6 +81,9 @@ export const Login = () => {
   };
 
   return (
+    <>
+      <JubilacionArceliaModal forzar={forzarJubilacion} />
+      <DiaMadres2026Modal forzar={forzarDiaMadres} />
     <div style={{
       display: 'flex',
       justifyContent: 'center',
@@ -151,7 +158,8 @@ export const Login = () => {
               style={{
                 width: '100%', padding: '0.7rem 0.9rem',
                 border: '1px solid rgba(255,255,255,0.3)', borderRadius: '10px',
-                fontSize: '0.95rem', color: '#ffffff',
+                fontSize: '0.95rem', color: '#0f172a',
+                caretColor: '#0f172a',
                 background: 'rgba(255,255,255,0.15)',
                 backdropFilter: 'blur(6px)',
                 WebkitBackdropFilter: 'blur(6px)',
@@ -177,7 +185,8 @@ export const Login = () => {
               style={{
                 width: '100%', padding: '0.7rem 0.9rem',
                 border: '1px solid rgba(255,255,255,0.3)', borderRadius: '10px',
-                fontSize: '0.95rem', color: '#ffffff',
+                fontSize: '0.95rem', color: '#0f172a',
+                caretColor: '#0f172a',
                 background: 'rgba(255,255,255,0.15)',
                 backdropFilter: 'blur(6px)',
                 WebkitBackdropFilter: 'blur(6px)',
@@ -223,5 +232,6 @@ export const Login = () => {
         </form>
       </div>
     </div>
+    </>
   );
 };

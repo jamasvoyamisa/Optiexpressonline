@@ -15,6 +15,7 @@ interface Solicitud {
   estado: string;
   jefe_aprobador_id?: number | null;
   jefe_aprobador_nombre?: string | null;
+  jefe_aprobador_puesto?: string | null;
   fecha_aprobacion?: string | null;
   comentarios_aprobacion?: string | null;
   created_at: string;
@@ -27,6 +28,8 @@ interface PeriodoVacaciones {
   dias_disponibles: number;
   fecha_aniversario?: string | null;
   fecha_limite_goce?: string | null;
+  prescrito_por_plazo?: boolean;
+  dias_pendientes_historico?: number;
 }
 
 interface Balance {
@@ -38,6 +41,10 @@ interface Balance {
   saldo_dias_lft_neto?: number;
   /** Días adeudados por vacaciones generales aplicadas antes de tener periodo LFT vigente. */
   dias_deuda_vacaciones_ley?: number;
+  /** Bolsa extra-LFT (migración); ver docs del proyecto. */
+  dias_saldo_migracion_vacaciones?: number;
+  /** saldo_dias_lft_neto + dias_saldo_migracion_vacaciones */
+  saldo_total_con_migracion?: number;
   periodo_actual?: PeriodoVacaciones | null;
   periodo_anterior?: PeriodoVacaciones | null;
   fecha_limite_goce?: string | null;
@@ -87,10 +94,10 @@ interface DiaFestivo {
 
 export const MisVacacionesPage = () => {
   const { authMe } = useAuth();
+  const isMobile = useIsMobile();
   if (authMe?.exento_incidencias) {
     return <Navigate to="/" replace />;
   }
-  const isMobile = useIsMobile();
   const [solicitudes, setSolicitudes] = useState<Solicitud[]>([]);
   const [balance, setBalance] = useState<Balance | null>(null);
   const [loading, setLoading] = useState(true);
@@ -161,8 +168,12 @@ export const MisVacacionesPage = () => {
   const saldoNetoLft = balance
     ? Number(balance.saldo_dias_lft_neto ?? balance.dias_disponibles)
     : 0;
+  const saldoMigracion = balance ? Number(balance.dias_saldo_migracion_vacaciones ?? 0) : 0;
+  const saldoTotalVacaciones = balance
+    ? Number(balance.saldo_total_con_migracion ?? saldoNetoLft + saldoMigracion)
+    : 0;
   const diasDisponiblesParaSolicitar = balance
-    ? saldoNetoLft - Number(balance.dias_pendientes)
+    ? saldoTotalVacaciones - Number(balance.dias_pendientes)
     : 0;
   /** Saldo rojo (negativo) o sin cupo neto: no se puede elegir fechas ni enviar solicitud. */
   const puedeElegirFechasEnCalendario =
@@ -178,10 +189,12 @@ export const MisVacacionesPage = () => {
     }
   }, [puedeElegirFechasEnCalendario, rangeStart, rangeEnd, modalSolicitar]);
 
-  const registros = solicitudes.filter((s) => s.estado === 'aprobada');
-  // Incluye: pendiente de jefe, pendiente de RH (aprobada_jefe) y rechazadas
-  const pendientes = solicitudes.filter((s) =>
-    s.estado === 'pendiente' || s.estado === 'aprobada_jefe' || s.estado === 'rechazada'
+  // Aprobadas por jefe o con constancia RH: el saldo ya se descontó al aprobar el jefe.
+  const registros = solicitudes.filter(
+    (s) => s.estado === 'aprobada' || s.estado === 'aprobada_jefe',
+  );
+  const pendientes = solicitudes.filter(
+    (s) => s.estado === 'pendiente' || s.estado === 'rechazada',
   );
   const isDiaTomado = (iso: string) =>
     registros.some((s) => {
@@ -252,8 +265,8 @@ export const MisVacacionesPage = () => {
     }
     if (loading || !balance || diasDisponiblesParaSolicitar <= 0) {
       alert(
-        balance && saldoNetoLft < 0
-          ? 'No puedes solicitar vacaciones mientras tu saldo LFT neto sea negativo. El adeudo se descuenta automáticamente cuando tengas periodos de vacaciones vigentes.'
+        balance && saldoTotalVacaciones < 0
+          ? 'No puedes solicitar vacaciones mientras tu saldo total (LFT neto + migración) sea negativo.'
           : 'No puedes solicitar vacaciones: no tienes días disponibles netos (revisa saldo y solicitudes pendientes).',
       );
       return;
@@ -295,30 +308,71 @@ export const MisVacacionesPage = () => {
       .finally(() => setCancelando(false));
   };
 
-  return (
-    <div style={{ padding: isMobile ? '14px' : '24px' }}>
-      <h1 style={{ marginBottom: '16px', fontSize: isMobile ? '1.3rem' : '1.6rem' }}>Vacaciones</h1>
+  const sheetOverlay: React.CSSProperties = { position: 'fixed', inset: 0, zIndex: 100, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: isMobile ? 'flex-end' : 'center', justifyContent: 'center' };
+  const sheetContainer: React.CSSProperties = isMobile
+    ? { backgroundColor: 'white', borderRadius: '20px 20px 0 0', padding: '20px 20px calc(20px + env(safe-area-inset-bottom, 0px))', width: '100%', maxHeight: '85dvh', overflowY: 'auto', boxShadow: '0 -8px 40px rgba(0,0,0,0.2)' }
+    : { backgroundColor: 'white', padding: '28px', borderRadius: '14px', maxWidth: '440px', width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' };
+  const sheetHandle = isMobile ? (
+    <div style={{ width: 40, height: 4, backgroundColor: '#d1d5db', borderRadius: 2, margin: '0 auto 16px' }} />
+  ) : null;
 
-      {/* Tarjetas siempre visibles */}
-      {balance && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '16px', marginBottom: '24px' }}>
-          <div style={{ padding: '18px', backgroundColor: 'white', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
-            <div style={{ color: '#666', fontSize: '0.85rem', marginBottom: '4px' }}>Saldo LFT (neto)</div>
-            <div
-              style={{
-                fontSize: '1.8rem',
-                fontWeight: 'bold',
-                color: saldoNetoLft < 0 ? '#b91c1c' : saldoNetoLft > 0 ? '#15803d' : '#6b7280',
-              }}
-            >
-              {saldoNetoLft}
-            </div>
-            {Number(balance.dias_deuda_vacaciones_ley ?? 0) > 0 && (
-              <div style={{ fontSize: '0.78rem', color: '#6b7280', marginTop: '8px', lineHeight: 1.35 }}>
-                Días en periodos: {Number(balance.dias_disponibles)} · Adeudo por vacaciones de ley:{' '}
-                {Number(balance.dias_deuda_vacaciones_ley)} (se descuenta al tener periodo vigente)
+  const porVencerList: PeriodoVacaciones[] = balance?.periodo_anterior && Number(balance.periodo_anterior.dias_disponibles) > 0
+    ? [balance.periodo_anterior] : [];
+
+  return (
+    <div style={{ padding: isMobile ? '0 0 30px' : '24px' }}>
+
+      {/* ── MOBILE HEADER ── */}
+      {isMobile ? (
+        <div style={{ background: 'linear-gradient(135deg, #0f4c75 0%, #1b6ca8 60%, #0ea5e9 100%)', padding: '20px 16px 28px', marginBottom: -12, position: 'relative' }}>
+          <div style={{ color: 'rgba(255,255,255,0.75)', fontSize: '0.8rem', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 2 }}>🌴 Vacaciones</div>
+          {loading ? (
+            <div style={{ color: 'rgba(255,255,255,0.6)', fontSize: '0.9rem', marginTop: 8 }}>Cargando...</div>
+          ) : balance ? (
+            <>
+              <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, marginBottom: 4 }}>
+                <span style={{ color: 'white', fontWeight: 800, fontSize: '3.2rem', lineHeight: 1, fontVariantNumeric: 'tabular-nums' }}>
+                  {saldoTotalVacaciones < 0 ? saldoTotalVacaciones : `+${saldoTotalVacaciones}`}
+                </span>
+                <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.95rem', marginBottom: 8 }}>días disponibles</span>
               </div>
-            )}
+              <div style={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.85)', marginBottom: 6, lineHeight: 1.35 }}>
+                LFT neto: {saldoNetoLft} · Bolsa: {saldoMigracion}
+              </div>
+              {!puedeElegirFechasEnCalendario && (
+                <div style={{ backgroundColor: 'rgba(239,68,68,0.2)', border: '1px solid rgba(239,68,68,0.4)', borderRadius: 8, padding: '6px 12px', fontSize: '0.78rem', color: '#fca5a5', marginTop: 4 }}>
+                  {saldoTotalVacaciones < 0 ? '⚠️ Saldo negativo — calendario bloqueado' : '⚠️ Sin días disponibles para solicitar'}
+                </div>
+              )}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginTop: 14 }}>
+                {[
+                  { icon: '✈️', label: 'Tomados', val: Number(balance.dias_tomados), color: '#bae6fd' },
+                  { icon: '⏳', label: 'Pendientes', val: Number(balance.dias_pendientes), color: '#fde68a' },
+                  { icon: '⚠️', label: 'Por vencer', val: porVencerList.reduce((a, p) => a + Number(p.dias_disponibles), 0), color: porVencerList.length ? '#fca5a5' : '#bbf7d0' },
+                ].map(({ icon, label, val, color }) => (
+                  <div key={label} style={{ backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 12, padding: '10px 8px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '1.1rem' }}>{icon}</div>
+                    <div style={{ color, fontWeight: 800, fontSize: '1.4rem', lineHeight: 1 }}>{val}</div>
+                    <div style={{ color: 'rgba(255,255,255,0.65)', fontSize: '0.65rem', marginTop: 2 }}>{label}</div>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : null}
+        </div>
+      ) : (
+        <h1 style={{ marginBottom: '16px', fontSize: '1.6rem' }}>Vacaciones</h1>
+      )}
+
+      {/* ── DESKTOP balance cards ── */}
+      {!isMobile && balance && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+          <div style={{ padding: '18px', backgroundColor: 'white', borderRadius: '8px', border: '1px solid #bae6fd' }}>
+            <div style={{ color: '#666', fontSize: '0.85rem', marginBottom: '4px' }}>Saldo LFT</div>
+            <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: saldoTotalVacaciones < 0 ? '#b91c1c' : saldoTotalVacaciones > 0 ? '#15803d' : '#6b7280' }}>{saldoTotalVacaciones}</div>
+            <div style={{ fontSize: '0.78rem', color: '#6b7280', marginTop: '8px', lineHeight: 1.35 }}>
+              LFT neto: {saldoNetoLft} · Bolsa: {saldoMigracion} · Periodos vigentes: {Number(balance.dias_disponibles)} · Adeudo: {Number(balance.dias_deuda_vacaciones_ley ?? 0)}
+            </div>
           </div>
           <div style={{ padding: '18px', backgroundColor: 'white', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
             <div style={{ color: '#666', fontSize: '0.85rem', marginBottom: '4px' }}>Días tomados</div>
@@ -330,46 +384,67 @@ export const MisVacacionesPage = () => {
           </div>
           <div style={{ padding: '18px', backgroundColor: 'white', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
             <div style={{ color: '#666', fontSize: '0.85rem', marginBottom: '8px' }}>Por vencer</div>
-            {(() => {
-              const porVencer: PeriodoVacaciones[] = [];
-              if (balance.periodo_anterior && Number(balance.periodo_anterior.dias_disponibles) > 0) {
-                porVencer.push(balance.periodo_anterior);
-              }
-              if (porVencer.length === 0) {
-                return <div style={{ fontSize: '0.9rem', color: '#888' }}>Ningún periodo por prescribir</div>;
-              }
-              return (
-                <div style={{ fontSize: '0.9rem' }}>
-                  {porVencer.map((p, idx) => (
-                    <div key={idx} style={{ marginBottom: idx < porVencer.length - 1 ? '8px' : 0 }}>
-                      <span style={{ fontWeight: 700, color: '#b91c1c' }}>{Number(p.dias_disponibles)} día{Number(p.dias_disponibles) !== 1 ? 's' : ''}</span>
-                      <span style={{ color: '#555' }}> ({p.anios_antiguedad} año{p.anios_antiguedad !== 1 ? 's' : ''})</span>
-                      {p.fecha_limite_goce && (
-                        <div style={{ fontSize: '0.8rem', color: '#6b7280', marginTop: '2px' }}>
-                          Vencen: {new Date(p.fecha_limite_goce + 'T12:00:00').toLocaleDateString('es-MX', { dateStyle: 'short' })}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              );
-            })()}
+            {porVencerList.length === 0 ? (
+              <div style={{ fontSize: '0.9rem', color: '#888' }}>Ningún periodo por prescribir</div>
+            ) : (
+              <div style={{ fontSize: '0.9rem' }}>
+                {porVencerList.map((p, idx) => (
+                  <div key={idx} style={{ marginBottom: idx < porVencerList.length - 1 ? '8px' : 0 }}>
+                    <span style={{ fontWeight: 700, color: '#b91c1c' }}>{Number(p.dias_disponibles)} día{Number(p.dias_disponibles) !== 1 ? 's' : ''}</span>
+                    <span style={{ color: '#555' }}> ({p.anios_antiguedad} año{p.anios_antiguedad !== 1 ? 's' : ''})</span>
+                    {p.fecha_limite_goce && (
+                      <div style={{ fontSize: '0.8rem', color: '#6b7280', marginTop: '2px' }}>
+                        Vencen: {new Date(p.fecha_limite_goce + 'T12:00:00').toLocaleDateString('es-MX', { dateStyle: 'short' })}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
 
-      {/* Pestañas debajo de las tarjetas */}
-      <div style={{ display: 'flex', borderBottom: '2px solid #e5e7eb', marginBottom: '20px', overflowX: 'auto', whiteSpace: 'nowrap' }}>
-        <button style={{ ...tabStyle(activeTab === 'nueva'), padding: isMobile ? '10px 14px' : '12px 20px', fontSize: isMobile ? '0.85rem' : '0.95rem' }} onClick={() => setActiveTab('nueva')}>
-          Nueva Solicitud
-        </button>
-        <button style={{ ...tabStyle(activeTab === 'pendientes'), padding: isMobile ? '10px 14px' : '12px 20px', fontSize: isMobile ? '0.85rem' : '0.95rem' }} onClick={() => setActiveTab('pendientes')}>
-          Solicitudes Pendientes
-        </button>
-        <button style={{ ...tabStyle(activeTab === 'registros'), padding: isMobile ? '10px 14px' : '12px 20px', fontSize: isMobile ? '0.85rem' : '0.95rem' }} onClick={() => setActiveTab('registros')}>
-          Vacaciones Ejercidas
-        </button>
+      {/* ── TABS ── */}
+      <div style={isMobile
+        ? { margin: '0 0 14px', padding: '14px 12px 0', backgroundColor: 'white', borderRadius: '20px 20px 0 0', position: 'relative', zIndex: 1 }
+        : { marginBottom: '20px' }
+      }>
+        {isMobile ? (
+          <div style={{ display: 'flex', gap: 8, overflowX: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: 12 }}>
+            {([
+              { key: 'nueva', icon: '📅', label: 'Nueva' },
+              { key: 'pendientes', icon: '⏳', label: 'Pendientes', badge: pendientes.length || undefined },
+              { key: 'registros', icon: '✅', label: 'Ejercidas' },
+            ] as { key: TabKey; icon: string; label: string; badge?: number }[]).map(({ key, icon, label, badge }) => (
+              <button key={key} onClick={() => setActiveTab(key)}
+                style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '8px 16px', borderRadius: 20, border: 'none', cursor: 'pointer', flexShrink: 0, fontWeight: 700, fontSize: '0.82rem', transition: 'all 0.15s',
+                  backgroundColor: activeTab === key ? '#0ea5e9' : '#f1f5f9',
+                  color: activeTab === key ? 'white' : '#475569',
+                  boxShadow: activeTab === key ? '0 2px 8px rgba(14,165,233,0.35)' : 'none',
+                }}>
+                <span>{icon}</span>
+                <span>{label}</span>
+                {badge != null && badge > 0 && (
+                  <span style={{ backgroundColor: activeTab === key ? 'rgba(255,255,255,0.3)' : '#ef4444', color: 'white', borderRadius: 10, padding: '0 5px', fontSize: '0.68rem', fontWeight: 800 }}>{badge}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div style={{ display: 'flex', borderBottom: '2px solid #e5e7eb' }}>
+            {([
+              { key: 'nueva', label: 'Nueva Solicitud' },
+              { key: 'pendientes', label: 'Solicitudes Pendientes' },
+              { key: 'registros', label: 'Vacaciones Ejercidas' },
+            ] as { key: TabKey; label: string }[]).map(({ key, label }) => (
+              <button key={key} style={tabStyle(activeTab === key)} onClick={() => setActiveTab(key)}>{label}</button>
+            ))}
+          </div>
+        )}
       </div>
+
+      <div style={{ padding: isMobile ? '0 12px' : 0 }}>
 
       {/* Tab Registros: vacaciones ya tomadas (aprobadas) - estilo asistencia, con quien autorizó y fecha autorización */}
       {activeTab === 'registros' && (
@@ -381,25 +456,30 @@ export const MisVacacionesPage = () => {
               No tienes vacaciones tomadas (aprobadas) registradas.
             </p>
           ) : isMobile ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {registros.map((s) => {
                 const completada = s.fecha_fin.slice(0, 10) < todayLocal;
                 return (
-                  <div key={s.id} style={{ backgroundColor: 'white', borderRadius: '10px', border: '1px solid #e5e7eb', padding: '14px 16px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                      <div style={{ fontWeight: 700, color: '#1e3a5f' }}>
-                        {new Date(s.fecha_inicio).toLocaleDateString('es-MX', { dateStyle: 'short' })} — {new Date(s.fecha_fin).toLocaleDateString('es-MX', { dateStyle: 'short' })}
+                  <div key={s.id} style={{ backgroundColor: 'white', borderRadius: 16, border: `1.5px solid ${completada ? '#a7f3d0' : '#bae6fd'}`, padding: '14px 16px', boxShadow: '0 1px 6px rgba(0,0,0,0.06)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+                      <div>
+                        <div style={{ fontWeight: 700, color: '#1e3a5f', fontSize: '0.95rem' }}>
+                          {new Date(s.fecha_inicio).toLocaleDateString('es-MX', { day: '2-digit', month: 'short' })} — {new Date(s.fecha_fin).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })}
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: 2 }}>
+                          Autorizó: {s.jefe_aprobador_nombre || '—'}
+                          {s.jefe_aprobador_puesto ? ` · ${s.jefe_aprobador_puesto}` : ''}
+                        </div>
                       </div>
-                      <span style={{ fontWeight: 700, color: '#374151' }}>{s.dias_solicitados} días</span>
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ fontWeight: 800, fontSize: '1.3rem', color: '#0369a1', lineHeight: 1 }}>{s.dias_solicitados}</div>
+                        <div style={{ fontSize: '0.65rem', color: '#94a3b8' }}>días</div>
+                      </div>
                     </div>
-                    <div style={{ fontSize: '0.82rem', color: '#6b7280', marginBottom: '8px' }}>
-                      Autorizó: {s.jefe_aprobador_nombre || '—'}
-                      {s.comentarios_aprobacion && <div style={{ marginTop: '2px' }}>{s.comentarios_aprobacion}</div>}
-                    </div>
-                    {completada
-                      ? <span style={{ backgroundColor: '#d1fae5', color: '#065f46', borderRadius: 5, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 600 }}>Completada</span>
-                      : <span style={{ backgroundColor: '#e0f2fe', color: '#0369a1', borderRadius: 5, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 600 }}>Programada</span>
-                    }
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 12px', borderRadius: 20, fontSize: '0.75rem', fontWeight: 700,
+                      backgroundColor: completada ? '#d1fae5' : '#e0f2fe', color: completada ? '#065f46' : '#0369a1' }}>
+                      {completada ? '✅ Completada' : '📅 Programada'}
+                    </span>
                   </div>
                 );
               })}
@@ -426,7 +506,12 @@ export const MisVacacionesPage = () => {
                       <td style={td}>{new Date(s.fecha_inicio).toLocaleDateString('es-MX', { dateStyle: 'short' })}</td>
                       <td style={td}>{new Date(s.fecha_fin).toLocaleDateString('es-MX', { dateStyle: 'short' })}</td>
                       <td style={{ ...td, textAlign: 'center', fontWeight: 600 }}>{s.dias_solicitados}</td>
-                      <td style={td}>{s.jefe_aprobador_nombre || '—'}</td>
+                      <td style={td}>
+                        {s.jefe_aprobador_nombre || '—'}
+                        {s.jefe_aprobador_puesto ? (
+                          <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: 2 }}>{s.jefe_aprobador_puesto}</div>
+                        ) : null}
+                      </td>
                       <td style={td}>{s.fecha_aprobacion ? new Date(s.fecha_aprobacion).toLocaleDateString('es-MX', { dateStyle: 'short' }) : '—'}</td>
                       <td style={{ ...td, color: '#555' }}>{s.comentarios_aprobacion || '—'}</td>
                       <td style={{ ...td, textAlign: 'center' }}>
@@ -458,35 +543,47 @@ export const MisVacacionesPage = () => {
               No tienes solicitudes en proceso ni rechazadas.
             </p>
           ) : isMobile ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              {pendientes.map((s) => (
-                <div key={s.id} style={{ backgroundColor: 'white', borderRadius: '10px', border: '1px solid #e5e7eb', padding: '14px 16px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-                    <div style={{ fontWeight: 700, color: '#1e3a5f', fontSize: '0.95rem' }}>
-                      {new Date(s.fecha_inicio).toLocaleDateString('es-MX', { dateStyle: 'short' })} — {new Date(s.fecha_fin).toLocaleDateString('es-MX', { dateStyle: 'short' })}
-                      <span style={{ fontWeight: 400, color: '#6b7280', marginLeft: '6px', fontSize: '0.85rem' }}>{s.dias_solicitados} días</span>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {pendientes.map((s) => {
+                const estadoInfo = s.estado === 'rechazada'
+                  ? { bg: '#fee2e2', color: '#991b1b', label: '❌ Rechazada', border: '#fca5a5' }
+                  : s.estado === 'aprobada_jefe'
+                    ? { bg: '#e0f2fe', color: '#0369a1', label: '🔄 En revisión RH', border: '#7dd3fc' }
+                    : { bg: '#fef3c7', color: '#92400e', label: '⏳ Pendiente', border: '#fde68a' };
+                return (
+                  <div key={s.id} style={{ backgroundColor: 'white', borderRadius: 16, border: `1.5px solid ${estadoInfo.border}`, padding: '14px 16px', boxShadow: '0 1px 6px rgba(0,0,0,0.06)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+                      <div>
+                        <div style={{ fontWeight: 700, color: '#1e3a5f', fontSize: '0.95rem' }}>
+                          {new Date(s.fecha_inicio).toLocaleDateString('es-MX', { day: '2-digit', month: 'short' })} — {new Date(s.fecha_fin).toLocaleDateString('es-MX', { day: '2-digit', month: 'short', year: 'numeric' })}
+                        </div>
+                        {s.motivo && <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: 2 }}>{s.motivo}</div>}
+                      </div>
+                      <div style={{ textAlign: 'right', flexShrink: 0, marginLeft: 8 }}>
+                        <div style={{ fontWeight: 800, fontSize: '1.3rem', color: '#b45309', lineHeight: 1 }}>{s.dias_solicitados}</div>
+                        <div style={{ fontSize: '0.65rem', color: '#94a3b8' }}>días</div>
+                      </div>
                     </div>
-                    {s.estado === 'pendiente' && <span style={{ backgroundColor: '#fef3c7', color: '#92400e', borderRadius: 5, padding: '3px 8px', fontSize: '0.75rem', fontWeight: 600, whiteSpace: 'nowrap' }}>Pendiente</span>}
-                    {s.estado === 'aprobada_jefe' && <span style={{ backgroundColor: '#e0f2fe', color: '#0369a1', borderRadius: 5, padding: '3px 8px', fontSize: '0.75rem', fontWeight: 600, whiteSpace: 'nowrap' }}>En revisión RH</span>}
-                    {s.estado === 'rechazada' && <span style={{ backgroundColor: '#fee2e2', color: '#991b1b', borderRadius: 5, padding: '3px 8px', fontSize: '0.75rem', fontWeight: 600, whiteSpace: 'nowrap' }}>Rechazada</span>}
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 12px', borderRadius: 20, fontSize: '0.75rem', fontWeight: 700, backgroundColor: estadoInfo.bg, color: estadoInfo.color }}>
+                        {estadoInfo.label}
+                      </span>
+                      {s.estado === 'rechazada' && (
+                        <button onClick={() => setModalRechazo({ motivo: s.motivo ?? null, comentario: s.comentarios_aprobacion ?? null })}
+                          style={{ padding: '6px 14px', backgroundColor: '#fee2e2', color: '#991b1b', border: '1px solid #fca5a5', borderRadius: 20, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 700 }}>
+                          Ver motivo
+                        </button>
+                      )}
+                      {s.estado === 'pendiente' && (
+                        <button onClick={() => setModalCancelar(s)}
+                          style={{ padding: '6px 14px', backgroundColor: '#fff7ed', color: '#c2410c', border: '1px solid #fed7aa', borderRadius: 20, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 700 }}>
+                          Cancelar
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  {s.motivo && <p style={{ margin: '0 0 8px', fontSize: '0.83rem', color: '#6b7280' }}>{s.motivo}</p>}
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    {s.estado === 'rechazada' && (
-                      <button onClick={() => setModalRechazo({ motivo: s.motivo ?? null, comentario: s.comentarios_aprobacion ?? null })}
-                        style={{ padding: '7px 14px', backgroundColor: '#fee2e2', color: '#991b1b', border: '1px solid #fca5a5', borderRadius: 6, cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}>
-                        Ver motivo
-                      </button>
-                    )}
-                    {s.estado === 'pendiente' && (
-                      <button onClick={() => setModalCancelar(s)}
-                        style={{ padding: '7px 14px', backgroundColor: '#fff7ed', color: '#c2410c', border: '1px solid #fed7aa', borderRadius: 6, cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600 }}>
-                        Cancelar solicitud
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
@@ -542,31 +639,19 @@ export const MisVacacionesPage = () => {
       {/* Tab Nueva solicitud: calendario a ancho total + botón Solicitar + modal */}
       {activeTab === 'nueva' && (
         <div style={{ width: '100%' }}>
-          {/* Barra superior: título + botón Solicitar (solo si hay selección) */}
+          {/* Barra superior */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', marginBottom: '16px' }}>
-            <h2 style={{ margin: 0, fontSize: '1.1rem' }}>Selecciona el período de vacaciones</h2>
-            {balance && !puedeElegirFechasEnCalendario && (
+            {!isMobile && <h2 style={{ margin: 0, fontSize: '1.1rem' }}>Selecciona el período de vacaciones</h2>}
+            {balance && !puedeElegirFechasEnCalendario && !isMobile && (
               <span style={{ color: '#b91c1c', fontWeight: 600, fontSize: '0.9rem', maxWidth: 420, textAlign: 'right', lineHeight: 1.35 }}>
-                {saldoNetoLft < 0
-                  ? 'Saldo negativo: no puedes solicitar vacaciones hasta regularizar el adeudo (el calendario está bloqueado).'
-                  : 'No tienes días netos disponibles para nuevas solicitudes (el calendario está bloqueado).'}
+                {saldoTotalVacaciones < 0
+                  ? 'Saldo total negativo: no puedes solicitar vacaciones hasta regularizar el adeudo.'
+                  : 'No tienes días netos disponibles para nuevas solicitudes.'}
               </span>
             )}
-            {rangeStart && diasDisponiblesParaSolicitar > 0 && (
-              <button
-                type="button"
-                onClick={() => setModalSolicitar(true)}
-                style={{
-                  padding: '12px 24px',
-                  backgroundColor: '#16a34a',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '8px',
-                  cursor: 'pointer',
-                  fontWeight: 700,
-                  fontSize: '1rem',
-                }}
-              >
+            {!isMobile && rangeStart && diasDisponiblesParaSolicitar > 0 && (
+              <button type="button" onClick={() => setModalSolicitar(true)}
+                style={{ padding: '12px 24px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 700, fontSize: '1rem' }}>
                 Solicitar
               </button>
             )}
@@ -730,62 +815,53 @@ export const MisVacacionesPage = () => {
         </div>
       )}
 
-      {/* Modal: confirmar solicitud (inicio, regreso, días a tomar, motivo) */}
+      </div>{/* /padding wrapper */}
+
+      {/* FAB "Solicitar" en móvil cuando hay rango seleccionado */}
+      {isMobile && activeTab === 'nueva' && rangeStart && diasDisponiblesParaSolicitar > 0 && (
+        <div style={{ position: 'fixed', bottom: 'calc(24px + env(safe-area-inset-bottom, 0px))', left: '50%', transform: 'translateX(-50%)', zIndex: 60 }}>
+          <button type="button" onClick={() => setModalSolicitar(true)}
+            style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '14px 28px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: 50, cursor: 'pointer', fontWeight: 800, fontSize: '1rem', boxShadow: '0 6px 24px rgba(22,163,74,0.45)', whiteSpace: 'nowrap' }}>
+            ✅ Solicitar {selectedCount} día{selectedCount !== 1 ? 's' : ''}
+          </button>
+        </div>
+      )}
+
+      {/* Modal: confirmar solicitud */}
       {modalSolicitar && (
-        <div
-          style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(0,0,0,0.5)' }}
-          onClick={() => !sending && setModalSolicitar(false)}
-          role="presentation"
-        >
-          <div
-            style={{ backgroundColor: 'white', padding: '24px', borderRadius: '12px', maxWidth: '420px', width: '90%', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}
-            onClick={(e) => e.stopPropagation()}
-            role="dialog"
-          >
-            <h2 style={{ marginTop: 0, marginBottom: '16px', fontSize: '1.2rem' }}>Confirmar solicitud de vacaciones</h2>
-            <dl style={{ margin: '0 0 16px 0', fontSize: '0.95rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                <dt style={{ color: '#666', fontWeight: 500 }}>Inicio</dt>
-                <dd style={{ margin: 0, fontWeight: 600 }}>{rangeStart ? new Date(rangeStart + 'T12:00:00').toLocaleDateString('es-MX', { dateStyle: 'long' }) : '—'}</dd>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                <dt style={{ color: '#666', fontWeight: 500 }}>Regreso</dt>
-                <dd style={{ margin: 0, fontWeight: 600 }}>{(rangeEnd || rangeStart) ? new Date((rangeEnd || rangeStart) + 'T12:00:00').toLocaleDateString('es-MX', { dateStyle: 'long' }) : '—'}</dd>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                <dt style={{ color: '#666', fontWeight: 500 }}>Días a tomar</dt>
-                <dd style={{ margin: 0, fontWeight: 600, color: '#15803d' }}>{selectedCount} día{selectedCount !== 1 ? 's' : ''}</dd>
-              </div>
+        <div style={sheetOverlay} onClick={() => !sending && setModalSolicitar(false)} role="presentation">
+          <div style={sheetContainer} onClick={(e) => e.stopPropagation()} role="dialog">
+            {sheetHandle}
+            <h2 style={{ marginTop: 0, marginBottom: '16px', fontSize: '1.1rem' }}>Confirmar solicitud de vacaciones</h2>
+            <dl style={{ margin: '0 0 14px', fontSize: '0.93rem', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {[
+                { label: 'Inicio', val: rangeStart ? new Date(rangeStart + 'T12:00:00').toLocaleDateString('es-MX', { dateStyle: 'long' }) : '—' },
+                { label: 'Regreso', val: (rangeEnd || rangeStart) ? new Date((rangeEnd || rangeStart)! + 'T12:00:00').toLocaleDateString('es-MX', { dateStyle: 'long' }) : '—' },
+                { label: 'Días a tomar', val: `${selectedCount} día${selectedCount !== 1 ? 's' : ''}` },
+              ].map(({ label, val }) => (
+                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}>
+                  <dt style={{ color: '#666', fontWeight: 500 }}>{label}</dt>
+                  <dd style={{ margin: 0, fontWeight: 700, color: label === 'Días a tomar' ? '#15803d' : '#1f2937' }}>{val}</dd>
+                </div>
+              ))}
               {balance && selectedCount > diasDisponiblesParaSolicitar && (
-                <div style={{ marginBottom: '12px', padding: '10px', backgroundColor: '#fef2f2', color: '#b91c1c', borderRadius: '6px', fontSize: '0.9rem', fontWeight: 500 }}>
-                  No puedes solicitar más de {diasDisponiblesParaSolicitar} días. Saldo neto {saldoNetoLft} y {Number(balance.dias_pendientes)} ya en solicitudes pendientes.
+                <div style={{ marginTop: 8, padding: '10px', backgroundColor: '#fef2f2', color: '#b91c1c', borderRadius: 8, fontSize: '0.88rem', fontWeight: 500 }}>
+                  No puedes solicitar más de {diasDisponiblesParaSolicitar} días disponibles.
                 </div>
               )}
             </dl>
-            <div style={{ marginBottom: '16px' }}>
-              <label style={{ display: 'block', fontWeight: 600, marginBottom: '6px', fontSize: '0.9rem' }}>Motivo (opcional)</label>
-              <textarea
-                value={motivo}
-                onChange={(e) => setMotivo(e.target.value)}
-                rows={2}
-                placeholder="Ej. vacaciones familiares"
-                style={{ width: '100%', padding: '10px', border: '1px solid #ddd', borderRadius: '6px', resize: 'vertical', fontSize: '0.9rem' }}
-              />
+            <div style={{ marginBottom: '14px' }}>
+              <label style={{ display: 'block', fontWeight: 600, marginBottom: '6px', fontSize: '0.88rem' }}>Motivo (opcional)</label>
+              <textarea value={motivo} onChange={(e) => setMotivo(e.target.value)} rows={2} placeholder="Ej. vacaciones familiares"
+                style={{ width: '100%', padding: '10px', border: '1px solid #ddd', borderRadius: '8px', resize: 'vertical', fontSize: '0.9rem', boxSizing: 'border-box' }} />
             </div>
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-              <button
-                type="button"
-                onClick={() => !sending && setModalSolicitar(false)}
-                style={{ padding: '10px 20px', backgroundColor: '#e5e7eb', color: '#374151', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 600 }}
-              >
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button type="button" onClick={() => !sending && setModalSolicitar(false)}
+                style={{ flex: 1, padding: '13px', backgroundColor: '#f3f4f6', color: '#374151', border: 'none', borderRadius: 10, cursor: 'pointer', fontWeight: 600, fontSize: '0.95rem' }}>
                 Cancelar
               </button>
-              <button
-                type="button"
-                onClick={submitDesdeModal}
-                disabled={sending || (!!balance && selectedCount > diasDisponiblesParaSolicitar)}
-                style={{ padding: '10px 20px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: '6px', cursor: sending ? 'not-allowed' : 'pointer', fontWeight: 600, opacity: (!!balance && selectedCount > diasDisponiblesParaSolicitar) ? 0.6 : 1 }}
-              >
+              <button type="button" onClick={submitDesdeModal} disabled={sending || (!!balance && selectedCount > diasDisponiblesParaSolicitar)}
+                style={{ flex: 2, padding: '13px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: 10, cursor: sending ? 'not-allowed' : 'pointer', fontWeight: 700, fontSize: '0.95rem', opacity: (!!balance && selectedCount > diasDisponiblesParaSolicitar) ? 0.6 : 1 }}>
                 {sending ? 'Enviando...' : 'Confirmar solicitud'}
               </button>
             </div>
@@ -795,44 +871,29 @@ export const MisVacacionesPage = () => {
 
       {/* Modal: confirmar cancelación */}
       {modalCancelar && (
-        <div
-          onClick={() => !cancelando && setModalCancelar(null)}
-          style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
-        >
-          <div
-            onClick={e => e.stopPropagation()}
-            style={{ backgroundColor: 'white', borderRadius: 10, padding: 28, width: 400, maxWidth: '90vw', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+        <div onClick={() => !cancelando && setModalCancelar(null)} style={sheetOverlay}>
+          <div onClick={e => e.stopPropagation()} style={sheetContainer}>
+            {sheetHandle}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
               <span style={{ fontSize: '1.3rem' }}>⚠️</span>
-              <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: '#92400e' }}>
-                Cancelar solicitud de vacaciones
-              </h3>
+              <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: '#92400e' }}>Cancelar solicitud de vacaciones</h3>
             </div>
-            <p style={{ margin: '0 0 16px', fontSize: '0.9rem', color: '#374151' }}>
-              ¿Estás seguro de que deseas cancelar tu solicitud de vacaciones del{' '}
+            <p style={{ margin: '0 0 12px', fontSize: '0.9rem', color: '#374151' }}>
+              ¿Cancelar la solicitud del{' '}
               <strong>{new Date(modalCancelar.fecha_inicio).toLocaleDateString('es-MX', { dateStyle: 'long' })}</strong>{' '}
               al{' '}
               <strong>{new Date(modalCancelar.fecha_fin).toLocaleDateString('es-MX', { dateStyle: 'long' })}</strong>?
             </p>
-            <p style={{ margin: '0 0 20px', fontSize: '0.82rem', color: '#6b7280', backgroundColor: '#f9fafb', padding: '8px 12px', borderRadius: 6 }}>
-              Los <strong>{modalCancelar.dias_solicitados} días</strong> solicitados regresarán a tu saldo disponible.
+            <p style={{ margin: '0 0 18px', fontSize: '0.82rem', color: '#6b7280', backgroundColor: '#f9fafb', padding: '8px 12px', borderRadius: 8 }}>
+              Los <strong>{modalCancelar.dias_solicitados} días</strong> regresarán a tu saldo.
             </p>
-            <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-              <button
-                type="button"
-                onClick={() => !cancelando && setModalCancelar(null)}
-                disabled={cancelando}
-                style={{ padding: '9px 20px', backgroundColor: '#e5e7eb', color: '#374151', border: 'none', borderRadius: 6, cursor: cancelando ? 'not-allowed' : 'pointer', fontWeight: 600 }}
-              >
+            <div style={{ display: 'flex', gap: 10 }}>
+              <button type="button" onClick={() => !cancelando && setModalCancelar(null)} disabled={cancelando}
+                style={{ flex: 1, padding: '13px', backgroundColor: '#f3f4f6', color: '#374151', border: 'none', borderRadius: 10, cursor: cancelando ? 'not-allowed' : 'pointer', fontWeight: 600 }}>
                 Volver
               </button>
-              <button
-                type="button"
-                onClick={cancelarSolicitud}
-                disabled={cancelando}
-                style={{ padding: '9px 20px', backgroundColor: '#ea580c', color: 'white', border: 'none', borderRadius: 6, cursor: cancelando ? 'not-allowed' : 'pointer', fontWeight: 600 }}
-              >
+              <button type="button" onClick={cancelarSolicitud} disabled={cancelando}
+                style={{ flex: 2, padding: '13px', backgroundColor: '#ea580c', color: 'white', border: 'none', borderRadius: 10, cursor: cancelando ? 'not-allowed' : 'pointer', fontWeight: 700 }}>
                 {cancelando ? 'Cancelando...' : 'Sí, cancelar'}
               </button>
             </div>
@@ -842,49 +903,27 @@ export const MisVacacionesPage = () => {
 
       {/* Modal: motivo de rechazo */}
       {modalRechazo && (
-        <div
-          onClick={() => setModalRechazo(null)}
-          style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
-        >
-          <div
-            onClick={e => e.stopPropagation()}
-            style={{ backgroundColor: 'white', borderRadius: 10, padding: 28, width: 420, maxWidth: '90vw', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16 }}>
+        <div onClick={() => setModalRechazo(null)} style={sheetOverlay}>
+          <div onClick={e => e.stopPropagation()} style={sheetContainer}>
+            {sheetHandle}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
               <span style={{ fontSize: '1.3rem' }}>❌</span>
-              <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: '#991b1b' }}>
-                Solicitud rechazada
-              </h3>
+              <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 700, color: '#991b1b' }}>Solicitud rechazada</h3>
             </div>
-
             {modalRechazo.motivo && (
-              <div style={{ marginBottom: 14 }}>
-                <p style={{ margin: '0 0 4px', fontSize: '0.78rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  Motivo de la solicitud
-                </p>
-                <p style={{ margin: 0, fontSize: '0.9rem', color: '#374151', backgroundColor: '#f9fafb', padding: '8px 12px', borderRadius: 6 }}>
-                  {modalRechazo.motivo}
-                </p>
+              <div style={{ marginBottom: 12 }}>
+                <p style={{ margin: '0 0 4px', fontSize: '0.75rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Motivo de la solicitud</p>
+                <p style={{ margin: 0, fontSize: '0.9rem', color: '#374151', backgroundColor: '#f9fafb', padding: '8px 12px', borderRadius: 8 }}>{modalRechazo.motivo}</p>
               </div>
             )}
-
-            <div>
-              <p style={{ margin: '0 0 4px', fontSize: '0.78rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Comentario de rechazo
-              </p>
-              <p style={{ margin: 0, fontSize: '0.9rem', color: '#374151', backgroundColor: '#fef2f2', padding: '10px 12px', borderRadius: 6, border: '1px solid #fecaca', minHeight: 48 }}>
-                {modalRechazo.comentario || 'Sin comentarios adicionales.'}
-              </p>
-            </div>
-
-            <div style={{ textAlign: 'right', marginTop: 20 }}>
-              <button
-                onClick={() => setModalRechazo(null)}
-                style={{ padding: '8px 22px', backgroundColor: '#374151', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem' }}
-              >
-                Cerrar
-              </button>
-            </div>
+            <p style={{ margin: '0 0 4px', fontSize: '0.75rem', fontWeight: 700, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Comentario de rechazo</p>
+            <p style={{ margin: '0 0 20px', fontSize: '0.9rem', color: '#374151', backgroundColor: '#fef2f2', padding: '10px 12px', borderRadius: 8, border: '1px solid #fecaca', minHeight: 44 }}>
+              {modalRechazo.comentario || 'Sin comentarios adicionales.'}
+            </p>
+            <button onClick={() => setModalRechazo(null)}
+              style={{ width: '100%', padding: '13px', backgroundColor: '#374151', color: 'white', border: 'none', borderRadius: 10, cursor: 'pointer', fontWeight: 700, fontSize: '0.95rem' }}>
+              Cerrar
+            </button>
           </div>
         </div>
       )}

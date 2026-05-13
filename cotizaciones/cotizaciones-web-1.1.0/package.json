@@ -1,0 +1,127 @@
+{
+  "name": "cotizaciones",
+  "version": "1.1.0",
+  "description": "Aplicación de Cotizaciones Optiexpress",
+  "main": "src/main.js",
+  "scripts": {
+    "web": "node server/index.js",
+    "deploy:vps": "bash scripts/deploy_web_vps.sh",
+    "build:web": "bash scripts/package_web_for_deploy.sh",
+    "start": "electron .",
+    "dev": "set NODE_ENV=development&& electron .",
+    "preview": "http-server ./src/renderer -p 5173 -c-1",
+    "db:bootstrap": "node scripts/bootstrap.js",
+    "db:test": "node scripts/db_test.js",
+    "db:restore": "node scripts/restore_backup.js",
+    "db:upload": "bash scripts/upload_to_server.sh",
+    "db:upload-restore": "bash scripts/upload_and_restore.sh",
+    "db:restore-all": "bash scripts/restore_backup_all.sh",
+    "db:list": "bash scripts/list_backups.sh",
+    "db:restore-respaldo": "bash scripts/restore_from_respaldo.sh",
+    "db:config-remote": "bash scripts/configurar_mysql_desde_mac.sh",
+    "images:convert": "node scripts/convert_images.js",
+    "db:migrate:rfc": "node scripts/migrate_rfc.js",
+    "clients:template": "node scripts/generate_clientes_xlsx.js",
+    "icons:create": "node scripts/create_icns.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win --x64",
+    "dist:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win --x64",
+    "build:mac": "electron-builder --mac",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "concurrently": "^9.2.1",
+    "cors": "^2.8.6",
+    "dotenv": "^17.2.3",
+    "electron-store": "^11.0.2",
+    "express": "^4.22.1",
+    "express-session": "^1.19.0",
+    "mysql2": "^3.15.2",
+    "pdfmake": "^0.2.20",
+    "pg": "^8.16.3",
+    "sharp": "^0.34.4",
+    "wait-on": "^9.0.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "electron": "^38.7.2",
+    "electron-builder": "^26.0.12",
+    "http-server": "^14.1.1",
+    "png-to-ico": "^3.0.1"
+  },
+  "build": {
+    "appId": "mx.optiexpress.cotizaciones",
+    "productName": "Cotizaciones Optiexpress",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json",
+      "!**/*.map"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "icon": "src/renderer/assets/logo.ico",
+      "artifactName": "${productName}-${version}-Setup.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Cotizaciones Optiexpress"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "src/renderer/assets/logo.icns",
+      "category": "public.app-category.business",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    },
+    "dmg": {
+      "title": "${productName} ${version}",
+      "icon": "src/renderer/assets/logo.icns",
+      "background": "src/renderer/assets/dmg-background.png",
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "window": {
+        "width": 540,
+        "height": 380
+      }
+    }
+  }
+}

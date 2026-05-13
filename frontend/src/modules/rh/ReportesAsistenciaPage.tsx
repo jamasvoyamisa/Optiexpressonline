@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
 import { fmtNombreEmpleado } from '../../utils/format';
+import { descargarArchivo, XLSX_MIME } from '../../utils/download';
 
 interface Empresa { id: number; nombre: string; }
 interface Departamento { id: number; nombre: string; empresa_id: number; }
@@ -85,27 +86,13 @@ async function descargarReporteDetalle(fi: string, ff: string, empresa: string, 
   if (empresa) params.set('empresa_id', empresa);
   if (depto) params.set('departamento_id', depto);
   try {
-    const res = await api.get(`/asistencia/reporte-export-xlsx?${params}`, { responseType: 'blob' });
-    const url = window.URL.createObjectURL(new Blob([res.data]));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `reporte_asistencia_${fi}_${ff}.xlsx`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.URL.revokeObjectURL(url);
+    await descargarArchivo(
+      `/asistencia/reporte-export-xlsx?${params}`,
+      `reporte_asistencia_${fi}_${ff}.xlsx`,
+      XLSX_MIME,
+    );
   } catch (e: any) {
-    let msg = 'Error al generar reporte';
-    try {
-      if (e.response?.data instanceof Blob) {
-        msg = await e.response.data.text();
-        const parsed = JSON.parse(msg);
-        msg = parsed.detail || msg;
-      } else {
-        msg = e.response?.data?.detail || msg;
-      }
-    } catch { /* keep default msg */ }
-    alert(msg);
+    alert(e?.message || 'Error al generar reporte');
   }
 }
 
@@ -218,6 +205,8 @@ export const ReportesAsistenciaPage = () => {
     setQuinLabel(label);
     setFiNominal(fi);
     setFfNominal(ff);
+    setFechaInicio(fi);
+    setFechaFin(ff);
     try {
       const params = new URLSearchParams({ fecha_inicio: fi, fecha_fin: ff });
       if (filtroEmpresa) params.set('empresa_id', filtroEmpresa);
@@ -254,7 +243,7 @@ export const ReportesAsistenciaPage = () => {
     }
   }, [fechaInicio, fechaFin, buscarConFechas]);
 
-  // Por defecto: mostrar quincena actual (inputs vacíos, reporte de período actual)
+  // Por defecto: mostrar quincena actual
   useEffect(() => {
     const q = quincenaActual();
     buscarConFechas(q.fi, q.ff, q.label);

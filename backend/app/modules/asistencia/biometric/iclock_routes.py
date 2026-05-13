@@ -160,6 +160,13 @@ def _process_attlog(db: Session, raw_data: str, dispositivo: models.Dispositivo)
     Procesa ATTLOG: PIN\tDateTime\t0|1\t...
     0 = entrada, 1 = salida
     """
+    from sqlalchemy.exc import IntegrityError
+    from .sync_service import (
+        SyncService,
+        checada_anterior_a_alta_en_sistema,
+        checada_anterior_a_fecha_ingreso,
+    )
+
     for line in raw_data.split("\n"):
         line = line.strip()
         if not line:
@@ -180,26 +187,65 @@ def _process_attlog(db: Session, raw_data: str, dispositivo: models.Dispositivo)
             logger.warning(f"Error parseando ATTLOG: {line!r} - {e}")
             continue
 
+        # Prioridad absoluta: pin_checador (único globalmente).
         empleado = db.query(personal_models.Empleado).filter(
             personal_models.Empleado.pin_checador == user_id
         ).first()
+        # Fallback por numero_empleado: solo si es único.
         if not empleado:
-            empleado = db.query(personal_models.Empleado).filter(
+            candidatos = db.query(personal_models.Empleado).filter(
                 personal_models.Empleado.numero_empleado == user_id
-            ).first()
+            ).all()
+            if len(candidatos) == 1:
+                empleado = candidatos[0]
+            elif len(candidatos) > 1:
+                logger.warning(
+                    f"ADMS checada ignorada: user_id={user_id} coincide con {len(candidatos)} empleados "
+                    "por numero_empleado. Se requiere pin_checador único para resolverlo."
+                )
+                continue
         if not empleado:
             logger.info(f"ADMS checada ignorada: PIN {user_id} no registrado en el sistema.")
             continue
-
-        existente = db.query(models.Asistencia).filter(
-            models.Asistencia.empleado_id == empleado.id,
-            models.Asistencia.timestamp == timestamp,
-        ).first()
-        if existente:
+        if getattr(empleado, "exento_incidencias", False):
+            logger.info(f"ADMS checada ignorada: empleado especial PIN {user_id} no debe registrar checadas.")
             continue
 
-        from .sync_service import SyncService
-        tipo, es_tiempo_extra = SyncService._determinar_tipo(db, empleado.id, timestamp)
+        if checada_anterior_a_alta_en_sistema(empleado, timestamp):
+            logger.info(
+                "ADMS checada ignorada: anterior a created_at PIN %s empleado_id=%s",
+                user_id,
+                empleado.id,
+            )
+            continue
+
+        if checada_anterior_a_fecha_ingreso(empleado, timestamp):
+            logger.info(
+                "ADMS checada ignorada: anterior a fecha_ingreso PIN %s empleado_id=%s",
+                user_id,
+                empleado.id,
+            )
+            continue
+
+        from datetime import timedelta
+        ventana_inicio = timestamp - timedelta(seconds=60)
+        existente = db.query(models.Asistencia).filter(
+            models.Asistencia.empleado_id == empleado.id,
+            models.Asistencia.timestamp >= ventana_inicio,
+            models.Asistencia.timestamp <= timestamp,
+        ).first()
+        if existente:
+            logger.info(
+                f"Checada ADMS near-dup ignorada: PIN={user_id} ts={timestamp} "
+                f"(ya existe marca a {existente.timestamp}, <60s)"
+            )
+            continue
+
+        try:
+            tipo, es_tiempo_extra = SyncService._determinar_tipo(db, empleado.id, timestamp)
+        except ValueError as exc:
+            logger.warning(f"Checada ADMS ignorada (exceso de marcas): PIN={user_id} — {exc}")
+            continue
 
         asistencia = models.Asistencia(
             empleado_id=empleado.id,
@@ -210,8 +256,20 @@ def _process_attlog(db: Session, raw_data: str, dispositivo: models.Dispositivo)
             sincronizado=True
         )
         db.add(asistencia)
-        db.flush()  # Para obtener asistencia.id antes de _detectar_incidencia
+        try:
+            db.flush()  # Para obtener asistencia.id antes de _detectar_incidencia
+        except IntegrityError:
+            # El dispositivo reenvió la misma marca; la restricción única la rechaza
+            db.rollback()
+            logger.info(f"Checada ADMS duplicada (IntegrityError) ignorada: PIN={user_id} ts={timestamp}")
+            continue
         logger.info(f"Checada ADMS: user={user_id}, {tipo.value}, extra={es_tiempo_extra}, {timestamp}")
+
+        # Si el día ya quedó completo, eliminar FALTA/INCOMPLETA automáticas previas
+        try:
+            SyncService._limpiar_incidencias_si_dia_completo(db, empleado.id, timestamp)
+        except Exception as exc:
+            logger.warning(f"Error al limpiar incidencias tras checada tardía (ADMS): {exc}")
 
         # Detectar incidencias automáticas (retardo, salida anticipada)
         try:

@@ -1,6 +1,10 @@
 {
+  "name": "intranet-optiexpress",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Landing e intranet estática Optiexpress (copia a dist)",
   "scripts": {
-    "build": "rm -rf dist && mkdir -p dist && cp .htaccess robots.txt aurora.js avisos.html catalogos.html catalogos.js index.html promociones-activas.html script.js styles.css dist/ && cp -R images dist/"
+    "build": "rm -rf dist && mkdir -p dist && cp .htaccess robots.txt aurora.js header-nav.js catalogos.html catalogos.js index.html promociones-activas.html script.js styles.css dist/ && cp -R images dist/"
   },
   "dependencies": {
     "ogl": "^1.0.11"

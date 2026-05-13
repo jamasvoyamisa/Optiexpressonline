@@ -199,10 +199,10 @@ export const SolicitudesVacRH = () => {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <div>
           <h2 style={{ margin: 0, fontSize: '1.2rem', fontWeight: 700, color: '#111827' }}>
-            Solicitudes de Vacaciones — Confirmación RH
+            Solicitudes de Vacaciones — Registro formal RH
           </h2>
           <p style={{ margin: '4px 0 0', fontSize: '0.85rem', color: '#6b7280' }}>
-            Solicitudes aprobadas por el jefe directo, pendientes de confirmación final por RH
+            Aprobadas por el jefe (saldo ya descontado). Aquí solo dejas constancia; si no registras, el sistema confirma solo 24 h antes del inicio.
           </p>
         </div>
         <span style={{ ...ESTADO_COLOR['aprobada_jefe'], fontSize: '0.9rem' }}>
@@ -251,7 +251,7 @@ export const SolicitudesVacRH = () => {
       {solicitudesFiltradas.length === 0 ? (
         <div style={{ padding: 32, textAlign: 'center', color: '#6b7280', backgroundColor: '#f9fafb', borderRadius: 8 }}>
           {solicitudes.length === 0
-            ? 'No hay solicitudes pendientes de confirmación RH.'
+            ? 'No hay solicitudes sin constancia formal de RH.'
             : 'No hay solicitudes que coincidan con los filtros.'}
         </div>
       ) : (
@@ -276,7 +276,6 @@ export const SolicitudesVacRH = () => {
                 {solicitudesPagina.map(sol => {
                   const emp = empleadosMap.get(sol.empleado_id);
                   const enProceso = procesando === sol.id;
-                  const esJefeDirecto = sol.aprobador_es_jefe_directo;
                   return (
                     <tr key={sol.id} style={{ transition: 'background 0.1s' }}
                       onMouseEnter={e => (e.currentTarget.style.backgroundColor = '#f9fafb')}
@@ -300,18 +299,11 @@ export const SolicitudesVacRH = () => {
                             <div style={{ fontWeight: 600, color: '#111827' }}>
                               {sol.jefe_aprobador_nombre}
                             </div>
-                            <div style={{ marginTop: 3 }}>
-                              {esJefeDirecto === true && (
-                                <span style={{ fontSize: '0.72rem', backgroundColor: '#d1fae5', color: '#065f46', borderRadius: 4, padding: '1px 6px', fontWeight: 600 }}>
-                                  Jefe directo
-                                </span>
-                              )}
-                              {esJefeDirecto === false && (
-                                <span style={{ fontSize: '0.72rem', backgroundColor: '#fef3c7', color: '#92400e', borderRadius: 4, padding: '1px 6px', fontWeight: 600 }}>
-                                  Administrador
-                                </span>
-                              )}
-                            </div>
+                            {sol.jefe_aprobador_puesto ? (
+                              <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: 2 }}>
+                                {sol.jefe_aprobador_puesto}
+                              </div>
+                            ) : null}
                           </>
                         ) : '—'}
                       </td>

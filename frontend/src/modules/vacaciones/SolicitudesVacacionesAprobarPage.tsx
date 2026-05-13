@@ -276,10 +276,10 @@ export const SolicitudesVacacionesAprobarPage = () => {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
         <div>
           <h1 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 700, color: '#111827' }}>
-            Solicitudes a aprobar
+            Solicitudes a confirmar
           </h1>
           <p style={{ margin: '6px 0 0', fontSize: '0.9rem', color: '#6b7280' }}>
-            {activeTab === 'vacaciones' ? 'Vacaciones' : 'Préstamos'} pendientes de aprobación · {rolLabel()}
+            {activeTab === 'vacaciones' ? 'Vacaciones' : 'Préstamos'} pendientes de tu confirmación · {rolLabel()}
           </p>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -312,7 +312,7 @@ export const SolicitudesVacacionesAprobarPage = () => {
           color: '#6b7280',
           fontSize: '1rem',
         }}>
-          No hay solicitudes de vacaciones pendientes de tu aprobación.
+          No hay solicitudes de vacaciones pendientes de tu confirmación.
         </div>
       ) : activeTab === 'prestamos' && totalPendientesPrestamos === 0 ? (
         <div style={{
@@ -324,7 +324,7 @@ export const SolicitudesVacacionesAprobarPage = () => {
           color: '#6b7280',
           fontSize: '1rem',
         }}>
-          No hay solicitudes de préstamos pendientes de tu aprobación.
+          No hay solicitudes de préstamos pendientes de tu confirmación.
         </div>
       ) : activeTab === 'vacaciones' ? (
         <div style={{ overflowX: 'auto', backgroundColor: 'white', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>

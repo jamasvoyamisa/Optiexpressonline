@@ -1,3 +1,3 @@
-from . import models, schemas, service, routes
+from . import models, schemas, service
 
-__all__ = ["models", "schemas", "service", "routes"]
+__all__ = ["models", "schemas", "service"]

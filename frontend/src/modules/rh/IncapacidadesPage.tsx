@@ -85,11 +85,50 @@ const filterControlStyle: React.CSSProperties = {
 
 const today = toMexicoDateString(new Date());
 
+/** Fecha local YYYY-MM-DD → Date (evita desfases UTC con `new Date('yyyy-mm-dd')`). */
+function ymdToLocalDate(ymd: string): Date {
+  const [y, m, d] = ymd.split('-').map(Number);
+  if (!y || !m || !d) return new Date(NaN);
+  return new Date(y, m - 1, d);
+}
+
+function localDateToYmd(d: Date): string {
+  const y = d.getFullYear();
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const da = String(d.getDate()).padStart(2, '0');
+  return `${y}-${mo}-${da}`;
+}
+
+/** Suma días al calendario (domingos y festivos cuentan). */
+function sumarDiasCalendario(ymd: string, diasDelta: number): string {
+  const d = ymdToLocalDate(ymd);
+  if (Number.isNaN(d.getTime())) return ymd;
+  d.setDate(d.getDate() + diasDelta);
+  return localDateToYmd(d);
+}
+
+/** Días corridos entre inicio y fin, ambos inclusive (misma regla que el backend). */
+function diasCalendarioInclusive(ini: string, fin: string): number {
+  if (!ini || !fin || fin < ini) return 0;
+  const d0 = ymdToLocalDate(ini);
+  const d1 = ymdToLocalDate(fin);
+  if (Number.isNaN(d0.getTime()) || Number.isNaN(d1.getTime())) return 0;
+  return Math.round((d1.getTime() - d0.getTime()) / 86400000) + 1;
+}
+
+/** Fecha fin si el periodo tiene `diasIncl` días corridos desde `inicio` (el inicio cuenta como día 1). */
+function fechaFinDesdeInicioYDiasCorridos(inicio: string, diasIncl: number): string {
+  if (!inicio || diasIncl < 1) return inicio;
+  return sumarDiasCalendario(inicio, diasIncl - 1);
+}
+
 const emptyForm = {
   empleado_id: '',
   tipo: 'imss',
   fecha_inicio: today,
   fecha_fin: today,
+  /** Días corridos (incluye domingos); con inicio determina la fecha fin. */
+  dias_corridos: '1',
   folio_imss: '',
   descripcion: '',
 };
@@ -196,6 +235,9 @@ export const IncapacidadesPage = () => {
       tipo: inc.tipo,
       fecha_inicio: inc.fecha_inicio,
       fecha_fin: inc.fecha_fin,
+      dias_corridos: String(
+        Math.max(1, inc.dias ?? diasCalendarioInclusive(inc.fecha_inicio, inc.fecha_fin) ?? 1),
+      ),
       folio_imss: inc.folio_imss ?? '',
       descripcion: inc.descripcion ?? '',
     });
@@ -209,7 +251,16 @@ export const IncapacidadesPage = () => {
 
   const guardar = async () => {
     if (!form.empleado_id) { setError('Selecciona un empleado'); return; }
-    if (form.fecha_fin < form.fecha_inicio) { setError('La fecha fin debe ser igual o posterior a la fecha inicio'); return; }
+    const nd = parseInt(String(form.dias_corridos).trim(), 10);
+    if (!Number.isFinite(nd) || nd < 1) {
+      setError('Indica al menos 1 día corrido (incluye domingos).');
+      return;
+    }
+    const fecha_fin = fechaFinDesdeInicioYDiasCorridos(form.fecha_inicio, nd);
+    if (!form.fecha_inicio || fecha_fin < form.fecha_inicio) {
+      setError('La fecha fin debe ser igual o posterior a la fecha inicio');
+      return;
+    }
     setGuardando(true);
     setError('');
     try {
@@ -217,7 +268,7 @@ export const IncapacidadesPage = () => {
         empleado_id: Number(form.empleado_id),
         tipo: form.tipo,
         fecha_inicio: form.fecha_inicio,
-        fecha_fin: form.fecha_fin,
+        fecha_fin,
         folio_imss: form.folio_imss.trim() || null,
         descripcion: form.descripcion.trim() || null,
       };
@@ -285,13 +336,7 @@ export const IncapacidadesPage = () => {
     return true;
   });
 
-  // Calcular días entre fechas del form
-  const diasForm = (() => {
-    if (!form.fecha_inicio || !form.fecha_fin || form.fecha_fin < form.fecha_inicio) return 0;
-    const d1 = new Date(form.fecha_inicio);
-    const d2 = new Date(form.fecha_fin);
-    return Math.round((d2.getTime() - d1.getTime()) / 86400000) + 1;
-  })();
+  const diasForm = diasCalendarioInclusive(form.fecha_inicio, form.fecha_fin);
 
   return (
     <div style={{ padding: '24px' }}>
@@ -528,26 +573,88 @@ export const IncapacidadesPage = () => {
               </select>
             </div>
 
-            {/* Fechas */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '14px' }}>
+            {/* Fechas: días corridos (domingos cuentan); la fin se recalcula desde inicio + días */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '8px' }}>
               <div>
                 <label style={{ display: 'block', fontWeight: 600, fontSize: '0.85rem', marginBottom: '5px', color: '#374151' }}>
                   Fecha inicio <span style={{ color: '#ef4444' }}>*</span>
                 </label>
-                <input type="date" value={form.fecha_inicio} onChange={e => setForm(f => ({ ...f, fecha_inicio: e.target.value }))} style={inputStyle} />
+                <input
+                  type="date"
+                  value={form.fecha_inicio}
+                  onChange={(e) => {
+                    const fecha_inicio = e.target.value;
+                    setForm((f) => {
+                      const n = parseInt(f.dias_corridos, 10);
+                      if (Number.isFinite(n) && n >= 1 && fecha_inicio) {
+                        return { ...f, fecha_inicio, fecha_fin: fechaFinDesdeInicioYDiasCorridos(fecha_inicio, n) };
+                      }
+                      return { ...f, fecha_inicio };
+                    });
+                  }}
+                  style={inputStyle}
+                />
               </div>
               <div>
                 <label style={{ display: 'block', fontWeight: 600, fontSize: '0.85rem', marginBottom: '5px', color: '#374151' }}>
-                  Fecha fin <span style={{ color: '#ef4444' }}>*</span>
+                  Días corridos <span style={{ color: '#ef4444' }}>*</span>
                 </label>
-                <input type="date" value={form.fecha_fin} onChange={e => setForm(f => ({ ...f, fecha_fin: e.target.value }))} style={inputStyle} />
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={form.dias_corridos}
+                  onChange={(e) => {
+                    const raw = e.target.value;
+                    const n = parseInt(raw, 10);
+                    setForm((f) => {
+                      if (!Number.isFinite(n) || n < 1) {
+                        return { ...f, dias_corridos: raw };
+                      }
+                      if (!f.fecha_inicio) {
+                        return { ...f, dias_corridos: raw };
+                      }
+                      return {
+                        ...f,
+                        dias_corridos: raw,
+                        fecha_fin: fechaFinDesdeInicioYDiasCorridos(f.fecha_inicio, n),
+                      };
+                    });
+                  }}
+                  style={inputStyle}
+                />
+                <p style={{ margin: '4px 0 0', fontSize: '0.72rem', color: '#6b7280', lineHeight: 1.35 }}>
+                  Incluye sábados y domingos. La fecha fin se calcula desde el inicio.
+                </p>
               </div>
+            </div>
+            <div style={{ marginBottom: '14px' }}>
+              <label style={{ display: 'block', fontWeight: 600, fontSize: '0.85rem', marginBottom: '5px', color: '#374151' }}>
+                Fecha fin <span style={{ color: '#ef4444' }}>*</span>
+              </label>
+              <input
+                type="date"
+                value={form.fecha_fin}
+                min={form.fecha_inicio}
+                onChange={(e) => {
+                  const fecha_fin = e.target.value;
+                  setForm((f) => {
+                    const nd = diasCalendarioInclusive(f.fecha_inicio, fecha_fin);
+                    const dias_corridos = nd > 0 ? String(nd) : f.dias_corridos;
+                    return { ...f, fecha_fin, dias_corridos };
+                  });
+                }}
+                style={inputStyle}
+              />
+              <p style={{ margin: '4px 0 0', fontSize: '0.72rem', color: '#6b7280' }}>
+                Puedes corregir la fecha fin a mano; los días corridos se actualizan solos.
+              </p>
             </div>
 
             {/* Contador de días */}
             {diasForm > 0 && (
               <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: 7, padding: '8px 14px', marginBottom: '14px', fontSize: '0.87rem', color: '#166534', fontWeight: 600 }}>
-                📅 {diasForm} día{diasForm !== 1 ? 's' : ''} calendario cubiertos
+                📅 {diasForm} día{diasForm !== 1 ? 's' : ''} calendario cubiertos (corrido)
               </div>
             )}
 

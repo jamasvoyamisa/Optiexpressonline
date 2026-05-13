@@ -1,18 +1,75 @@
-from pydantic import BaseModel, EmailStr
-from typing import Optional, List, Literal
+from decimal import Decimal
+
+from pydantic import BaseModel, EmailStr, field_validator, Field
+from typing import Optional, List, Literal, Any
 from datetime import datetime
 from .models import EstadoEmpleado
+from .regimen_fiscal_sat import is_valid_regimen_fiscal
 
 
 # ---- Schemas para Empresa ----
 
 class EmpresaBase(BaseModel):
     nombre: str
+    siglas: Optional[str] = None
     rfc: Optional[str] = None
     direccion: Optional[str] = None
+    capital_social: Optional[Decimal] = None
+    codigo_postal: Optional[str] = None
+    domicilio: Optional[str] = None
+    numero_exterior: Optional[str] = None
+    numero_interior: Optional[str] = None
+    colonia: Optional[str] = None
+    municipio: Optional[str] = None
+    estado: Optional[str] = None
+    regimen_fiscal: Optional[str] = None
     telefono: Optional[str] = None
     dias_laborales: Literal["lun-sab", "lun-dom"] = "lun-sab"
     trabaja_festivos: bool = False
+
+    @field_validator(
+        "rfc",
+        "direccion",
+        "codigo_postal",
+        "domicilio",
+        "numero_exterior",
+        "numero_interior",
+        "colonia",
+        "municipio",
+        "estado",
+        "regimen_fiscal",
+        "telefono",
+        mode="before",
+    )
+    @classmethod
+    def empty_str_to_none(cls, v: Any) -> Any:
+        if v is None:
+            return None
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        return v
+
+    @field_validator("codigo_postal")
+    @classmethod
+    def validar_cp(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        s = str(v).strip()
+        if len(s) != 5 or not s.isdigit():
+            raise ValueError("El código postal debe tener 5 dígitos")
+        return s
+
+    @field_validator("regimen_fiscal")
+    @classmethod
+    def validar_regimen_sat(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        s = str(v).strip()
+        if len(s) != 3 or not s.isdigit():
+            raise ValueError("El régimen fiscal debe ser un código de 3 dígitos (catálogo SAT)")
+        if not is_valid_regimen_fiscal(s):
+            raise ValueError("Código de régimen fiscal no válido en el catálogo SAT")
+        return s
 
 
 class EmpresaCreate(EmpresaBase):
@@ -21,13 +78,67 @@ class EmpresaCreate(EmpresaBase):
 
 class EmpresaUpdate(BaseModel):
     nombre: Optional[str] = None
+    siglas: Optional[str] = None
     rfc: Optional[str] = None
     direccion: Optional[str] = None
+    capital_social: Optional[Decimal] = None
+    codigo_postal: Optional[str] = None
+    domicilio: Optional[str] = None
+    numero_exterior: Optional[str] = None
+    numero_interior: Optional[str] = None
+    colonia: Optional[str] = None
+    municipio: Optional[str] = None
+    estado: Optional[str] = None
+    regimen_fiscal: Optional[str] = None
     telefono: Optional[str] = None
     activo: Optional[bool] = None
     checadas_remotas: Optional[bool] = None
     dias_laborales: Optional[Literal["lun-sab", "lun-dom"]] = None
     trabaja_festivos: Optional[bool] = None
+
+    @field_validator(
+        "rfc",
+        "direccion",
+        "codigo_postal",
+        "domicilio",
+        "numero_exterior",
+        "numero_interior",
+        "colonia",
+        "municipio",
+        "estado",
+        "regimen_fiscal",
+        "telefono",
+        mode="before",
+    )
+    @classmethod
+    def empty_str_to_none_u(cls, v: Any) -> Any:
+        if v is None:
+            return None
+        if isinstance(v, str) and v.strip() == "":
+            return None
+        return v
+
+    @field_validator("codigo_postal")
+    @classmethod
+    def validar_cp_u(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        s = str(v).strip()
+        if len(s) != 5 or not s.isdigit():
+            raise ValueError("El código postal debe tener 5 dígitos")
+        return s
+
+    @field_validator("regimen_fiscal")
+    @classmethod
+    def validar_regimen_sat_u(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        s = str(v).strip()
+        if len(s) != 3 or not s.isdigit():
+            raise ValueError("El régimen fiscal debe ser un código de 3 dígitos (catálogo SAT)")
+        if not is_valid_regimen_fiscal(s):
+            raise ValueError("Código de régimen fiscal no válido en el catálogo SAT")
+        return s
 
 
 class EmpresaResponse(EmpresaBase):
@@ -143,6 +254,7 @@ class EmpleadoBase(BaseModel):
     apellido_materno: Optional[str] = None
     email: Optional[EmailStr] = None
     telefono: Optional[str] = None
+    telefono_empresa_asignado: Optional[str] = None
     username: Optional[str] = None
     empresa_id: Optional[int] = None
     departamento_id: Optional[int] = None
@@ -173,12 +285,30 @@ class EmpleadoCreate(EmpleadoBase):
     horario_sabado_id: Optional[int] = None  # Horario sábado (None = no labora sábados)
 
 
+class UsuarioEspecialCreate(BaseModel):
+    """Alta simplificada para usuarios especiales (exentos de incidencias)."""
+    nombre: str
+    apellido_paterno: Optional[str] = None
+    apellido_materno: Optional[str] = None
+    email: Optional[EmailStr] = None
+    telefono: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+    empresa_id: int
+    departamento_id: int
+    puesto_id: int
+    fecha_ingreso: Optional[datetime] = None
+    # Solo aplica si el puesto es Director: empresas adicionales que supervisa (siempre se incluye empresa_id).
+    empresas_supervision_ids: Optional[List[int]] = None
+
+
 class EmpleadoUpdate(BaseModel):
     nombre: Optional[str] = None
     apellido_paterno: Optional[str] = None
     apellido_materno: Optional[str] = None
     email: Optional[EmailStr] = None
     telefono: Optional[str] = None
+    telefono_empresa_asignado: Optional[str] = None
     username: Optional[str] = None
     empresa_id: Optional[int] = None
     departamento_id: Optional[int] = None
@@ -203,6 +333,8 @@ class EmpleadoUpdate(BaseModel):
     fecha_ingreso: Optional[datetime] = None
     fecha_baja: Optional[datetime] = None
     password: Optional[str] = None
+    # Solo si el puesto es Director: reemplaza el alcance multi-empresa.
+    empresas_supervision_ids: Optional[List[int]] = None
 
 
 class PermisosEspecialesUpdate(BaseModel):
@@ -241,6 +373,25 @@ class EmpleadoResponse(EmpleadoBase):
     empresa: Optional[EmpresaResponse] = None
     departamento: Optional[DepartamentoResponse] = None
     puesto: Optional[PuestoResponse] = None
+    empresas_supervisadas_ids: Optional[List[int]] = None
+
+    @field_validator("estado", mode="before")
+    @classmethod
+    def _estado_null_como_activo(cls, v: Any) -> Any:
+        if v is None:
+            return EstadoEmpleado.ACTIVO
+        return v
 
     class Config:
         from_attributes = True
+
+
+class MiAreaAusenciasDelDiaRequest(BaseModel):
+    """IDs de empleados ya listados en Mi área; el servidor filtra al alcance del usuario."""
+    empleado_ids: List[int] = Field(default_factory=list, max_length=900)
+
+
+class MiAreaAusenciasDelDiaItem(BaseModel):
+    empleado_id: int
+    en_incapacidad: bool
+    en_vacaciones: bool

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Enum, Text, LargeBinary, UniqueConstraint, Date
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Enum, Text, LargeBinary, UniqueConstraint, Date, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import enum
@@ -118,10 +118,11 @@ class FingerprintTemplate(Base):
     """Almacena templates de huellas digitales para replicacion entre dispositivos"""
     __tablename__ = "fingerprint_templates"
     __table_args__ = (
-        UniqueConstraint('numero_empleado', 'finger_index', name='uq_emp_finger'),
+        UniqueConstraint('empleado_id', 'finger_index', name='uq_empid_finger'),
     )
 
     id = Column(Integer, primary_key=True, index=True)
+    empleado_id = Column(Integer, ForeignKey("empleados.id", ondelete="CASCADE"), nullable=True, index=True)
     numero_empleado = Column(String(50), nullable=False, index=True)
     finger_index = Column(Integer, default=0)
     template_data = Column(Text, nullable=False)
@@ -130,6 +131,7 @@ class FingerprintTemplate(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     source_device = relationship("Dispositivo", back_populates="fingerprint_templates")
+    empleado = relationship("Empleado", backref="fingerprint_templates")
 
 
 class Agente(Base):
@@ -220,6 +222,41 @@ class DiaFestivo(Base):
     nombre = Column(String(150), nullable=False)
     tipo = Column(String(20), nullable=False, default="LFT")  # LFT | adicional
     activo = Column(Boolean, default=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+
+class ChecadaEspecial(Base):
+    """
+    Reglas de horario y tolerancia para fechas concretas (medio día, jornadas especiales, sábado distinto).
+    Alcance: global, empresa o departamento. Si varias aplican, gana la más específica (depto > empresa > global).
+    """
+
+    __tablename__ = "checadas_especiales"
+
+    id = Column(Integer, primary_key=True, index=True)
+    nombre = Column(String(200), nullable=False)
+    notas = Column(Text, nullable=True)
+    activo = Column(Boolean, default=True, nullable=False)
+    fecha_inicio = Column(Date, nullable=False)
+    fecha_fin = Column(Date, nullable=False)
+    alcance = Column(String(20), nullable=False)  # global | empresa | departamento
+    empresa_id = Column(Integer, ForeignKey("empresas.id"), nullable=True)
+    departamento_id = Column(Integer, ForeignKey("departamentos.id"), nullable=True)
+    hora_entrada = Column(String(10), nullable=True)
+    hora_salida = Column(String(10), nullable=True)
+    hora_entrada_sabado = Column(String(10), nullable=True)
+    hora_salida_sabado = Column(String(10), nullable=True)
+    tolerancia_minutos = Column(Integer, nullable=True)
+    # Si True, lunes a viernes solo se esperan 2 checadas (entrada + salida), como medio día.
+    jornada_reducida_lv = Column(Boolean, default=False, nullable=False)
+    # Si está definido (2 o 4), tiene prioridad sobre jornada_reducida_lv para L–V.
+    checadas_requeridas = Column(Integer, nullable=True)
+    # Listas de IDs de empresa (JSON). None = reglas antiguas por alcance.
+    # [] en incluidas = aplica a todas las empresas (salvo excluidas).
+    empresas_incluidas = Column(JSON, nullable=True)
+    empresas_excluidas = Column(JSON, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

@@ -152,6 +152,24 @@ class DeviceHandler:
                     self.cloud.mark_enroll_done(enroll_id, success=False)
                     return
 
+            # Huella ya en el checador pero enroll sigue "pending" en BD (p.ej. falló mark-done con agente viejo).
+            # Sin esto, pending[0] bloquea para siempre el resto de la cola.
+            ya_registradas = self.zkteco.get_user_templates(user_id=uid)
+            if ya_registradas:
+                logger.info(
+                    f"[{self.name}] ENROLL id={enroll_id}: {uid} ya tiene huella en el dispositivo; "
+                    "cerrando cola en servidor y subiendo plantillas."
+                )
+                self.cloud.mark_enroll_done(enroll_id, success=True)
+                for tpl in ya_registradas:
+                    self.cloud.upload_template(
+                        numero,
+                        tpl["finger_index"],
+                        tpl["template_data"],
+                        pin_checador=uid,
+                    )
+                return
+
             logger.info(f"[{self.name}] Iniciando registro de huella para {uid}. Esperando dedo en dispositivo...")
             try:
                 ok = self.zkteco.enroll_user(user_id=uid)
@@ -165,7 +183,12 @@ class DeviceHandler:
             if ok:
                 logger.info(f"[{self.name}] Huella registrada para {uid} (empleado {numero})")
                 for tpl in self.zkteco.get_user_templates(user_id=uid):
-                    self.cloud.upload_template(numero, tpl["finger_index"], tpl["template_data"])
+                    self.cloud.upload_template(
+                        numero,
+                        tpl["finger_index"],
+                        tpl["template_data"],
+                        pin_checador=uid,
+                    )
             else:
                 logger.warning(f"[{self.name}] Enroll fallo para {uid} (timeout o el empleado no coloco el dedo)")
         except Exception as e:
@@ -189,13 +212,18 @@ class DeviceHandler:
                     continue
                 # El dispositivo guarda user_id=pin (1,2,3); necesitamos numero_empleado (124) para el backend
                 numero = pin_to_numero.get(pin, pin)
-                if self.cloud.get_employee_templates(numero):
+                if self.cloud.get_employee_templates(numero, pin_checador=pin):
                     continue
                 templates = self.zkteco.get_user_templates(user_id=pin)
                 if not templates:
                     continue
                 for tpl in templates:
-                    self.cloud.upload_template(numero, tpl["finger_index"], tpl["template_data"])
+                    self.cloud.upload_template(
+                        numero,
+                        tpl["finger_index"],
+                        tpl["template_data"],
+                        pin_checador=pin,
+                    )
                     uploaded += 1
             if uploaded:
                 logger.info(f"[{self.name}] {uploaded} huella(s) sincronizadas al backend")
@@ -398,6 +426,14 @@ class Agent:
             return
 
         logger.info(f"{len(active_handlers)} de {len(self.handlers)} dispositivo(s) activo(s)")
+
+        for h in self.handlers:
+            if h.cloud.test_connection():
+                h.cloud.log_backend_device_binding(h.name)
+            else:
+                logger.warning(
+                    f"[{h.name}] Sin conexion al backend; no se puede comprobar a que dispositivo pertenece la API Key"
+                )
 
         for h in active_handlers:
             if h.cloud.test_connection():

@@ -1,13 +1,24 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
 import { fmtNombreEmpleado } from '../../utils/format';
 import { useAuth } from '../../hooks/useAuth';
-import { DepartamentoResponse, Dispositivo, DispositivoCreate, EmpresaResponse, EmpleadoResponse, PuestoResponse, SoporteTicketTipoResponse, UsuarioEspecialCreate } from '../../types';
+import { ActividadLogResponse, ActividadPurgeRequest, DepartamentoResponse, Dispositivo, DispositivoCreate, EmpresaResponse, EmpleadoResponse, PuestoResponse, SoporteTicketClaseResponse, SoporteTicketTipoResponse, UsuarioEspecialCreate } from '../../types';
 import { VacacionesGeneralesPage } from '../vacaciones/VacacionesGeneralesPage';
 import { ChecadasEspecialesPage } from './ChecadasEspecialesPage';
-
+import { isNominaEnabled } from '../../config/features';
 const toLocalDate = (iso: string) =>
   new Date(iso.endsWith('Z') || iso.includes('+') ? iso : iso + 'Z');
+
+const ACTIVIDAD_PAGE_SIZE = 50;
+
+/** Dispositivo virtual del flujo de importación histórica (no se muestra en Configuración). */
+const NOMBRE_DISPOSITIVO_IMPORTACION_HISTORICA = 'Importación Histórica';
+
+function filtrarDispositivosConfiguracion(list: Dispositivo[]): Dispositivo[] {
+  return (Array.isArray(list) ? list : []).filter(
+    (d) => (d.nombre || '').trim() !== NOMBRE_DISPOSITIVO_IMPORTACION_HISTORICA,
+  );
+}
 
 const fmtDate = (iso: string) =>
   toLocalDate(iso).toLocaleString('es-MX', {
@@ -15,7 +26,8 @@ const fmtDate = (iso: string) =>
     hour: '2-digit', minute: '2-digit', second: '2-digit',
   });
 
-type ConfigTab = 'dispositivos' | 'empresas' | 'horarios' | 'festivos' | 'vacaciones_generales' | 'checadas_especiales' | 'usuarios_especiales' | 'soporte';
+type ConfigTab = 'dispositivos' | 'empresas' | 'horarios' | 'eventos_especiales' | 'usuarios_especiales' | 'soporte' | 'actividad';
+type EventosEspecialesTab = 'festivos' | 'vacaciones_generales' | 'checadas_especiales';
 
 function configTabSubtitle(tab: ConfigTab): string {
   switch (tab) {
@@ -25,16 +37,14 @@ function configTabSubtitle(tab: ConfigTab): string {
       return 'Empresas';
     case 'horarios':
       return 'Horarios de Trabajo';
-    case 'festivos':
-      return 'Días festivos (calendario LFT)';
-    case 'vacaciones_generales':
-      return 'Vacaciones generales y días otorgados por la empresa';
-    case 'checadas_especiales':
-      return 'Checadas especiales (horarios por fechas)';
+    case 'eventos_especiales':
+      return 'Eventos especiales: festivos, vacaciones generales y checadas especiales';
     case 'usuarios_especiales':
       return 'Usuarios Especiales';
     case 'soporte':
       return 'Catálogo de tipos de ticket de soporte';
+    case 'actividad':
+      return 'Actividad: accesos, solicitudes, errores (sin tráfico HTTP de empleados)';
     default:
       return '';
   }
@@ -117,6 +127,7 @@ const modalEmpresa: React.CSSProperties = {
 
 type EmpresaFormState = {
   nombre: string;
+  siglas: string;
   rfc: string;
   capital_social: string;
   codigo_postal: string;
@@ -130,10 +141,14 @@ type EmpresaFormState = {
   telefono: string;
   dias_laborales: 'lun-sab' | 'lun-dom';
   trabaja_festivos: boolean;
+  // Nómina / timbrado
+  registro_patronal: string;
+  periodicidad_nomina: string;
 };
 
 const emptyEmpresaForm = (): EmpresaFormState => ({
   nombre: '',
+  siglas: '',
   rfc: '',
   capital_social: '',
   codigo_postal: '',
@@ -147,6 +162,8 @@ const emptyEmpresaForm = (): EmpresaFormState => ({
   telefono: '',
   dias_laborales: 'lun-sab',
   trabaja_festivos: false,
+  registro_patronal: '',
+  periodicidad_nomina: '04',
 });
 
 function formatEmpresaDomicilioFiscal(emp: EmpresaResponse): string {
@@ -167,12 +184,41 @@ const labelStyle: React.CSSProperties = { display: 'block', marginBottom: '4px',
 const inputStyle: React.CSSProperties = { width: '100%', height: '38px', padding: '0 12px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '0.9rem', boxSizing: 'border-box' };
 const btnSuccess: React.CSSProperties = { padding: '9px 20px', backgroundColor: '#28a745', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', whiteSpace: 'nowrap' };
 const btnSecondary: React.CSSProperties = { padding: '9px 20px', backgroundColor: '#6c757d', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', whiteSpace: 'nowrap' };
+/** Fila de herramientas: etiqueta + select + botón en la misma línea (actividad / limpieza). */
+const actividadToolbarRow: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'row',
+  alignItems: 'center',
+  gap: '10px',
+  flexWrap: 'nowrap',
+  minWidth: 'min-content',
+};
+const actividadToolbarScroll: React.CSSProperties = {
+  width: '100%',
+  overflowX: 'auto',
+  paddingBottom: '4px',
+  WebkitOverflowScrolling: 'touch',
+};
+const actividadToolbarLabel: React.CSSProperties = {
+  fontSize: '0.85rem',
+  fontWeight: 500,
+  color: '#374151',
+  flexShrink: 0,
+};
+const actividadSelectInline: React.CSSProperties = {
+  ...inputStyle,
+  width: 'auto',
+  minWidth: '140px',
+  flex: '0 1 auto',
+};
 
 export const ConfiguracionPage = () => {
   const { authMe } = useAuth();
   const isSuperuser = authMe?.is_superuser === true;
 
   const [configTab, setConfigTab] = useState<ConfigTab>('dispositivos');
+  const [eventosEspecialesTab, setEventosEspecialesTab] = useState<EventosEspecialesTab>('festivos');
+
   const [dispositivos, setDispositivos] = useState<Dispositivo[]>([]);
   const [empresas, setEmpresas] = useState<EmpresaResponse[]>([]);
   const [empleados, setEmpleados] = useState<{ id: number; empresa_id?: number | null }[]>([]);
@@ -183,11 +229,19 @@ export const ConfiguracionPage = () => {
   const [editingEmpresaId, setEditingEmpresaId] = useState<number | null>(null);
   const [empresaForm, setEmpresaForm] = useState<EmpresaFormState>(emptyEmpresaForm());
   const [regimenesSat, setRegimenesSat] = useState<{ code: string; descripcion: string }[]>([]);
+  // Catálogo periodicidad nómina (traído del módulo nómina)
+  const [periodicidadCat, setPeriodicidadCat] = useState<{ clave: string; descripcion: string }[]>([]);
+  // Indica si los campos nómina de empresa ya se guardaron (para PUT separado)
+  const [savingNominaEmpresa, setSavingNominaEmpresa] = useState(false);
   const [saving, setSaving] = useState(false);
   const [tiposSoporte, setTiposSoporte] = useState<SoporteTicketTipoResponse[]>([]);
   const [showTipoSoporteModal, setShowTipoSoporteModal] = useState(false);
   const [editingTipoSoporte, setEditingTipoSoporte] = useState<SoporteTicketTipoResponse | null>(null);
-  const [tipoSoporteForm, setTipoSoporteForm] = useState({ nombre: '', activo: true });
+  const [tipoSoporteForm, setTipoSoporteForm] = useState<{ nombre: string; clase_id: number | ''; activo: boolean }>({ nombre: '', clase_id: '', activo: true });
+  const [clasesSoporte, setClasesSoporte] = useState<SoporteTicketClaseResponse[]>([]);
+  const [showClaseSoporteModal, setShowClaseSoporteModal] = useState(false);
+  const [editingClaseSoporte, setEditingClaseSoporte] = useState<SoporteTicketClaseResponse | null>(null);
+  const [claseSoporteForm, setClaseSoporteForm] = useState({ nombre: '', activo: true });
 
   // Festivos state
   const [festivos, setFestivos] = useState<DiaFestivo[]>([]);
@@ -220,6 +274,62 @@ export const ConfiguracionPage = () => {
   const [usuarioEspecialForm, setUsuarioEspecialForm] = useState<UsuarioEspecialFormState>(emptyUsuarioEspecialForm());
   const [togglingEspecial, setTogglingEspecial] = useState<number | null>(null);
 
+  const [actividadItems, setActividadItems] = useState<ActividadLogResponse[]>([]);
+  const [actividadTotal, setActividadTotal] = useState(0);
+  const [actividadSkip, setActividadSkip] = useState(0);
+  const [actividadFiltroNivel, setActividadFiltroNivel] = useState('');
+  const [actividadFiltroCategoria, setActividadFiltroCategoria] = useState('');
+  const [loadingActividad, setLoadingActividad] = useState(false);
+  const [purgingActividad, setPurgingActividad] = useState(false);
+  const [limpiezaCategoria, setLimpiezaCategoria] = useState('');
+  const [limpiezaDias, setLimpiezaDias] = useState(30);
+  const [limpiezaAntiguosSoloCat, setLimpiezaAntiguosSoloCat] = useState('');
+  const [showActividadVaciarModal, setShowActividadVaciarModal] = useState(false);
+  const [vaciarConfirmInput, setVaciarConfirmInput] = useState('');
+
+  const loadActividad = useCallback(async () => {
+    setLoadingActividad(true);
+    try {
+      const res = await api.get<{ items: ActividadLogResponse[]; total: number }>('/audit/actividad', {
+        params: {
+          skip: actividadSkip,
+          limit: ACTIVIDAD_PAGE_SIZE,
+          ...(actividadFiltroNivel ? { nivel: actividadFiltroNivel } : {}),
+          ...(actividadFiltroCategoria ? { categoria: actividadFiltroCategoria } : {}),
+        },
+      });
+      setActividadItems(Array.isArray(res.data?.items) ? res.data.items : []);
+      setActividadTotal(typeof res.data?.total === 'number' ? res.data.total : 0);
+    } catch {
+      setActividadItems([]);
+      setActividadTotal(0);
+    } finally {
+      setLoadingActividad(false);
+    }
+  }, [actividadSkip, actividadFiltroNivel, actividadFiltroCategoria]);
+
+  const ejecutarPurgarActividad = async (body: ActividadPurgeRequest): Promise<boolean> => {
+    setPurgingActividad(true);
+    try {
+      const res = await api.post<{ eliminados: number }>('/audit/actividad/purgar', body);
+      const n = res.data?.eliminados ?? 0;
+      alert(`Se eliminaron ${n} registro(s).`);
+      setActividadSkip(0);
+      await loadActividad();
+      return true;
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { detail?: string | unknown } } };
+      const d = e.response?.data?.detail;
+      let msg = 'No se pudo limpiar';
+      if (typeof d === 'string') msg = d;
+      else if (Array.isArray(d)) msg = d.map((x: { msg?: string }) => x.msg || x).join(', ');
+      alert(msg);
+      return false;
+    } finally {
+      setPurgingActividad(false);
+    }
+  };
+
   useEffect(() => {
     loadData();
     loadFestivos();
@@ -230,11 +340,18 @@ export const ConfiguracionPage = () => {
     api.get<{ code: string; descripcion: string }[]>('/personal/regimenes-fiscales-sat')
       .then((res) => setRegimenesSat(Array.isArray(res.data) ? res.data : []))
       .catch(() => setRegimenesSat([]));
+    if (isNominaEnabled) {
+      api.get('/nomina/catalogos')
+        .then((res) => setPeriodicidadCat(Array.isArray(res.data?.periodicidad_pago) ? res.data.periodicidad_pago : []))
+        .catch(() => {});
+    } else {
+      setPeriodicidadCat([]);
+    }
   }, [configTab]);
 
-  /** Solo administrador ve / usa pestañas Vacaciones generales y Checadas especiales */
+  /** Solo administrador ve / usa pestañas Eventos especiales, Soporte y Actividad */
   useEffect(() => {
-    if (!isSuperuser && (configTab === 'vacaciones_generales' || configTab === 'checadas_especiales')) {
+    if (!isSuperuser && (configTab === 'eventos_especiales' || configTab === 'soporte' || configTab === 'actividad')) {
       setConfigTab('dispositivos');
     }
   }, [isSuperuser, configTab]);
@@ -244,7 +361,7 @@ export const ConfiguracionPage = () => {
     if (configTab !== 'dispositivos') return;
     const cargarSoloDispositivos = () => {
       api.get('/asistencia/devices')
-        .then(res => { setDispositivos(Array.isArray(res.data) ? res.data : []); })
+        .then(res => { setDispositivos(filtrarDispositivosConfiguracion(Array.isArray(res.data) ? res.data : [])); })
         .catch(() => {});
     };
     cargarSoloDispositivos();
@@ -269,8 +386,16 @@ export const ConfiguracionPage = () => {
   }, [configTab]);
 
   useEffect(() => {
-    if (configTab === 'soporte' && isSuperuser) loadTiposSoporte();
+    if (configTab === 'soporte' && isSuperuser) {
+      loadClasesSoporte();
+      loadTiposSoporte();
+    }
   }, [configTab, isSuperuser]);
+
+  useEffect(() => {
+    if (configTab !== 'actividad' || !isSuperuser) return;
+    void loadActividad();
+  }, [configTab, isSuperuser, loadActividad]);
 
   const toggleExentoIncidencias = async (emp: EmpleadoResponse, valor: boolean) => {
     setTogglingEspecial(emp.id);
@@ -499,15 +624,58 @@ export const ConfiguracionPage = () => {
     }
   };
 
+  const loadClasesSoporte = async () => {
+    try {
+      const res = await api.get<SoporteTicketClaseResponse[]>('/soporte/clases');
+      setClasesSoporte(Array.isArray(res.data) ? res.data : []);
+    } catch {
+      setClasesSoporte([]);
+    }
+  };
+
+  const openNewClaseSoporte = () => {
+    setEditingClaseSoporte(null);
+    setClaseSoporteForm({ nombre: '', activo: true });
+    setShowClaseSoporteModal(true);
+  };
+
+  const startEditClaseSoporte = (clase: SoporteTicketClaseResponse) => {
+    setEditingClaseSoporte(clase);
+    setClaseSoporteForm({ nombre: clase.nombre, activo: clase.activo });
+    setShowClaseSoporteModal(true);
+  };
+
+  const handleClaseSoporteSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!claseSoporteForm.nombre.trim()) { alert('El nombre es obligatorio'); return; }
+    setSaving(true);
+    try {
+      if (editingClaseSoporte) {
+        await api.put(`/soporte/clases/${editingClaseSoporte.id}`, { nombre: claseSoporteForm.nombre.trim(), activo: claseSoporteForm.activo });
+      } else {
+        await api.post('/soporte/clases', { nombre: claseSoporteForm.nombre.trim(), activo: claseSoporteForm.activo });
+      }
+      setShowClaseSoporteModal(false);
+      setEditingClaseSoporte(null);
+      setClaseSoporteForm({ nombre: '', activo: true });
+      loadClasesSoporte();
+    } catch (err: unknown) {
+      const e2 = err as { response?: { data?: { detail?: string } } };
+      alert(e2.response?.data?.detail || 'Error al guardar categoría');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const openNewTipoSoporte = () => {
     setEditingTipoSoporte(null);
-    setTipoSoporteForm({ nombre: '', activo: true });
+    setTipoSoporteForm({ nombre: '', clase_id: '', activo: true });
     setShowTipoSoporteModal(true);
   };
 
   const startEditTipoSoporte = (tipo: SoporteTicketTipoResponse) => {
     setEditingTipoSoporte(tipo);
-    setTipoSoporteForm({ nombre: tipo.nombre, activo: tipo.activo });
+    setTipoSoporteForm({ nombre: tipo.nombre, clase_id: tipo.clase_id ?? '', activo: tipo.activo });
     setShowTipoSoporteModal(true);
   };
 
@@ -519,20 +687,19 @@ export const ConfiguracionPage = () => {
     }
     setSaving(true);
     try {
+      const payload = {
+        nombre: tipoSoporteForm.nombre.trim(),
+        clase_id: tipoSoporteForm.clase_id !== '' ? Number(tipoSoporteForm.clase_id) : null,
+        activo: tipoSoporteForm.activo,
+      };
       if (editingTipoSoporte) {
-        await api.put(`/soporte/tipos/${editingTipoSoporte.id}`, {
-          nombre: tipoSoporteForm.nombre.trim(),
-          activo: tipoSoporteForm.activo,
-        });
+        await api.put(`/soporte/tipos/${editingTipoSoporte.id}`, payload);
       } else {
-        await api.post('/soporte/tipos', {
-          nombre: tipoSoporteForm.nombre.trim(),
-          activo: tipoSoporteForm.activo,
-        });
+        await api.post('/soporte/tipos', payload);
       }
       setShowTipoSoporteModal(false);
       setEditingTipoSoporte(null);
-      setTipoSoporteForm({ nombre: '', activo: true });
+      setTipoSoporteForm({ nombre: '', clase_id: '', activo: true });
       loadTiposSoporte();
     } catch (err: unknown) {
       const e2 = err as { response?: { data?: { detail?: string } } };
@@ -560,7 +727,7 @@ export const ConfiguracionPage = () => {
         api.get('/personal/departamentos?limit=1000'),
         api.get('/personal/puestos?limit=1000'),
       ]);
-      if (devRes.status === 'fulfilled') setDispositivos(devRes.value?.data ?? []);
+      if (devRes.status === 'fulfilled') setDispositivos(filtrarDispositivosConfiguracion(devRes.value?.data ?? []));
       if (emprsRes.status === 'fulfilled') setEmpresas(emprsRes.value?.data ?? []);
       if (empRes.status === 'fulfilled') setEmpleados(Array.isArray(empRes.value?.data) ? empRes.value.data : []);
       if (horRes.status === 'fulfilled') setHorarios(Array.isArray(horRes.value?.data) ? horRes.value.data : []);
@@ -752,8 +919,9 @@ export const ConfiguracionPage = () => {
   };
 
   const startEditEmpresa = (emp: EmpresaResponse) => {
-    setEmpresaForm({
+    const base: EmpresaFormState = {
       nombre: emp.nombre,
+      siglas: emp.siglas || '',
       rfc: emp.rfc || '',
       capital_social:
         emp.capital_social != null && String(emp.capital_social) !== '' ? String(emp.capital_social) : '',
@@ -768,8 +936,22 @@ export const ConfiguracionPage = () => {
       telefono: emp.telefono || '',
       dias_laborales: emp.dias_laborales === 'lun-dom' ? 'lun-dom' : 'lun-sab',
       trabaja_festivos: !!emp.trabaja_festivos,
-    });
+      registro_patronal: '',
+      periodicidad_nomina: '04',
+    };
+    setEmpresaForm(base);
     setEditingEmpresaId(emp.id);
+    if (isNominaEnabled) {
+      api.get(`/nomina/empresas/${emp.id}/config`)
+        .then(r => {
+          setEmpresaForm(prev => ({
+            ...prev,
+            registro_patronal: r.data.registro_patronal || '',
+            periodicidad_nomina: r.data.periodicidad_defecto || '04',
+          }));
+        })
+        .catch(() => {});
+    }
     setShowEmpresaModal(true);
   };
 
@@ -787,7 +969,10 @@ export const ConfiguracionPage = () => {
     }
     setSaving(true);
     try {
-      const payload: Record<string, unknown> = { nombre: empresaForm.nombre.trim() };
+      const payload: Record<string, unknown> = {
+        nombre: empresaForm.nombre.trim(),
+        siglas: empresaForm.siglas.trim() || null,
+      };
       if (empresaForm.rfc.trim()) payload.rfc = empresaForm.rfc.trim().toUpperCase();
       if (empresaForm.telefono.trim()) payload.telefono = empresaForm.telefono.trim();
       if (empresaForm.codigo_postal.trim()) payload.codigo_postal = empresaForm.codigo_postal.trim();
@@ -816,13 +1001,25 @@ export const ConfiguracionPage = () => {
       payload.dias_laborales = empresaForm.dias_laborales;
       payload.trabaja_festivos = empresaForm.trabaja_festivos;
       payload.checadas_remotas = true;
+      let savedEmpresaId = editingEmpresaId;
       if (editingEmpresaId) {
         await api.put(`/personal/empresas/${editingEmpresaId}`, payload);
-        alert('Empresa actualizada');
       } else {
-        await api.post('/personal/empresas', payload);
-        alert('Empresa creada');
+        const res = await api.post('/personal/empresas', payload);
+        savedEmpresaId = res.data.id ?? null;
       }
+      if (savedEmpresaId && isNominaEnabled) {
+        setSavingNominaEmpresa(true);
+        try {
+          const nominaPayload: Record<string, string> = {};
+          if (empresaForm.registro_patronal.trim()) nominaPayload.registro_patronal = empresaForm.registro_patronal.trim();
+          if (empresaForm.periodicidad_nomina) nominaPayload.periodicidad_defecto = empresaForm.periodicidad_nomina;
+          await api.put(`/nomina/empresas/${savedEmpresaId}/config`, nominaPayload);
+        } catch { /* si falla config nómina no bloqueamos */ } finally {
+          setSavingNominaEmpresa(false);
+        }
+      }
+      alert(editingEmpresaId ? 'Empresa actualizada' : 'Empresa creada');
       setShowEmpresaModal(false);
       loadData();
     } catch (error: unknown) {
@@ -871,19 +1068,33 @@ export const ConfiguracionPage = () => {
           {configTab === 'horarios' && (
             <button onClick={openNewHorario} style={btnSuccess}>+ Nuevo Horario</button>
           )}
-          {configTab === 'festivos' && (
+          {configTab === 'eventos_especiales' && eventosEspecialesTab === 'festivos' && (
             <button onClick={() => setShowFestivoModal(true)} style={btnSuccess}>+ Agregar Festivo</button>
           )}
           {configTab === 'usuarios_especiales' && (
             <button onClick={openCrearUsuarioEspecial} style={btnSuccess}>+ Agregar usuario especial</button>
           )}
           {configTab === 'soporte' && isSuperuser && (
-            <button onClick={openNewTipoSoporte} style={btnSuccess}>+ Nuevo tipo de ticket</button>
+            <>
+              <button onClick={openNewClaseSoporte} style={{ ...btnSuccess, background: '#7c3aed' }}>+ Nueva categoría</button>
+              <button onClick={openNewTipoSoporte} style={btnSuccess}>+ Nuevo tipo de ticket</button>
+            </>
           )}
           <button
-            onClick={() => { setLoading(true); loadData(); }}
-            disabled={loading}
-            style={{ padding: '8px 18px', backgroundColor: '#6b7280', color: 'white', border: 'none', borderRadius: '5px', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.6 : 1 }}
+            onClick={() => {
+              if (configTab === 'actividad' && isSuperuser) {
+                void loadActividad();
+                return;
+              }
+              if (configTab === 'eventos_especiales' && eventosEspecialesTab === 'festivos' && isSuperuser) {
+                void loadFestivos();
+                return;
+              }
+              setLoading(true);
+              loadData();
+            }}
+            disabled={loading || (configTab === 'actividad' && (loadingActividad || purgingActividad))}
+            style={{ padding: '8px 18px', backgroundColor: '#6b7280', color: 'white', border: 'none', borderRadius: '5px', cursor: loading || (configTab === 'actividad' && (loadingActividad || purgingActividad)) ? 'not-allowed' : 'pointer', opacity: loading || (configTab === 'actividad' && (loadingActividad || purgingActividad)) ? 0.6 : 1 }}
           >
             Actualizar
           </button>
@@ -895,20 +1106,24 @@ export const ConfiguracionPage = () => {
         <button style={tabStyle(configTab === 'dispositivos')} onClick={() => setConfigTab('dispositivos')}>Dispositivos</button>
         <button style={tabStyle(configTab === 'empresas')} onClick={() => setConfigTab('empresas')}>Empresas</button>
         <button style={tabStyle(configTab === 'horarios')} onClick={() => setConfigTab('horarios')}>Horarios</button>
-        <button style={tabStyle(configTab === 'festivos')} onClick={() => { setConfigTab('festivos'); loadFestivos(); }}>Días Festivos</button>
         {isSuperuser && (
-          <button style={tabStyle(configTab === 'vacaciones_generales')} onClick={() => setConfigTab('vacaciones_generales')}>
-            Vacaciones generales
-          </button>
-        )}
-        {isSuperuser && (
-          <button style={tabStyle(configTab === 'checadas_especiales')} onClick={() => setConfigTab('checadas_especiales')}>
-            Checadas especiales
+          <button
+            style={tabStyle(configTab === 'eventos_especiales')}
+            onClick={() => {
+              setConfigTab('eventos_especiales');
+              setEventosEspecialesTab('festivos');
+              void loadFestivos();
+            }}
+          >
+            Eventos especiales
           </button>
         )}
         <button style={tabStyle(configTab === 'usuarios_especiales')} onClick={() => setConfigTab('usuarios_especiales')}>Usuarios especiales</button>
         {isSuperuser && (
           <button style={tabStyle(configTab === 'soporte')} onClick={() => setConfigTab('soporte')}>Soporte</button>
+        )}
+        {isSuperuser && (
+          <button style={tabStyle(configTab === 'actividad')} onClick={() => setConfigTab('actividad')}>Actividad</button>
         )}
       </div>
 
@@ -1263,10 +1478,18 @@ export const ConfiguracionPage = () => {
             <form onSubmit={handleEmpresaSubmit}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '20px' }}>
                 <p style={{ margin: 0, fontSize: '0.82rem', color: '#64748b', fontWeight: 600 }}>Datos fiscales</p>
-                <div>
-                  <label style={labelStyle}>Denominación o razón social *</label>
-                  <input style={inputStyle} value={empresaForm.nombre}
-                    onChange={e => setEmpresaForm(p => ({ ...p, nombre: e.target.value }))} required placeholder="Nombre legal ante el SAT" />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '12px', alignItems: 'end' }}>
+                  <div>
+                    <label style={labelStyle}>Denominación o razón social *</label>
+                    <input style={inputStyle} value={empresaForm.nombre}
+                      onChange={e => setEmpresaForm(p => ({ ...p, nombre: e.target.value }))} required placeholder="Nombre legal ante el SAT" />
+                  </div>
+                  <div style={{ minWidth: 90 }}>
+                    <label style={labelStyle}>Siglas</label>
+                    <input style={{ ...inputStyle, textTransform: 'uppercase' }} value={empresaForm.siglas}
+                      onChange={e => setEmpresaForm(p => ({ ...p, siglas: e.target.value.toUpperCase() }))}
+                      maxLength={20} placeholder="DEA" />
+                  </div>
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
                   <div>
@@ -1372,6 +1595,49 @@ export const ConfiguracionPage = () => {
                     Si está activo, en festivos sí se consideran checadas para esta empresa.
                   </span>
                 </div>
+
+                {isNominaEnabled && (
+                  <>
+                    <p style={{ margin: '8px 0 0', fontSize: '0.82rem', color: '#64748b', fontWeight: 600 }}>Nómina / Timbrado</p>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                      <div>
+                        <label style={labelStyle}>Registro patronal IMSS</label>
+                        <input
+                          style={inputStyle}
+                          value={empresaForm.registro_patronal}
+                          onChange={e => setEmpresaForm(p => ({ ...p, registro_patronal: e.target.value.toUpperCase() }))}
+                          maxLength={20}
+                          placeholder="Ej. Y99 00 00 000 0"
+                        />
+                      </div>
+                      <div>
+                        <label style={labelStyle}>Periodicidad de pago por defecto</label>
+                        <select
+                          style={inputStyle}
+                          value={empresaForm.periodicidad_nomina}
+                          onChange={e => setEmpresaForm(p => ({ ...p, periodicidad_nomina: e.target.value }))}
+                        >
+                          <option value="">— Sin definir —</option>
+                          {periodicidadCat.length > 0
+                            ? periodicidadCat.map(c => (
+                                <option key={c.clave} value={c.clave}>{c.clave} — {c.descripcion}</option>
+                              ))
+                            : (
+                              <>
+                                <option value="04">04 — Quincenal</option>
+                                <option value="05">05 — Mensual</option>
+                                <option value="02">02 — Semanal</option>
+                              </>
+                            )
+                          }
+                        </select>
+                      </div>
+                    </div>
+                    {savingNominaEmpresa && (
+                      <p style={{ margin: 0, fontSize: '0.78rem', color: '#6b7280' }}>Guardando configuración de nómina…</p>
+                    )}
+                  </>
+                )}
               </div>
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
                 <button type="button" onClick={() => setShowEmpresaModal(false)} style={btnSecondary}>Cancelar</button>
@@ -1384,8 +1650,40 @@ export const ConfiguracionPage = () => {
         </div>
       )}
 
-      {/* ====== TAB: DÍAS FESTIVOS ====== */}
-      {configTab === 'festivos' && (
+      {/* ====== TAB: EVENTOS ESPECIALES (solo administrador) ====== */}
+      {isSuperuser && configTab === 'eventos_especiales' && (
+        <div style={{ marginBottom: '18px' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', borderBottom: '1px solid #e5e7eb', paddingBottom: '10px' }}>
+            <button
+              type="button"
+              style={tabStyle(eventosEspecialesTab === 'festivos')}
+              onClick={() => {
+                setEventosEspecialesTab('festivos');
+                void loadFestivos();
+              }}
+            >
+              Días festivos
+            </button>
+            <button
+              type="button"
+              style={tabStyle(eventosEspecialesTab === 'vacaciones_generales')}
+              onClick={() => setEventosEspecialesTab('vacaciones_generales')}
+            >
+              Vacaciones generales
+            </button>
+            <button
+              type="button"
+              style={tabStyle(eventosEspecialesTab === 'checadas_especiales')}
+              onClick={() => setEventosEspecialesTab('checadas_especiales')}
+            >
+              Checadas especiales
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ====== SUBTAB: DÍAS FESTIVOS ====== */}
+      {isSuperuser && configTab === 'eventos_especiales' && eventosEspecialesTab === 'festivos' && (
         <div>
           {/* Controles de año + auto-generar */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px', flexWrap: 'wrap' }}>
@@ -1512,12 +1810,12 @@ export const ConfiguracionPage = () => {
         </div>
       )}
 
-      {/* ====== TAB: VACACIONES GENERALES (solo administrador) ====== */}
-      {isSuperuser && configTab === 'vacaciones_generales' && (
+      {/* ====== SUBTAB: VACACIONES GENERALES ====== */}
+      {isSuperuser && configTab === 'eventos_especiales' && eventosEspecialesTab === 'vacaciones_generales' && (
         <VacacionesGeneralesPage embedded />
       )}
 
-      {isSuperuser && configTab === 'checadas_especiales' && (
+      {isSuperuser && configTab === 'eventos_especiales' && eventosEspecialesTab === 'checadas_especiales' && (
         <ChecadasEspecialesPage embedded />
       )}
 
@@ -1763,12 +2061,52 @@ export const ConfiguracionPage = () => {
         <div>
           <div style={{ padding: '16px', backgroundColor: '#f0f9ff', borderRadius: '8px', marginBottom: '20px', border: '1px solid #bae6fd' }}>
             <p style={{ margin: 0, fontSize: '0.9rem', color: '#0369a1' }}>
-              Configura los tipos disponibles para los tickets del portal (ej. Soporte, Reemplazo, Mantenimiento).
+              Define primero las <strong>categorías</strong> (ej. Hardware, Software, Redes) y luego los <strong>tipos de ticket</strong> dentro de cada categoría. El portal mostrará un selector en cascada: categoría → tipo.
             </p>
           </div>
+
+          {/* ── Categorías ── */}
+          <h4 style={{ margin: '0 0 10px', fontSize: '0.95rem', color: '#6d28d9' }}>Categorías</h4>
+          {clasesSoporte.length === 0 ? (
+            <div style={{ padding: '20px', textAlign: 'center', border: '1px solid #e5e7eb', borderRadius: '10px', backgroundColor: '#fff', marginBottom: 20 }}>
+              <p style={{ margin: 0, color: '#6b7280', fontSize: '0.9rem' }}>No hay categorías configuradas. Agrega la primera con el botón <strong>+ Nueva categoría</strong>.</p>
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto', backgroundColor: 'white', borderRadius: '10px', boxShadow: '0 1px 3px rgba(0,0,0,0.04)', marginBottom: 24 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr style={{ backgroundColor: '#f5f3ff' }}>
+                    <th style={{ padding: '11px 14px', textAlign: 'left', borderBottom: '2px solid #ddd6fe', fontSize: '0.85rem', color: '#6d28d9', fontWeight: 600 }}>Categoría</th>
+                    <th style={{ padding: '11px 14px', textAlign: 'left', borderBottom: '2px solid #ddd6fe', fontSize: '0.85rem', color: '#6d28d9', fontWeight: 600 }}>Estado</th>
+                    <th style={{ padding: '11px 14px', textAlign: 'center', borderBottom: '2px solid #ddd6fe', fontSize: '0.85rem', color: '#6d28d9', fontWeight: 600 }}>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {clasesSoporte.map((clase) => (
+                    <tr key={clase.id} style={{ borderBottom: '1px solid #eee' }}>
+                      <td style={{ padding: '11px 14px', fontWeight: 500 }}>{clase.nombre}</td>
+                      <td style={{ padding: '11px 14px' }}>
+                        <span style={{ padding: '3px 10px', borderRadius: '4px', fontSize: '0.8rem', backgroundColor: clase.activo ? '#d4edda' : '#f8d7da', color: clase.activo ? '#155724' : '#721c24', fontWeight: 500 }}>
+                          {clase.activo ? 'Activo' : 'Inactivo'}
+                        </span>
+                      </td>
+                      <td style={{ padding: '11px 14px', textAlign: 'center' }}>
+                        <button onClick={() => startEditClaseSoporte(clase)} style={{ padding: '4px 10px', fontSize: '0.78rem', cursor: 'pointer', backgroundColor: '#ffc107', color: '#000', border: 'none', borderRadius: '4px' }}>
+                          Editar
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* ── Tipos de ticket ── */}
+          <h4 style={{ margin: '0 0 10px', fontSize: '0.95rem', color: '#374151' }}>Tipos de ticket</h4>
           {tiposSoporte.length === 0 ? (
-            <div style={{ padding: '30px', textAlign: 'center', border: '1px solid #e5e7eb', borderRadius: '10px', backgroundColor: '#fff' }}>
-              <p style={{ margin: 0, color: '#6b7280' }}>No hay tipos de ticket configurados.</p>
+            <div style={{ padding: '20px', textAlign: 'center', border: '1px solid #e5e7eb', borderRadius: '10px', backgroundColor: '#fff' }}>
+              <p style={{ margin: 0, color: '#6b7280', fontSize: '0.9rem' }}>No hay tipos de ticket configurados.</p>
             </div>
           ) : (
             <div style={{ overflowX: 'auto', backgroundColor: 'white', borderRadius: '10px', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
@@ -1776,6 +2114,7 @@ export const ConfiguracionPage = () => {
                 <thead>
                   <tr style={{ backgroundColor: '#f8f9fa' }}>
                     <th style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>Nombre</th>
+                    <th style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>Categoría</th>
                     <th style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>Estado</th>
                     <th style={{ padding: '12px 14px', textAlign: 'center', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>Acciones</th>
                   </tr>
@@ -1784,6 +2123,12 @@ export const ConfiguracionPage = () => {
                   {tiposSoporte.map((tipo) => (
                     <tr key={tipo.id} style={{ borderBottom: '1px solid #eee' }}>
                       <td style={{ padding: '11px 14px', fontWeight: 500 }}>{tipo.nombre}</td>
+                      <td style={{ padding: '11px 14px' }}>
+                        {tipo.clase_nombre
+                          ? <span style={{ padding: '2px 8px', borderRadius: '4px', fontSize: '0.8rem', backgroundColor: '#ede9fe', color: '#6d28d9', fontWeight: 500 }}>{tipo.clase_nombre}</span>
+                          : <span style={{ color: '#9ca3af', fontSize: '0.8rem' }}>Sin categoría</span>
+                        }
+                      </td>
                       <td style={{ padding: '11px 14px' }}>
                         <span style={{ padding: '3px 10px', borderRadius: '4px', fontSize: '0.8rem', backgroundColor: tipo.activo ? '#d4edda' : '#f8d7da', color: tipo.activo ? '#155724' : '#721c24', fontWeight: 500 }}>
                           {tipo.activo ? 'Activo' : 'Inactivo'}
@@ -1801,6 +2146,35 @@ export const ConfiguracionPage = () => {
             </div>
           )}
 
+          {/* Modal: Categoría */}
+          {showClaseSoporteModal && (
+            <div style={modalOverlay} onClick={() => setShowClaseSoporteModal(false)}>
+              <div style={{ ...modalSmall, maxWidth: '420px' }} onClick={e => e.stopPropagation()}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', paddingBottom: '10px', borderBottom: '1px solid #e5e7eb' }}>
+                  <h3 style={{ margin: 0, fontSize: '1.1rem' }}>{editingClaseSoporte ? 'Editar categoría' : 'Nueva categoría'}</h3>
+                  <button type="button" onClick={() => setShowClaseSoporteModal(false)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#9ca3af' }}>&times;</button>
+                </div>
+                <form onSubmit={handleClaseSoporteSubmit}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '16px' }}>
+                    <div>
+                      <label style={labelStyle}>Nombre *</label>
+                      <input style={inputStyle} value={claseSoporteForm.nombre} onChange={(e) => setClaseSoporteForm(p => ({ ...p, nombre: e.target.value }))} placeholder="Ej: Hardware, Software, Redes" required />
+                    </div>
+                    <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <input type="checkbox" checked={claseSoporteForm.activo} onChange={(e) => setClaseSoporteForm(p => ({ ...p, activo: e.target.checked }))} />
+                      Activo
+                    </label>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                    <button type="button" onClick={() => setShowClaseSoporteModal(false)} style={btnSecondary}>Cancelar</button>
+                    <button type="submit" style={saving ? { ...btnSuccess, opacity: 0.6, cursor: 'not-allowed' } : btnSuccess} disabled={saving}>{saving ? 'Guardando...' : 'Guardar'}</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* Modal: Tipo de ticket */}
           {showTipoSoporteModal && (
             <div style={modalOverlay} onClick={() => setShowTipoSoporteModal(false)}>
               <div style={{ ...modalSmall, maxWidth: '460px' }} onClick={e => e.stopPropagation()}>
@@ -1812,28 +2186,25 @@ export const ConfiguracionPage = () => {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginBottom: '16px' }}>
                     <div>
                       <label style={labelStyle}>Nombre *</label>
-                      <input
-                        style={inputStyle}
-                        value={tipoSoporteForm.nombre}
-                        onChange={(e) => setTipoSoporteForm((p) => ({ ...p, nombre: e.target.value }))}
-                        placeholder="Ej: Soporte, Reemplazo"
-                        required
-                      />
+                      <input style={inputStyle} value={tipoSoporteForm.nombre} onChange={(e) => setTipoSoporteForm((p) => ({ ...p, nombre: e.target.value }))} placeholder="Ej: Instalación, Reparación" required />
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Categoría</label>
+                      <select style={inputStyle} value={tipoSoporteForm.clase_id} onChange={(e) => setTipoSoporteForm(p => ({ ...p, clase_id: e.target.value === '' ? '' : Number(e.target.value) }))}>
+                        <option value="">Sin categoría</option>
+                        {clasesSoporte.filter(c => c.activo).map(c => (
+                          <option key={c.id} value={c.id}>{c.nombre}</option>
+                        ))}
+                      </select>
                     </div>
                     <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <input
-                        type="checkbox"
-                        checked={tipoSoporteForm.activo}
-                        onChange={(e) => setTipoSoporteForm((p) => ({ ...p, activo: e.target.checked }))}
-                      />
+                      <input type="checkbox" checked={tipoSoporteForm.activo} onChange={(e) => setTipoSoporteForm((p) => ({ ...p, activo: e.target.checked }))} />
                       Activo
                     </label>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
                     <button type="button" onClick={() => setShowTipoSoporteModal(false)} style={btnSecondary}>Cancelar</button>
-                    <button type="submit" style={saving ? { ...btnSuccess, opacity: 0.6, cursor: 'not-allowed' } : btnSuccess} disabled={saving}>
-                      {saving ? 'Guardando...' : 'Guardar'}
-                    </button>
+                    <button type="submit" style={saving ? { ...btnSuccess, opacity: 0.6, cursor: 'not-allowed' } : btnSuccess} disabled={saving}>{saving ? 'Guardando...' : 'Guardar'}</button>
                   </div>
                 </form>
               </div>
@@ -1841,6 +2212,275 @@ export const ConfiguracionPage = () => {
           )}
         </div>
       )}
+
+      {isSuperuser && configTab === 'actividad' && (
+        <div>
+          <div style={{ padding: '16px', backgroundColor: '#f0fdf4', borderRadius: '8px', marginBottom: '20px', border: '1px solid #bbf7d0' }}>
+            <p style={{ margin: 0, fontSize: '0.9rem', color: '#166534' }}>
+              <strong>negocio</strong>: solicitudes (vacaciones, préstamos, incapacidades). <strong>auth</strong>: inicios de sesión. <strong>sistema</strong>: errores graves.
+            </p>
+          </div>
+          <div style={{ marginBottom: '16px' }}>
+            <div style={actividadToolbarScroll}>
+              <div style={actividadToolbarRow}>
+                <span style={actividadToolbarLabel}>Nivel</span>
+                <select
+                  style={{ ...actividadSelectInline, minWidth: '128px' }}
+                  value={actividadFiltroNivel}
+                  onChange={(e) => {
+                    setActividadFiltroNivel(e.target.value);
+                    setActividadSkip(0);
+                  }}
+                >
+                  <option value="">Todos</option>
+                  <option value="info">info</option>
+                  <option value="warning">warning</option>
+                  <option value="error">error</option>
+                </select>
+                <span style={actividadToolbarLabel}>Categoría</span>
+                <select
+                  style={{ ...actividadSelectInline, minWidth: '152px' }}
+                  value={actividadFiltroCategoria}
+                  onChange={(e) => {
+                    setActividadFiltroCategoria(e.target.value);
+                    setActividadSkip(0);
+                  }}
+                >
+                  <option value="">Todas</option>
+                  <option value="auth">auth</option>
+                  <option value="sistema">sistema</option>
+                  <option value="negocio">negocio</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div style={{ padding: '14px 16px', backgroundColor: '#fffbeb', borderRadius: '8px', marginBottom: '18px', border: '1px solid #fcd34d' }}>
+            <p style={{ margin: '0 0 10px', fontSize: '0.88rem', fontWeight: 600, color: '#92400e' }}>Limpieza de registros</p>
+            <p style={{ margin: '0 0 12px', fontSize: '0.82rem', color: '#78350f' }}>
+              Quita datos que ya no necesites (por ejemplo registros antiguos). Las acciones no se pueden deshacer.
+            </p>
+            <div style={actividadToolbarScroll}>
+              <div style={actividadToolbarRow}>
+                <span style={actividadToolbarLabel}>Borrar categoría</span>
+                <select
+                  style={{ ...actividadSelectInline, minWidth: '140px' }}
+                  value={limpiezaCategoria}
+                  onChange={(e) => setLimpiezaCategoria(e.target.value)}
+                >
+                  <option value="">— Elegir —</option>
+                  <option value="auth">auth</option>
+                  <option value="sistema">sistema</option>
+                  <option value="negocio">negocio</option>
+                </select>
+                <button
+                  type="button"
+                  disabled={purgingActividad || !limpiezaCategoria}
+                  onClick={() => {
+                    if (!limpiezaCategoria) return;
+                    if (!confirm(`¿Eliminar todos los registros con categoría «${limpiezaCategoria}»?`)) return;
+                    void ejecutarPurgarActividad({ modo: 'categoria', categoria: limpiezaCategoria });
+                  }}
+                  style={{ padding: '9px 14px', backgroundColor: '#ea580c', color: 'white', border: 'none', borderRadius: '7px', cursor: purgingActividad || !limpiezaCategoria ? 'not-allowed' : 'pointer', fontWeight: 600, fontSize: '0.88rem', opacity: purgingActividad || !limpiezaCategoria ? 0.55 : 1, whiteSpace: 'nowrap' }}
+                >
+                  {purgingActividad ? '…' : 'Eliminar categoría'}
+                </button>
+                <span aria-hidden style={{ width: 1, height: 26, background: '#fcd34d', flexShrink: 0, margin: '0 4px' }} />
+                <span style={actividadToolbarLabel}>Antigüedad</span>
+                <select
+                  style={{ ...actividadSelectInline, minWidth: '108px' }}
+                  value={String(limpiezaDias)}
+                  onChange={(e) => setLimpiezaDias(Number(e.target.value))}
+                >
+                  <option value="7">7 días</option>
+                  <option value="30">30 días</option>
+                  <option value="90">90 días</option>
+                  <option value="180">180 días</option>
+                  <option value="365">365 días</option>
+                </select>
+                <span style={actividadToolbarLabel}>Solo cat.</span>
+                <select
+                  style={{ ...actividadSelectInline, minWidth: '140px' }}
+                  value={limpiezaAntiguosSoloCat}
+                  onChange={(e) => setLimpiezaAntiguosSoloCat(e.target.value)}
+                >
+                  <option value="">Todas</option>
+                  <option value="auth">auth</option>
+                  <option value="sistema">sistema</option>
+                  <option value="negocio">negocio</option>
+                </select>
+                <button
+                  type="button"
+                  disabled={purgingActividad}
+                  onClick={() => {
+                    const solo = limpiezaAntiguosSoloCat
+                      ? ` y categoría «${limpiezaAntiguosSoloCat}»`
+                      : '';
+                    if (!confirm(`¿Eliminar registros con más de ${limpiezaDias} días${solo}?`)) return;
+                    void ejecutarPurgarActividad({
+                      modo: 'antiguos',
+                      dias: limpiezaDias,
+                      ...(limpiezaAntiguosSoloCat ? { categoria: limpiezaAntiguosSoloCat } : {}),
+                    });
+                  }}
+                  style={{ padding: '9px 14px', backgroundColor: '#ea580c', color: 'white', border: 'none', borderRadius: '7px', cursor: purgingActividad ? 'not-allowed' : 'pointer', fontWeight: 600, fontSize: '0.88rem', opacity: purgingActividad ? 0.55 : 1, whiteSpace: 'nowrap' }}
+                >
+                  {purgingActividad ? '…' : 'Eliminar antiguos'}
+                </button>
+              </div>
+            </div>
+            <div style={{ marginTop: '14px', paddingTop: '12px', borderTop: '1px solid #fde68a' }}>
+              <button
+                type="button"
+                disabled={purgingActividad}
+                onClick={() => {
+                  setVaciarConfirmInput('');
+                  setShowActividadVaciarModal(true);
+                }}
+                style={{ padding: '8px 14px', backgroundColor: '#b91c1c', color: 'white', border: 'none', borderRadius: '6px', cursor: purgingActividad ? 'not-allowed' : 'pointer', fontSize: '0.85rem', fontWeight: 600 }}
+              >
+                Vaciar historial completo…
+              </button>
+            </div>
+          </div>
+          {loadingActividad && actividadItems.length === 0 ? (
+            <p style={{ color: '#666' }}>Cargando actividad...</p>
+          ) : actividadItems.length === 0 ? (
+            <div style={{ padding: '40px', textAlign: 'center', backgroundColor: '#f9fafb', borderRadius: '10px', border: '1px solid #e5e7eb' }}>
+              <p style={{ color: '#6b7280', margin: 0 }}>No hay registros con los filtros actuales.</p>
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto', backgroundColor: 'white', borderRadius: '10px', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+                <thead>
+                  <tr style={{ backgroundColor: '#f8f9fa' }}>
+                    <th style={{ padding: '10px 12px', textAlign: 'left', borderBottom: '2px solid #dee2e6', color: '#555', fontWeight: 600 }}>Fecha</th>
+                    <th style={{ padding: '10px 12px', textAlign: 'left', borderBottom: '2px solid #dee2e6', color: '#555', fontWeight: 600 }}>Nivel</th>
+                    <th style={{ padding: '10px 12px', textAlign: 'left', borderBottom: '2px solid #dee2e6', color: '#555', fontWeight: 600 }}>Cat.</th>
+                    <th style={{ padding: '10px 12px', textAlign: 'left', borderBottom: '2px solid #dee2e6', color: '#555', fontWeight: 600 }}>Mensaje</th>
+                    <th style={{ padding: '10px 12px', textAlign: 'left', borderBottom: '2px solid #dee2e6', color: '#555', fontWeight: 600 }}>Empleado</th>
+                    <th style={{ padding: '10px 12px', textAlign: 'left', borderBottom: '2px solid #dee2e6', color: '#555', fontWeight: 600 }}>HTTP</th>
+                    <th style={{ padding: '10px 12px', textAlign: 'left', borderBottom: '2px solid #dee2e6', color: '#555', fontWeight: 600 }}>Ruta</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {actividadItems.map((row) => {
+                    const nivelBg =
+                      row.nivel === 'error' ? '#fee2e2' : row.nivel === 'warning' ? '#fef3c7' : '#e0f2fe';
+                    const nivelFg =
+                      row.nivel === 'error' ? '#991b1b' : row.nivel === 'warning' ? '#92400e' : '#0369a1';
+                    const displayEmpleado = row.empleado_nombre
+                      ? `${row.empleado_nombre}${row.empleado_numero ? ` (${row.empleado_numero})` : ''}`
+                      : row.empleado_username
+                        ? row.empleado_username
+                        : row.empleado_id != null
+                          ? `ID ${row.empleado_id}`
+                          : '—';
+                    return (
+                      <tr key={row.id} style={{ borderBottom: '1px solid #eee', verticalAlign: 'top' }}>
+                        <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}>{fmtDate(row.created_at)}</td>
+                        <td style={{ padding: '9px 12px' }}>
+                          <span style={{ padding: '2px 8px', borderRadius: '4px', backgroundColor: nivelBg, color: nivelFg, fontWeight: 600, fontSize: '0.75rem' }}>
+                            {row.nivel}
+                          </span>
+                        </td>
+                        <td style={{ padding: '9px 12px', color: '#444' }}>{row.categoria}</td>
+                        <td style={{ padding: '9px 12px', maxWidth: '420px', wordBreak: 'break-word' }}>{row.mensaje}</td>
+                        <td style={{ padding: '9px 12px' }}>
+                          <div style={{ fontWeight: 600, color: '#1f2937' }}>{displayEmpleado}</div>
+                          {(row.empleado_username || row.empleado_id != null) && (
+                            <div style={{ fontSize: '0.75rem', color: '#6b7280' }}>
+                              {row.empleado_username ? `@${row.empleado_username}` : `ID ${row.empleado_id}`}
+                            </div>
+                          )}
+                        </td>
+                        <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}>
+                          {row.metodo_http && row.codigo_http != null
+                            ? `${row.metodo_http} ${row.codigo_http}${row.duracion_ms != null ? ` · ${row.duracion_ms} ms` : ''}`
+                            : row.codigo_http != null
+                              ? String(row.codigo_http)
+                              : '—'}
+                        </td>
+                        <td style={{ padding: '9px 12px', maxWidth: '280px', wordBreak: 'break-all', color: '#555' }}>{row.ruta ?? '—'}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px', flexWrap: 'wrap', gap: '10px' }}>
+            <span style={{ fontSize: '0.88rem', color: '#6b7280' }}>
+              Total: {actividadTotal} · Página {Math.floor(actividadSkip / ACTIVIDAD_PAGE_SIZE) + 1} de {Math.max(1, Math.ceil(actividadTotal / ACTIVIDAD_PAGE_SIZE) || 1)}
+            </span>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button
+                type="button"
+                disabled={actividadSkip <= 0 || loadingActividad || purgingActividad}
+                onClick={() => setActividadSkip((s) => Math.max(0, s - ACTIVIDAD_PAGE_SIZE))}
+                style={{ ...btnSecondary, opacity: actividadSkip <= 0 ? 0.5 : 1 }}
+              >
+                Anterior
+              </button>
+              <button
+                type="button"
+                disabled={actividadSkip + ACTIVIDAD_PAGE_SIZE >= actividadTotal || loadingActividad || purgingActividad}
+                onClick={() => setActividadSkip((s) => s + ACTIVIDAD_PAGE_SIZE)}
+                style={{ ...btnSecondary, opacity: actividadSkip + ACTIVIDAD_PAGE_SIZE >= actividadTotal ? 0.5 : 1 }}
+              >
+                Siguiente
+              </button>
+            </div>
+          </div>
+
+          {showActividadVaciarModal && (
+            <div style={modalOverlay} onClick={() => { setShowActividadVaciarModal(false); setVaciarConfirmInput(''); }}>
+              <div style={{ ...modalSmall, maxWidth: '440px' }} onClick={(e) => e.stopPropagation()}>
+                <h3 style={{ margin: '0 0 8px', fontSize: '1.1rem', color: '#991b1b' }}>Vaciar todo el historial</h3>
+                <p style={{ margin: '0 0 12px', fontSize: '0.88rem', color: '#444' }}>
+                  Se borrarán <strong>todos</strong> los registros de actividad. Escriba <strong>BORRAR_TODO</strong> para confirmar.
+                </p>
+                <input
+                  type="text"
+                  value={vaciarConfirmInput}
+                  onChange={(e) => setVaciarConfirmInput(e.target.value)}
+                  placeholder="BORRAR_TODO"
+                  style={{ ...inputStyle, marginBottom: '16px' }}
+                  autoComplete="off"
+                />
+                <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
+                  <button type="button" onClick={() => { setShowActividadVaciarModal(false); setVaciarConfirmInput(''); }} style={btnSecondary}>
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    disabled={purgingActividad || vaciarConfirmInput.trim() !== 'BORRAR_TODO'}
+                    onClick={async () => {
+                      if (vaciarConfirmInput.trim() !== 'BORRAR_TODO') return;
+                      const ok = await ejecutarPurgarActividad({ modo: 'todo', confirmacion: 'BORRAR_TODO' });
+                      if (ok) {
+                        setShowActividadVaciarModal(false);
+                        setVaciarConfirmInput('');
+                      }
+                    }}
+                    style={{
+                      padding: '9px 18px',
+                      backgroundColor: vaciarConfirmInput.trim() === 'BORRAR_TODO' && !purgingActividad ? '#b91c1c' : '#9ca3af',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '7px',
+                      cursor: vaciarConfirmInput.trim() === 'BORRAR_TODO' && !purgingActividad ? 'pointer' : 'not-allowed',
+                      fontWeight: 600,
+                    }}
+                  >
+                    {purgingActividad ? '…' : 'Eliminar todo'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
     </div>
   );
 };

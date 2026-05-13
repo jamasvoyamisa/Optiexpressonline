@@ -13,6 +13,7 @@ from datetime import datetime
 from zkteco_client import ZKTecoClient
 from cloud_sync import CloudSync
 from local_buffer import LocalBuffer
+from single_instance import SingleInstanceLock
 
 _handlers = []
 if getattr(sys, 'stdout', None):
@@ -152,6 +153,24 @@ class DeviceHandler:
                     self.cloud.mark_enroll_done(enroll_id, success=False)
                     return
 
+            # Huella ya en el checador pero enroll sigue "pending" en BD (p.ej. falló mark-done con agente viejo).
+            # Sin esto, pending[0] bloquea para siempre el resto de la cola.
+            ya_registradas = self.zkteco.get_user_templates(user_id=uid)
+            if ya_registradas:
+                logger.info(
+                    f"[{self.name}] ENROLL id={enroll_id}: {uid} ya tiene huella en el dispositivo; "
+                    "cerrando cola en servidor y subiendo plantillas."
+                )
+                self.cloud.mark_enroll_done(enroll_id, success=True)
+                for tpl in ya_registradas:
+                    self.cloud.upload_template(
+                        numero,
+                        tpl["finger_index"],
+                        tpl["template_data"],
+                        pin_checador=uid,
+                    )
+                return
+
             logger.info(f"[{self.name}] Iniciando registro de huella para {uid}. Esperando dedo en dispositivo...")
             try:
                 ok = self.zkteco.enroll_user(user_id=uid)
@@ -165,7 +184,12 @@ class DeviceHandler:
             if ok:
                 logger.info(f"[{self.name}] Huella registrada para {uid} (empleado {numero})")
                 for tpl in self.zkteco.get_user_templates(user_id=uid):
-                    self.cloud.upload_template(numero, tpl["finger_index"], tpl["template_data"])
+                    self.cloud.upload_template(
+                        numero,
+                        tpl["finger_index"],
+                        tpl["template_data"],
+                        pin_checador=uid,
+                    )
             else:
                 logger.warning(f"[{self.name}] Enroll fallo para {uid} (timeout o el empleado no coloco el dedo)")
         except Exception as e:
@@ -189,13 +213,18 @@ class DeviceHandler:
                     continue
                 # El dispositivo guarda user_id=pin (1,2,3); necesitamos numero_empleado (124) para el backend
                 numero = pin_to_numero.get(pin, pin)
-                if self.cloud.get_employee_templates(numero):
+                if self.cloud.get_employee_templates(numero, pin_checador=pin):
                     continue
                 templates = self.zkteco.get_user_templates(user_id=pin)
                 if not templates:
                     continue
                 for tpl in templates:
-                    self.cloud.upload_template(numero, tpl["finger_index"], tpl["template_data"])
+                    self.cloud.upload_template(
+                        numero,
+                        tpl["finger_index"],
+                        tpl["template_data"],
+                        pin_checador=pin,
+                    )
                     uploaded += 1
             if uploaded:
                 logger.info(f"[{self.name}] {uploaded} huella(s) sincronizadas al backend")
@@ -327,11 +356,19 @@ class Agent:
         log_config = self.config.get("logging", {})
         level = log_config.get("level", "INFO")
         log_file = log_config.get("file", "agent.log")
-        logging.getLogger().setLevel(getattr(logging, level, logging.INFO))
+        root = logging.getLogger()
+        root.setLevel(getattr(logging, level, logging.INFO))
         if log_file:
-            fh = logging.FileHandler(log_file, encoding="utf-8")
-            fh.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-            logging.getLogger().addHandler(fh)
+            abs_log = str(Path(log_file).resolve())
+            # Evitar agregar un FileHandler duplicado si ya existe uno para el mismo archivo
+            already_has_handler = any(
+                isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", None) == abs_log
+                for h in root.handlers
+            )
+            if not already_has_handler:
+                fh = logging.FileHandler(log_file, encoding="utf-8")
+                fh.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+                root.addHandler(fh)
 
     def _init_devices(self):
         api_url = self.config.get("api_url", "").strip()
@@ -356,6 +393,8 @@ class Agent:
             logger.error("No hay dispositivos configurados. Agrega al menos uno en config.yaml")
             sys.exit(1)
 
+        seen_devices: set = set()  # Para detectar duplicados (ip:puerto:api_key)
+
         for i, dev in enumerate(devices_cfg):
             name = dev.get("name", f"Dispositivo_{i+1}")
             ip = dev.get("ip", "").strip()
@@ -368,6 +407,18 @@ class Agent:
             if not api_key or api_key == "COPIAR_DE_LA_WEB":
                 logger.warning(f"[{name}] API Key no configurada, omitiendo")
                 continue
+
+            # Detectar dispositivo duplicado en config.yaml
+            device_key = f"{ip}:{port}:{api_key}"
+            if device_key in seen_devices:
+                logger.error(
+                    f"[{name}] DISPOSITIVO DUPLICADO detectado en config.yaml: "
+                    f"{ip}:{port} con la misma API Key ya está configurado. "
+                    "Esto causa que cada checada se envíe dos veces al servidor. "
+                    "Elimina la entrada duplicada de config.yaml."
+                )
+                continue
+            seen_devices.add(device_key)
 
             zkteco = ZKTecoClient(ip=ip, port=port, timeout=dev.get("timeout", 5))
             cloud = CloudSync(api_url=api_url, api_key=api_key, device_id=name)
@@ -398,6 +449,14 @@ class Agent:
             return
 
         logger.info(f"{len(active_handlers)} de {len(self.handlers)} dispositivo(s) activo(s)")
+
+        for h in self.handlers:
+            if h.cloud.test_connection():
+                h.cloud.log_backend_device_binding(h.name)
+            else:
+                logger.warning(
+                    f"[{h.name}] Sin conexion al backend; no se puede comprobar a que dispositivo pertenece la API Key"
+                )
 
         for h in active_handlers:
             if h.cloud.test_connection():
@@ -450,9 +509,19 @@ class Agent:
 
 
 def main():
-    config_path = sys.argv[1] if len(sys.argv) > 1 else "config.yaml"
-    agent = Agent(config_path)
-    agent.run()
+    lock = SingleInstanceLock("optiexpress-agent")
+    if not lock.acquire():
+        logger.error(
+            "No se inicia el agente porque ya hay otra instancia corriendo. "
+            "Cierra la otra instancia antes de volver a ejecutar."
+        )
+        sys.exit(1)
+    try:
+        config_path = sys.argv[1] if len(sys.argv) > 1 else "config.yaml"
+        agent = Agent(config_path)
+        agent.run()
+    finally:
+        lock.release()
 
 
 if __name__ == "__main__":

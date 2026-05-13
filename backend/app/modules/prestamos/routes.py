@@ -5,9 +5,15 @@ from typing import List, Optional
 from app.core.database import get_db
 from app.core.deps import get_current_empleado_with_rol
 from app.core.config import settings
+from app.modules.audit.negocio import registrar_negocio
 from . import service, schemas
 
 router = APIRouter(prefix=f"{settings.API_V1_PREFIX}/prestamos", tags=["prestamos"])
+
+
+def _puede_gestion_rh_prestamos(current: dict) -> bool:
+    """Admin, RH o Director: listados amplios y alta en nombre de terceros (módulo RH)."""
+    return bool(current.get("is_superuser") or current.get("is_rh") or current.get("is_director"))
 
 
 @router.get("", response_model=List[schemas.SolicitudPrestamoResponse])
@@ -25,12 +31,17 @@ def listar(
     - RH/Admin: todas, con filtros opcionales.
     """
     user_id = int(current["user_id"])
-    is_rh = current.get("is_superuser") or current.get("is_rh")
-    if not is_rh and empleado_id is not None and empleado_id != user_id:
+    puede_rh = _puede_gestion_rh_prestamos(current)
+    if not puede_rh and empleado_id is not None and empleado_id != user_id:
         raise HTTPException(status_code=403, detail="Solo puedes ver tus propias solicitudes")
-    if not is_rh:
+    if not puede_rh:
         empleado_id = user_id
-    include_canceladas = bool(current.get("is_superuser") or (empleado_id and empleado_id == user_id))
+    include_canceladas = bool(
+        current.get("is_superuser")
+        or current.get("is_rh")
+        or current.get("is_director")
+        or (empleado_id and empleado_id == user_id)
+    )
     sols = service.listar_solicitudes(
         db,
         empleado_id=empleado_id,
@@ -57,6 +68,11 @@ def crear(
     empleado_id = int(current["user_id"])
     try:
         sol = service.crear_solicitud(db, data, empleado_id)
+        registrar_negocio(
+            db,
+            empleado_id=empleado_id,
+            mensaje=f"Solicitud de préstamo creada id={sol.id} monto={sol.monto}",
+        )
         return schemas.SolicitudPrestamoResponse.model_validate(sol).model_copy(
             update={"saldo_restante": service.calcular_saldo_restante(sol)}
         )
@@ -70,9 +86,9 @@ def crear_rh(
     current: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db),
 ):
-    """RH crea una solicitud en nombre de un empleado."""
-    if not current.get("is_superuser") and not current.get("is_rh"):
-        raise HTTPException(status_code=403, detail="Solo RH puede crear solicitudes en nombre de empleados")
+    """RH o Director crea una solicitud en nombre de un empleado."""
+    if not _puede_gestion_rh_prestamos(current):
+        raise HTTPException(status_code=403, detail="Solo RH o Director pueden crear solicitudes en nombre de empleados")
     puede_excepcion = bool(
         current.get("is_superuser") or current.get("is_director") or current.get("is_gerente_general")
     )
@@ -84,6 +100,12 @@ def crear_rh(
     permitir_excepcion = puede_excepcion and data.es_excepcion
     try:
         sol = service.crear_solicitud_rh(db, data, permitir_excepcion=permitir_excepcion)
+        actor = int(current["user_id"])
+        registrar_negocio(
+            db,
+            empleado_id=actor,
+            mensaje=f"Solicitud de préstamo (RH) id={sol.id} para empleado_id={sol.empleado_id} monto={sol.monto}",
+        )
         return schemas.SolicitudPrestamoResponse.model_validate(sol).model_copy(
             update={"saldo_restante": service.calcular_saldo_restante(sol)}
         )
@@ -168,8 +190,8 @@ def solicitudes_pendientes_rh(
     current: dict = Depends(get_current_empleado_with_rol),
 ):
     """Préstamos depositados pendientes de confirmación de RH (registro en nómina)."""
-    if not current.get("is_superuser") and not current.get("is_rh"):
-        raise HTTPException(status_code=403, detail="Solo RH puede acceder a este listado")
+    if not current.get("is_superuser") and not current.get("is_rh") and not current.get("is_director"):
+        raise HTTPException(status_code=403, detail="Solo RH o Director pueden acceder a este listado")
     sols = service.listar_pendientes_confirmacion_rh(db, skip=skip, limit=limit)
     return [
         schemas.SolicitudPrestamoResponse.model_validate(s).model_copy(
@@ -182,6 +204,10 @@ def solicitudes_pendientes_rh(
 @router.get("/mi-area", response_model=List[schemas.SolicitudPrestamoResponse])
 def solicitudes_mi_area(
     estado: Optional[str] = None,
+    departamento_id: Optional[int] = Query(
+        None,
+        description="Solo superusuario: filtrar por departamento del solicitante.",
+    ),
     skip: int = Query(0, ge=0),
     limit: int = Query(200, ge=1, le=500),
     db: Session = Depends(get_db),
@@ -189,9 +215,18 @@ def solicitudes_mi_area(
 ):
     """Solicitudes de préstamos del personal del área que administra el usuario actual."""
     if current.get("is_superuser"):
-        sols = service.listar_solicitudes(
-            db, empleado_id=None, estado=estado, include_canceladas=True, skip=skip, limit=limit
-        )
+        if departamento_id is not None:
+            sols = service.listar_solicitudes_mi_area(
+                db,
+                departamento_ids=[departamento_id],
+                estado=estado,
+                skip=skip,
+                limit=limit,
+            )
+        else:
+            sols = service.listar_solicitudes(
+                db, empleado_id=None, estado=estado, include_canceladas=True, skip=skip, limit=limit
+            )
     else:
         dept_ids = current.get("departamento_ids_que_administro") or []
         if not dept_ids:
@@ -221,11 +256,10 @@ def obtener(
     if not sol:
         raise HTTPException(status_code=404, detail="Solicitud no encontrada")
     user_id = int(current["user_id"])
-    is_rh = current.get("is_superuser") or current.get("is_rh")
-    if not is_rh and sol.empleado_id != user_id:
+    if not _puede_gestion_rh_prestamos(current) and sol.empleado_id != user_id:
         raise HTTPException(status_code=403, detail="No tienes permiso para ver esta solicitud")
     estado_sol = getattr(sol.estado, "value", str(sol.estado)).lower()
-    if estado_sol == "cancelada" and sol.empleado_id != user_id and not current.get("is_superuser"):
+    if estado_sol == "cancelada" and sol.empleado_id != user_id and not _puede_gestion_rh_prestamos(current):
         raise HTTPException(status_code=404, detail="Solicitud no encontrada")
     return schemas.SolicitudPrestamoResponse.model_validate(sol).model_copy(
         update={"saldo_restante": service.calcular_saldo_restante(sol)}
@@ -295,6 +329,11 @@ def aprobar_departamento(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
     if not result:
         raise HTTPException(status_code=404, detail="Solicitud no encontrada o no está pendiente")
+    registrar_negocio(
+        db,
+        empleado_id=aprobador_id,
+        mensaje=f"Préstamo id={solicitud_id} autorización departamento: {'aprobada' if data.aprobado else 'rechazada'}",
+    )
     return schemas.SolicitudPrestamoResponse.model_validate(result).model_copy(
         update={"saldo_restante": service.calcular_saldo_restante(result)}
     )
@@ -329,6 +368,11 @@ def depositar(
             status_code=404,
             detail="Solicitud no encontrada o no está autorizada por departamento (pendiente de depósito)",
         )
+    registrar_negocio(
+        db,
+        empleado_id=depositador_id,
+        mensaje=f"Préstamo id={solicitud_id} depósito registrado ref={data.referencia_bancaria}",
+    )
     return schemas.SolicitudPrestamoResponse.model_validate(result).model_copy(
         update={"saldo_restante": service.calcular_saldo_restante(result)}
     )
@@ -358,12 +402,18 @@ def confirmar_rh(
     """RH confirma registro en nómina del préstamo ya depositado; notifica al empleado."""
     if not current.get("is_superuser") and not current.get("is_rh"):
         raise HTTPException(status_code=403, detail="Solo RH puede confirmar préstamos")
+    rh_uid = int(current["user_id"])
     result = service.confirmar_rh(db, solicitud_id, data.comentarios)
     if not result:
         raise HTTPException(
             status_code=404,
             detail="Solicitud no encontrada o no está depositada (pendiente de confirmación RH)",
         )
+    registrar_negocio(
+        db,
+        empleado_id=rh_uid,
+        mensaje=f"Préstamo id={solicitud_id} confirmado en nómina por RH",
+    )
     return schemas.SolicitudPrestamoResponse.model_validate(result).model_copy(
         update={"saldo_restante": service.calcular_saldo_restante(result)}
     )

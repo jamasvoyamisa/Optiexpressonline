@@ -40,6 +40,7 @@ class SolicitudVacacionesResponse(SolicitudVacacionesBase):
     estado: EstadoSolicitud
     jefe_aprobador_id: Optional[int] = None
     jefe_aprobador_nombre: Optional[str] = None  # Quien autorizó (llenado en ruta)
+    jefe_aprobador_puesto: Optional[str] = None  # Puesto del aprobador (catálogo), no confundir con rol sistema
     aprobador_es_jefe_directo: Optional[bool] = None  # True=jefe directo, False=admin/otro
     fecha_aprobacion: Optional[datetime] = None
     comentarios_aprobacion: Optional[str] = None
@@ -90,6 +91,10 @@ class PeriodoVacacionesResponse(BaseModel):
     dias_adelantados: float = 0  # tomados por encima del derecho (adelanto al próximo periodo)
     fecha_aniversario: Optional[str] = None
     fecha_limite_goce: Optional[str] = None  # después de esta fecha se prescriben
+    # True si ya pasó la fecha límite de goce (18 m tras aniversario): no entra en saldo LFT vigente; solo referencia.
+    prescrito_por_plazo: bool = False
+    # Si prescrito_por_plazo: días que quedaban por tomar al vencer el plazo (informativo).
+    dias_pendientes_historico: float = 0
 
 
 class BalanceConPeriodosResponse(BaseModel):
@@ -102,6 +107,24 @@ class BalanceConPeriodosResponse(BaseModel):
     dias_tomados: Decimal
     dias_pendientes: Decimal
     fecha_limite_goce: Optional[str] = None  # del periodo que vence primero (anterior)
+    # Adeudo por vacaciones generales (LFT) aplicadas sin periodo vigente; al generarse periodo se descuenta.
+    dias_deuda_vacaciones_ley: Decimal = Decimal("0")
+    # Suma periodos vigentes menos deuda; puede ser negativo si aún debe días.
+    saldo_dias_lft_neto: Decimal
+    # Días fuera de LFT (carga única típica de migración); ver docs/VACACIONES-LFT-MEXICO.md
+    dias_saldo_migracion_vacaciones: Decimal = Decimal("0")
+    # saldo_dias_lft_neto + dias_saldo_migracion_vacaciones (tope para nuevas solicitudes junto con pendientes).
+    saldo_total_con_migracion: Decimal = Decimal("0")
+
+
+class SaldoLftNetoAdminBody(BaseModel):
+    """Ajuste manual del saldo LFT neto (solo administrador)."""
+    saldo_lft_neto: Decimal
+
+
+class SaldoMigracionVacacionesAdminBody(BaseModel):
+    """Saldo de días de migración (fuera de LFT). Solo administrador; no sustituye periodos LFT en siguientes aniversarios."""
+    dias_saldo_migracion_vacaciones: Decimal
 
 
 # --- Vacaciones generales (días empresa / calendario) ---
@@ -113,6 +136,7 @@ class VacacionGeneralCreate(BaseModel):
     alcance: Literal["global", "empresa", "departamento"]
     empresa_id: Optional[int] = None
     departamento_id: Optional[int] = None
+    empresa_excluida_id: Optional[int] = None
     dias_cuenta_ley: Decimal
     dias_regalo_empresa: Decimal = Decimal("0")
     activo: bool = True
@@ -127,12 +151,15 @@ class VacacionGeneralResponse(BaseModel):
     alcance: str
     empresa_id: Optional[int] = None
     departamento_id: Optional[int] = None
+    empresa_excluida_id: Optional[int] = None
     dias_cuenta_ley: Decimal
     dias_regalo_empresa: Decimal
     activo: bool
     notas: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    aplicado: bool = False
+    empleados_aplicados: int = 0
 
     class Config:
         from_attributes = True

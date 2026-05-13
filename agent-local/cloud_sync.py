@@ -2,7 +2,8 @@
 Cliente para sincronizar datos con la API en la nube
 """
 import requests
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Any
+from urllib.parse import urljoin
 import logging
 
 logger = logging.getLogger(__name__)
@@ -20,6 +21,30 @@ class CloudSync:
             "X-API-Key": api_key,
             "Content-Type": "application/json"
         }
+
+    def _post_follow_redirect(self, url: str, *, timeout: int = 10, **kwargs: Any) -> requests.Response:
+        """
+        POST que ante redirect 301/302 (p. ej. http→https en nginx) repite POST al Location.
+        Con allow_redirects=True, requests puede enviar GET en el segundo salto y el API
+        devuelve 405 en rutas que solo aceptan POST (p. ej. /device-sync).
+        """
+        hdr = kwargs.pop("headers", self.headers)
+        current = url
+        for _ in range(6):
+            r = requests.post(
+                current,
+                headers=hdr,
+                timeout=timeout,
+                allow_redirects=False,
+                **kwargs,
+            )
+            if r.status_code not in (301, 302, 303, 307, 308):
+                return r
+            loc = r.headers.get("Location")
+            if not loc:
+                return r
+            current = urljoin(current, loc)
+        return r
     
     def sync_attendance(self, user_id: str, timestamp: str, tipo: str = "entrada") -> bool:
         """
@@ -35,12 +60,7 @@ class CloudSync:
         }
         
         try:
-            response = requests.post(
-                self.api_url,
-                json=payload,
-                headers=self.headers,
-                timeout=10
-            )
+            response = self._post_follow_redirect(self.api_url, json=payload, timeout=10)
             
             if response.status_code == 201:
                 logger.info(f"OK Checada sincronizada: Usuario={user_id}, Hora={timestamp}")
@@ -101,7 +121,7 @@ class CloudSync:
         """Marca usuarios como enviados tras set_user"""
         try:
             url = f"{self.base_url}/agent/pending-users/mark-sent"
-            response = requests.post(url, json={"ids": ids}, headers=self.headers, timeout=10)
+            response = self._post_follow_redirect(url, json={"ids": ids}, timeout=10)
             return response.status_code == 200
         except requests.exceptions.RequestException as e:
             logger.error(f"Error al marcar usuarios enviados: {e}")
@@ -131,7 +151,7 @@ class CloudSync:
         """Marca enroll como completado"""
         try:
             url = f"{self.base_url}/agent/pending-enroll/{enroll_id}/mark-done"
-            response = requests.post(url, params={"success": success}, headers=self.headers, timeout=10)
+            response = self._post_follow_redirect(url, params={"success": success}, timeout=10)
             if response.status_code == 200:
                 logger.info(f"Enroll {enroll_id} marcado como {'completado' if success else 'fallido'} en backend")
                 return True
@@ -141,7 +161,15 @@ class CloudSync:
             logger.error(f"Error al marcar enroll done: {e}")
             return False
 
-    def upload_template(self, numero_empleado: str, finger_index: int, template_data: str) -> bool:
+    def upload_template(
+        self,
+        numero_empleado: str,
+        finger_index: int,
+        template_data: str,
+        *,
+        pin_checador: Optional[str] = None,
+        empleado_id: Optional[int] = None,
+    ) -> bool:
         """Sube un template de huella al backend para almacenamiento y replicacion"""
         try:
             url = f"{self.base_url}/agent/upload-template"
@@ -150,7 +178,11 @@ class CloudSync:
                 "finger_index": finger_index,
                 "template_data": template_data,
             }
-            response = requests.post(url, json=payload, headers=self.headers, timeout=15)
+            if pin_checador:
+                payload["pin_checador"] = str(pin_checador).strip()
+            if empleado_id is not None:
+                payload["empleado_id"] = int(empleado_id)
+            response = self._post_follow_redirect(url, json=payload, timeout=15)
             if response.status_code == 200:
                 logger.info(f"Template subido al backend: {numero_empleado} dedo={finger_index}")
                 return True
@@ -160,11 +192,16 @@ class CloudSync:
             logger.error(f"Error al subir template: {e}")
             return False
 
-    def get_employee_templates(self, numero_empleado: str) -> list:
-        """Consulta si un empleado ya tiene huellas almacenadas en el backend"""
+    def get_employee_templates(self, numero_empleado: str, *, pin_checador: str | None = None) -> list:
+        """Consulta si un empleado ya tiene huellas almacenadas en el backend.
+
+        Si se provee pin_checador, el backend resuelve al empleado por pin (único globalmente),
+        evitando mezclar plantillas cuando numero_empleado está duplicado entre empresas.
+        """
         try:
             url = f"{self.base_url}/fingerprint-templates/{numero_empleado}"
-            response = requests.get(url, headers=self.headers, timeout=10)
+            params = {"pin_checador": str(pin_checador).strip()} if pin_checador else None
+            response = requests.get(url, headers=self.headers, params=params, timeout=10)
             if response.status_code == 200:
                 data = response.json()
                 return data if isinstance(data, list) else []
@@ -184,6 +221,31 @@ class CloudSync:
         except requests.exceptions.RequestException as e:
             logger.warning(f"get_pin_to_numero: {e}")
             return {}
+
+    def log_backend_device_binding(self, handler_name: str) -> None:
+        """
+        Registra qué Dispositivo del backend corresponde a esta X-API-Key.
+        Si la key es de otro checador, las colas (enroll, usuarios) no coincidirán con lo que eliges en la web.
+        """
+        try:
+            url = f"{self.base_url}/agent/diagnostic"
+            response = requests.get(url, headers=self.headers, timeout=10)
+            if response.status_code != 200:
+                logger.warning(
+                    f"[{handler_name}] diagnostic: HTTP {response.status_code} — "
+                    "revisa API Key y URL del backend"
+                )
+                return
+            data = response.json() if response.content else {}
+            d = data.get("dispositivo") or {}
+            did = d.get("id")
+            dn = d.get("nombre")
+            logger.info(
+                f"[{handler_name}] Esta API Key en el servidor es el dispositivo id={did} "
+                f"nombre=\"{dn}\" (debe ser el mismo checador que configuraste en esta entrada del agente)"
+            )
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"[{handler_name}] diagnostic: {e}")
 
     def get_pending_deletes(self) -> list:
         """Obtiene usuarios pendientes de eliminar del dispositivo"""
@@ -205,7 +267,7 @@ class CloudSync:
         """Marca eliminacion como procesada"""
         try:
             url = f"{self.base_url}/agent/pending-deletes/{delete_id}/mark-done"
-            response = requests.post(url, headers=self.headers, timeout=10)
+            response = self._post_follow_redirect(url, timeout=10)
             if response.status_code == 200:
                 logger.info(f"Eliminacion {delete_id} marcada como procesada")
                 return True
@@ -235,7 +297,7 @@ class CloudSync:
         """Marca replicación como procesada"""
         try:
             url = f"{self.base_url}/agent/pending-replicate/{replicate_id}/mark-done"
-            response = requests.post(url, params={"success": success}, headers=self.headers, timeout=10)
+            response = self._post_follow_redirect(url, params={"success": success}, timeout=10)
             if response.status_code == 200:
                 logger.info(f"Replicate {replicate_id} marcado como {'OK' if success else 'fallido'}")
                 return True

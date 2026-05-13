@@ -4,13 +4,16 @@
 # URL base del backend (sin /device-sync)
 api_url: "http://192.168.2.55:9081/api/v1/asistencia/device-sync"
 
-# Lista de dispositivos a gestionar
+# Lista de dispositivos a gestionar.
+# IMPORTANTE: No repitas la misma IP+API Key dos veces. Cada dispositivo físico
+# debe aparecer UNA sola vez. Si tienes el mismo dispositivo duplicado, cada
+# checada se enviará dos veces al servidor y los logs se duplicarán.
 devices:
   - name: "Entrada Principal"
     ip: "192.168.2.74"
     port: 4370
     api_key: "COPIAR_DE_LA_WEB"
-  # - name: "Cafeteria"
+  # - name: "Cafeteria"             # Segundo dispositivo DIFERENTE (distinta IP)
   #   ip: "192.168.2.75"
   #   port: 4370
   #   api_key: "COPIAR_DE_LA_WEB_2"

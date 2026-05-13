@@ -1,6 +1,9 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import HTTPException
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
 from app.core.config import settings
 
 app = FastAPI(
@@ -29,6 +32,9 @@ def on_startup():
     from app.modules.notificaciones import models as _nm   # noqa: F401 – registra la tabla
     from app.modules.incapacidades import models as _im   # noqa: F401 – registra la tabla
     from app.modules.prestamos import models as _pm   # noqa: F401 – registra la tabla
+    from app.modules.soporte import models as _sm      # noqa: F401 – registra la tabla
+    from app.modules.audit import models as _audit_m  # noqa: F401 – actividad_log
+    from app.modules.nomina import models as _nom_m   # noqa: F401 – nómina
     from app.core.security import get_password_hash
 
     Base.metadata.create_all(bind=engine)
@@ -56,6 +62,15 @@ def on_startup():
         admin_password = "Admin123!"
         admin_empleado = db.query(pm.Empleado).filter(pm.Empleado.email == admin_email).first()
         if not admin_empleado:
+            # Evitar INSERT duplicado si ya existe fila con username/numero "admin" y otro correo (índice único username).
+            admin_empleado = (
+                db.query(pm.Empleado)
+                .filter(
+                    (pm.Empleado.username == "admin") | (pm.Empleado.numero_empleado == "admin")
+                )
+                .first()
+            )
+        if not admin_empleado:
             admin_empleado = pm.Empleado(
                 numero_empleado="admin",
                 nombre="Administrador",
@@ -69,17 +84,62 @@ def on_startup():
             db.add(admin_empleado)
             db.commit()
         else:
-            # Asegurar que el admin siempre pueda entrar con la contraseña por defecto
-            admin_empleado.password_hash = get_password_hash(admin_password)
+            # No sobrescribir la contraseña en cada arranque (el admin la cambia con scripts o la UI).
             admin_empleado.rol_id = rol.id
             admin_empleado.estado = pm.EstadoEmpleado.ACTIVO
             if not admin_empleado.username:
                 admin_empleado.username = "admin"
+            if not admin_empleado.email:
+                admin_empleado.email = admin_email
             db.commit()
     finally:
         db.close()
 
     iniciar_scheduler()
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    """Registra errores 500 en actividad_log y delega el resto a los manejadores estándar."""
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+
+    if isinstance(exc, HTTPException):
+        return await http_exception_handler(request, exc)
+    if isinstance(exc, StarletteHTTPException):
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    if isinstance(exc, RequestValidationError):
+        return await request_validation_exception_handler(request, exc)
+    import asyncio
+    import traceback
+    from app.core.database import SessionLocal
+    from app.modules.audit.service import ActividadService
+
+    err_msg = str(exc)[:2000]
+    tb = traceback.format_exc()[:8000]
+
+    def _log():
+        db = SessionLocal()
+        try:
+            ActividadService.registrar(
+                db,
+                nivel="error",
+                categoria="sistema",
+                mensaje=f"Excepción no controlada: {err_msg}",
+                contexto={"traceback": tb},
+                ruta=(request.url.path or "")[:500],
+                metodo_http=(request.method or "")[:12],
+            )
+        finally:
+            db.close()
+
+    try:
+        await asyncio.to_thread(_log)
+    except Exception:
+        pass
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Error interno del servidor"},
+    )
 
 
 @app.on_event("shutdown")
@@ -102,6 +162,12 @@ async def health_check():
     return {"status": "healthy"}
 
 
+@app.get(f"{settings.API_V1_PREFIX}/health")
+async def health_check_v1():
+    """Mismo contrato que /health; útil detrás de /api/ y monitores que piden /api/v1/health."""
+    return {"status": "healthy"}
+
+
 # Portal de checadas remotas (acceso directo al backend, sin frontend React)
 @app.get("/portal", response_class=HTMLResponse, include_in_schema=False)
 def portal_checadas_remotas():
@@ -109,6 +175,21 @@ def portal_checadas_remotas():
     from pathlib import Path
     template = Path(__file__).resolve().parent / "modules" / "portal" / "templates" / "checadas_remotas.html"
     return template.read_text(encoding="utf-8")
+
+
+# Portal público de tickets (HTML estático). NO usar /soporte: en producción esa ruta es la SPA React (Soporte TI).
+@app.get("/ticket-soporte", response_class=HTMLResponse, include_in_schema=False)
+def portal_ticket_soporte():
+    """Página pública para levantar tickets de soporte."""
+    from pathlib import Path
+    template = Path(__file__).resolve().parent / "modules" / "soporte" / "templates" / "portal_soporte.html"
+    return template.read_text(encoding="utf-8")
+
+
+@app.get("/soporte", include_in_schema=False)
+def portal_soporte_legacy_redirect():
+    """Compatibilidad: antes el formulario vivía en /soporte; ahora la SPA usa esa ruta."""
+    return RedirectResponse(url="/ticket-soporte", status_code=301)
 
 
 # Cargar modelos de asistencia antes de los routers (para relaciones Empleado.horarios_asignados)
@@ -123,6 +204,8 @@ from app.modules.asistencia.routes import router as asistencia_router
 from app.modules.notificaciones.routes import router as notificaciones_router
 from app.modules.incapacidades.routes import router as incapacidades_router
 from app.modules.portal.routes import router as portal_router
+from app.modules.soporte.routes import router as soporte_router
+from app.modules.audit.routes import router as audit_router
 
 app.include_router(auth_router)
 app.include_router(personal_router)
@@ -134,8 +217,14 @@ app.include_router(incapacidades_router)
 from app.modules.prestamos.routes import router as prestamos_router
 app.include_router(prestamos_router)
 app.include_router(portal_router)
+app.include_router(soporte_router)
+app.include_router(audit_router)
 from app.modules.landing.routes import router as landing_router
 app.include_router(landing_router)
+if settings.NOMINA_ENABLED:
+    from app.modules.nomina.routes import router as nomina_router
+
+    app.include_router(nomina_router)
 # ADMS (iclock) ya no se usa; solo el agente local sincroniza checadas
 
 if __name__ == "__main__":

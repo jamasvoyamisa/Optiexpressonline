@@ -14,6 +14,9 @@ export const HomeRedirect = () => {
   // Gerente o supervisor → Dashboard (con datos de su área)
   if (authMe?.puede_ver_mi_area) return <Navigate to="/dashboard" replace />;
 
+  // Usuario especial (sin registro de asistencia operativo) → Mis datos
+  if (authMe?.exento_incidencias) return <Navigate to="/mis-datos" replace />;
+
   // Empleado normal → sus asistencias
   return <Navigate to="/mis-asistencias" replace />;
 };

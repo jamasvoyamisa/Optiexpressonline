@@ -6,7 +6,8 @@ from typing import List, Optional
 from app.core.database import get_db
 from app.core.config import settings
 from app.core.security import get_current_user
-from app.core.deps import get_current_empleado_with_rol
+from app.core.deps import get_current_empleado_with_rol, require_superuser, require_superuser_or_rh
+from app.modules.audit.negocio import registrar_negocio
 
 from . import schemas, service
 
@@ -27,27 +28,54 @@ def _set_jefe_aprobador_nombre(solicitud: SolicitudVacaciones) -> None:
         solicitud.jefe_aprobador_nombre = (
             f"{solicitud.jefe_aprobador.nombre} {solicitud.jefe_aprobador.apellido_paterno or ''}"
         ).strip()
+        pr = getattr(solicitud.jefe_aprobador, "puesto_rel", None)
+        pn = (getattr(pr, "nombre", None) or "").strip() if pr is not None else ""
+        solicitud.jefe_aprobador_puesto = pn or None
         # Indicar si el aprobador es el jefe directo registrado del empleado
         # (o si fue otra persona, ej. admin)
-        try:
-            jefe_directo_id = solicitud.empleado.jefe_id if solicitud.empleado else None
-            solicitud.aprobador_es_jefe_directo = (
-                jefe_directo_id is not None and solicitud.jefe_aprobador_id == jefe_directo_id
-            )
-        except Exception:
-            solicitud.aprobador_es_jefe_directo = None
+        solicitud.aprobador_es_jefe_directo = service.compute_aprobador_es_jefe_directo(solicitud)
     else:
         solicitud.jefe_aprobador_nombre = None
+        solicitud.jefe_aprobador_puesto = None
         solicitud.aprobador_es_jefe_directo = None
 
 router = APIRouter(prefix=f"{settings.API_V1_PREFIX}/vacaciones", tags=["Vacaciones"])
+
+
+def _balance_con_periodos_schema(data: dict) -> schemas.BalanceConPeriodosResponse:
+    return schemas.BalanceConPeriodosResponse(
+        empleado_id=data["empleado_id"],
+        año=data["año"],
+        periodo_actual=schemas.PeriodoVacacionesResponse(**data["periodo_actual"])
+        if data.get("periodo_actual")
+        else None,
+        periodo_anterior=schemas.PeriodoVacacionesResponse(**data["periodo_anterior"])
+        if data.get("periodo_anterior")
+        else None,
+        dias_disponibles=data["dias_disponibles"],
+        dias_tomados=data["dias_tomados"],
+        dias_pendientes=data["dias_pendientes"],
+        fecha_limite_goce=data.get("fecha_limite_goce"),
+        dias_deuda_vacaciones_ley=data.get("dias_deuda_vacaciones_ley", Decimal("0")),
+        saldo_dias_lft_neto=data["saldo_dias_lft_neto"],
+        dias_saldo_migracion_vacaciones=data.get("dias_saldo_migracion_vacaciones", Decimal("0")),
+        saldo_total_con_migracion=data.get(
+            "saldo_total_con_migracion", data.get("saldo_dias_lft_neto", Decimal("0"))
+        ),
+    )
 
 
 @router.post("/solicitudes", response_model=schemas.SolicitudVacacionesResponse, status_code=status.HTTP_201_CREATED)
 def create_solicitud(solicitud: schemas.SolicitudVacacionesCreate, db: Session = Depends(get_db)):
     """Crear nueva solicitud de vacaciones"""
     try:
-        return service.VacacionesService.create_solicitud(db, solicitud)
+        result = service.VacacionesService.create_solicitud(db, solicitud)
+        registrar_negocio(
+            db,
+            empleado_id=solicitud.empleado_id,
+            mensaje=f"Solicitud de vacaciones creada id={result.id} ({result.dias_solicitados} días)",
+        )
+        return result
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -112,6 +140,11 @@ def create_mi_solicitud(
                 )
         except Exception:
             pass
+        registrar_negocio(
+            db,
+            empleado_id=empleado_id,
+            mensaje=f"Solicitud de vacaciones creada id={result.id} ({result.dias_solicitados} días)",
+        )
         return result
     except ValueError as e:
         raise HTTPException(
@@ -135,6 +168,14 @@ def get_solicitudes(
     db: Session = Depends(get_db)
 ):
     """Listar solicitudes de vacaciones"""
+    if empleado_id is not None:
+        uid = int(current["user_id"])
+        eid = int(empleado_id)
+        if eid != uid and not current.get("is_superuser") and not current.get("is_rh"):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="No autorizado para listar solicitudes de otro empleado",
+            )
     dept_filtro = departamento_id if current.get("is_superuser") else None
     result = service.VacacionesService.get_solicitudes(
         db,
@@ -186,6 +227,11 @@ def cancelar_mi_solicitud(
     try:
         result = service.VacacionesService.cancelar_solicitud(db, solicitud_id, empleado_id)
         _set_jefe_aprobador_nombre(result)
+        registrar_negocio(
+            db,
+            empleado_id=empleado_id,
+            mensaje=f"Solicitud de vacaciones cancelada id={solicitud_id}",
+        )
         return result
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -199,7 +245,7 @@ def aprobar_solicitud(
     current_extra: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db)
 ):
-    """Aprobar o rechazar. Gerentes aprueban vacaciones de su área. Las vacaciones de gerentes/supervisores solo las aprueban Admin, Director o Gerente General. RH solo confirma."""
+    """Aprobar o rechazar. Al aprobar, el saldo se descuenta de inmediato; RH solo registra confirmación formal (o auto 24 h antes del inicio)."""
     try:
         result = service.VacacionesService.aprobar_solicitud(
             db,
@@ -220,8 +266,8 @@ def aprobar_solicitud(
                     noti_service.crear_notificacion(
                         db,
                         empleado_id=result.empleado_id,
-                        titulo="Solicitud aprobada por jefe",
-                        mensaje="Tu solicitud de vacaciones fue aprobada por tu jefe directo y está pendiente de confirmación por RH.",
+                        titulo="Vacaciones aprobadas",
+                        mensaje="Tu solicitud fue aprobada: los días ya se descontaron de tu saldo. RH puede dejar constancia formal; si no, el sistema confirma solo 24 h antes del inicio.",
                         tipo="solicitud_aprobada_jefe",
                         referencia_id=result.id,
                     )
@@ -238,8 +284,8 @@ def aprobar_solicitud(
                             noti_service.crear_notificacion(
                                 db,
                                 empleado_id=rh_emp.id,
-                                titulo="Solicitud pendiente de confirmación RH",
-                                mensaje=f"La solicitud de vacaciones de {nombre_emp} fue aprobada por el jefe y requiere tu confirmación.",
+                                titulo="Registro formal RH (vacaciones)",
+                                mensaje=f"La solicitud de {nombre_emp} ya está aprobada y descontada; puedes registrar confirmación formal si aplica.",
                                 tipo="solicitud_pendiente_rh",
                                 referencia_id=result.id,
                             )
@@ -254,6 +300,12 @@ def aprobar_solicitud(
                     )
             except Exception:
                 pass
+            accion = "aprobada por jefe (saldo descontado)" if aprobacion.aprobar else "rechazada por jefe"
+            registrar_negocio(
+                db,
+                empleado_id=jefe_id,
+                mensaje=f"Solicitud vacaciones id={solicitud_id} {accion}; solicitante empleado_id={result.empleado_id}",
+            )
         return result
     except ValueError as e:
         raise HTTPException(
@@ -276,9 +328,8 @@ def confirmar_solicitud_rh(
     db: Session = Depends(get_db)
 ):
     """
-    Confirmación final de RH sobre una solicitud ya aprobada por el jefe.
-    Esta vista es solo de confirmación: nadie puede rechazar desde aquí.
-    Si se requiere rechazar, debe hacerse desde la vista del jefe (Mi Área).
+    Registro formal de RH (sin descuento de saldo: ya ocurrió al aprobar el jefe).
+    Solo rechazo desde la vista del jefe antes del inicio si aplica políticas internas.
     """
     if not aprobacion.aprobar:
         raise HTTPException(
@@ -301,13 +352,18 @@ def confirmar_solicitud_rh(
                 noti_service.crear_notificacion(
                     db,
                     empleado_id=result.empleado_id,
-                    titulo="Vacaciones confirmadas por RH",
-                    mensaje="Tu solicitud de vacaciones fue confirmada definitivamente por Recursos Humanos.",
+                    titulo="Constancia RH — vacaciones",
+                    mensaje="Recursos Humanos registró la confirmación formal de tus vacaciones (el saldo ya había quedado aplicado al aprobar tu jefe).",
                     tipo="solicitud_aprobada",
                     referencia_id=result.id,
                 )
             except Exception:
                 pass
+            registrar_negocio(
+                db,
+                empleado_id=aprobador_id,
+                mensaje=f"Solicitud vacaciones confirmada por RH id={solicitud_id}; empleado_id={result.empleado_id}",
+            )
         return result
     except ValueError as e:
         raise HTTPException(
@@ -329,17 +385,22 @@ def get_solicitudes_pendientes_rh(
     _current: dict = Depends(get_current_user),
 ):
     """
-    Solicitudes aprobadas por el jefe/admin y pendientes de confirmación final por RH.
-    Incluye quien dio la primera aprobación y si era el jefe directo del empleado.
+    Solicitudes aprobadas por jefe pendientes de registro formal RH (saldo ya descontado).
+    Incluye quién aprobó y si era jefe directo.
     """
     from .models import EstadoSolicitud
     from app.modules.vacaciones import models as vac_models
     from sqlalchemy.orm import joinedload
+    from app.modules.personal.models import Empleado as EmpModel
+
     result = (
         db.query(vac_models.SolicitudVacaciones)
         .options(
-            joinedload(vac_models.SolicitudVacaciones.jefe_aprobador),
-            joinedload(vac_models.SolicitudVacaciones.empleado),
+            joinedload(vac_models.SolicitudVacaciones.jefe_aprobador).joinedload(
+                EmpModel.puesto_rel
+            ),
+            joinedload(vac_models.SolicitudVacaciones.empleado).joinedload(EmpModel.puesto_rel),
+            joinedload(vac_models.SolicitudVacaciones.empleado).joinedload(EmpModel.departamento_rel),
         )
         .filter(vac_models.SolicitudVacaciones.estado == EstadoSolicitud.APROBADA_JEFE)
         .order_by(vac_models.SolicitudVacaciones.fecha_aprobacion)
@@ -362,48 +423,28 @@ def get_mi_balance(
     empleado_id = int(current["user_id"])
     año_val = año or dt.now().year
     data = service.VacacionesService.get_balance_con_periodos(db, empleado_id, año_val)
-    return schemas.BalanceConPeriodosResponse(
-        empleado_id=data["empleado_id"],
-        año=data["año"],
-        periodo_actual=schemas.PeriodoVacacionesResponse(**data["periodo_actual"]) if data.get("periodo_actual") else None,
-        periodo_anterior=schemas.PeriodoVacacionesResponse(**data["periodo_anterior"]) if data.get("periodo_anterior") else None,
-        dias_disponibles=data["dias_disponibles"],
-        dias_tomados=data["dias_tomados"],
-        dias_pendientes=data["dias_pendientes"],
-        fecha_limite_goce=data.get("fecha_limite_goce"),
-        dias_deuda_vacaciones_ley=data.get("dias_deuda_vacaciones_ley", Decimal("0")),
-        saldo_dias_lft_neto=data["saldo_dias_lft_neto"],
-    )
+    return _balance_con_periodos_schema(data)
 
 
 @router.get("/balance/{empleado_id}", response_model=schemas.BalanceConPeriodosResponse)
 def get_balance(
     empleado_id: int,
     año: Optional[int] = Query(None, description="Año del balance (por defecto año actual)"),
-    db: Session = Depends(get_db)
+    _ctx: dict = Depends(require_superuser_or_rh),
+    db: Session = Depends(get_db),
 ):
     """Balance de vacaciones con periodo actual y periodo anterior (por vencer). Días por LFT México; goce antes de 18 meses tras aniversario."""
     año_val = año or dt.now().year
     data = service.VacacionesService.get_balance_con_periodos(db, empleado_id, año_val)
-    return schemas.BalanceConPeriodosResponse(
-        empleado_id=data["empleado_id"],
-        año=data["año"],
-        periodo_actual=schemas.PeriodoVacacionesResponse(**data["periodo_actual"]) if data.get("periodo_actual") else None,
-        periodo_anterior=schemas.PeriodoVacacionesResponse(**data["periodo_anterior"]) if data.get("periodo_anterior") else None,
-        dias_disponibles=data["dias_disponibles"],
-        dias_tomados=data["dias_tomados"],
-        dias_pendientes=data["dias_pendientes"],
-        fecha_limite_goce=data.get("fecha_limite_goce"),
-        dias_deuda_vacaciones_ley=data.get("dias_deuda_vacaciones_ley", Decimal("0")),
-        saldo_dias_lft_neto=data["saldo_dias_lft_neto"],
-    )
+    return _balance_con_periodos_schema(data)
 
 
 @router.get("/dias-por-antiguedad/{empleado_id}")
 def get_dias_por_antiguedad(
     empleado_id: int,
     año: Optional[int] = Query(None, description="Año de referencia (por defecto año actual)"),
-    db: Session = Depends(get_db)
+    _ctx: dict = Depends(require_superuser_or_rh),
+    db: Session = Depends(get_db),
 ):
     """
     Días de vacaciones que corresponden al empleado por antigüedad según LFT México.
@@ -417,9 +458,10 @@ def actualizar_dias_disponibles(
     empleado_id: int,
     dias: float,
     año: Optional[int] = Query(None),
-    db: Session = Depends(get_db)
+    _ctx: dict = Depends(require_superuser),
+    db: Session = Depends(get_db),
 ):
-    """Actualizar días disponibles en el balance"""
+    """Actualizar días disponibles en el balance (balance anual clásico). Solo administrador."""
     from decimal import Decimal
     return service.VacacionesService.actualizar_dias_disponibles(
         db,
@@ -427,6 +469,50 @@ def actualizar_dias_disponibles(
         Decimal(str(dias)),
         año
     )
+
+
+@router.put("/admin/empleado/{empleado_id}/saldo-lft-neto", response_model=schemas.BalanceConPeriodosResponse)
+def admin_actualizar_saldo_lft_neto(
+    empleado_id: int,
+    body: schemas.SaldoLftNetoAdminBody,
+    _ctx: dict = Depends(require_superuser),
+    db: Session = Depends(get_db),
+):
+    """Ajusta el saldo LFT neto del empleado (misma lógica que importación de personal). Solo administrador."""
+    try:
+        service.VacacionesService.aplicar_saldo_lft_neto_import(
+            db, empleado_id, body.saldo_lft_neto, do_commit=True
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    año_val = dt.now().year
+    data = service.VacacionesService.get_balance_con_periodos(db, empleado_id, año_val)
+    return _balance_con_periodos_schema(data)
+
+
+@router.put(
+    "/admin/empleado/{empleado_id}/saldo-migracion-vacaciones",
+    response_model=schemas.BalanceConPeriodosResponse,
+)
+def admin_actualizar_saldo_migracion_vacaciones(
+    empleado_id: int,
+    body: schemas.SaldoMigracionVacacionesAdminBody,
+    _ctx: dict = Depends(require_superuser),
+    db: Session = Depends(get_db),
+):
+    """
+    Fija el saldo de migración (días fuera de la tabla LFT). Solo administrador.
+    Los nuevos periodos por aniversario siguen calculándose solo con la LFT.
+    """
+    try:
+        service.VacacionesService.aplicar_saldo_migracion_vacaciones_admin(
+            db, empleado_id, body.dias_saldo_migracion_vacaciones, do_commit=True
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    año_val = dt.now().year
+    data = service.VacacionesService.get_balance_con_periodos(db, empleado_id, año_val)
+    return _balance_con_periodos_schema(data)
 
 
 @router.get("/generales", response_model=List[schemas.VacacionGeneralResponse])

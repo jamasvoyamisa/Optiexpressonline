@@ -565,12 +565,11 @@ export const VacacionesPage = () => {
                         {sol.jefe_aprobador_nombre ? (
                           <>
                             <div style={{ fontWeight: 500 }}>{sol.jefe_aprobador_nombre}</div>
-                            {sol.aprobador_es_jefe_directo === true && (
-                              <span style={{ fontSize: '0.72rem', backgroundColor: '#d1fae5', color: '#065f46', borderRadius: 4, padding: '1px 6px', fontWeight: 600 }}>Jefe directo</span>
-                            )}
-                            {sol.aprobador_es_jefe_directo === false && (
-                              <span style={{ fontSize: '0.72rem', backgroundColor: '#fef3c7', color: '#92400e', borderRadius: 4, padding: '1px 6px', fontWeight: 600 }}>Administrador</span>
-                            )}
+                            {sol.jefe_aprobador_puesto ? (
+                              <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: 2 }}>
+                                {sol.jefe_aprobador_puesto}
+                              </div>
+                            ) : null}
                           </>
                         ) : '—'}
                       </td>
@@ -696,10 +695,10 @@ export const VacacionesPage = () => {
             style={{ backgroundColor: 'white', borderRadius: 10, padding: 28, width: 420, maxWidth: '90vw', boxShadow: '0 20px 60px rgba(0,0,0,0.2)' }}
           >
             <h3 style={{ margin: '0 0 8px', fontSize: '1rem', fontWeight: 700, color: '#065f46' }}>
-              ✔ Confirmar aprobación — RH
+              ✔ Constancia formal — RH
             </h3>
             <p style={{ margin: '0 0 16px', fontSize: '0.85rem', color: '#6b7280' }}>
-              Al confirmar, los días quedarán oficialmente registrados como vacaciones aprobadas.
+              El saldo ya se descontó al aprobar el jefe. Esto solo registra la confirmación en expediente; puedes añadir un comentario opcional.
             </p>
             {isSuperuser && (
               <p style={{ margin: '0 0 12px', fontSize: '0.78rem', backgroundColor: '#f0f9ff', color: '#0369a1', padding: '6px 10px', borderRadius: 5, fontWeight: 500 }}>

@@ -36,6 +36,83 @@ Este documento describe qué se requiere para integrar un módulo de nóminas en
 - Periodos de pago (quincenal, semanal, mensual)
 - Integración con PAC para timbrado (Facturama u otro)
 
+### 2.3 Inventario de requisitos en México (normativa y operación)
+
+Esta lista orienta el diseño funcional del módulo; no todo debe implementarse en el primer sprint. Prioridad habitual: **ISR + IMSS + percepciones base + deducciones legales**, luego **INFONAVIT / FONACOT**, luego **CFDI / timbrado**, luego **SUA / IDSE** y conciliaciones.
+
+#### Comprobante fiscal (SAT)
+
+- **CFDI 4.0 tipo N (Nómina)** + **Complemento de Nómina** (versión y revisión vigentes; el SAT publica revisiones del complemento; en fechas recientes existen validaciones más estrictas de importes gravado/exento).
+- Catálogos oficiales (actualizarlos periódicamente desde el SAT): tipo de nómina (ordinaria/extraordinaria), periodicidad de pago, régimen de contratación, **tipos de percepción y deducción**, otros pagos, bancos, etc.
+- **Timbrado** ante un **PAC** (Facturama u otro) o flujo propio con **CSD**; almacenamiento de XML/PDF, UUID y estatus.
+- Datos mínimos emisor/receptor: RFC, nombre o razón social, código postal del trabajador alineado al catálogo del SAT; uso de CFDI (p. ej. CN01 para salarios), según catálogo vigente.
+
+#### ISR (impuesto sobre la renta del trabajador)
+
+- Tablas del art. 96 LISR según periodicidad (semanal, quincenal, mensual).
+- **Subsidio para el empleo** cuando aplique.
+- Roadmap típico: **ajuste anual**, acumulados de ISR retenido, **finiquitos y liquidaciones** (tablas y reglas distintas a nómina ordinaria).
+
+#### IMSS (cuotas obrero-patronales y seguridad social)
+
+- **Salario Base de Cotización (SBC)** y **Salario Diario Integrado (SDI)**; límites con **UMA** y salario mínimo general por zona.
+- **Días cotizados** por periodo (incapacidades, faltas injustificadas pueden reducir días).
+- Ramos: enfermedades y maternidad, invalidez y vida, riesgos de trabajo (clase de prima), guarderías, retiro/cesantía (cuotas tripartitas), etc.
+- **Aportación patronal al esquema de vivienda (INFONAVIT)**: en el esquema clásico suele asociarse al porcentaje sobre SBC; validar siempre contra normativa y tablas del ejercicio al implementar.
+
+#### INFONAVIT (vivienda)
+
+- **Cuota patronal** al esquema de vivienda (parametrizar por año y normativa vigente).
+- **Descuentos al trabajador por crédito INFONAVIT**: factor de descuento, número de crédito, límites (tope respecto al salario pagado; reglas especiales para trabajadores con salario mínimo).
+- **Reformas**: pueden existir reglas sobre suspensión o continuidad de descuentos ante faltas o incapacidades; deben **parametrizarse** según la norma aplicable en cada momento.
+
+#### INFONACOT (crédito de consumo)
+
+- Descuentos con porcentaje o monto según convenio; registro de préstamo y saldos (similar en concepto a un préstamo interno, pero con reglas propias).
+
+#### Préstamos y cargas sobre nómina
+
+- **Préstamos al personal**: Optiexpress ya cuenta con módulo de préstamos; la nómina debe poder integrarlos como deducciones por periodo y límites.
+- **INFONAVIT / FONACOT** deben modelarse como tipos de deducción distintos del préstamo interno (no mezclar sin clasificar el origen).
+
+#### Otras deducciones y retenciones frecuentes
+
+| Tipo | Notas |
+|------|--------|
+| **Pensión alimenticia** | Orden judicial; porcentaje o monto; límites legales sobre el neto; reflejo en CFDI como deducción. |
+| **Cuotas sindicales** | Monto o porcentaje según contrato. |
+| **Fondo de ahorro** | Topes y tratamiento fiscal (exención hasta límites; validar por ejercicio). |
+| **Seguros** (vida, gastos médicos mayores) | Deducción voluntaria. |
+| **Cooperativas / caja de ahorro** | Según política interna. |
+
+#### Percepciones laborales y prestaciones (LFT y práctica común)
+
+- Salario base, **horas extra** (límites LFT), **aguinaldo**, **prima vacacional**, **PTU** (cuando aplique), **vacaciones** y días festivos pagados, **bonos**, **viáticos** (tratamiento fiscal específico si aplica).
+- Integración con **asistencia**, **vacaciones** e **incapacidades** ya existentes en Optiexpress para alimentar días pagados, faltas o subsidios.
+
+#### IMSS digital: SUA e IDSE
+
+- **IDSE**: movimientos afiliatorios (altas, bajas, modificaciones de salario); suele requerir **e.firma** del patrón.
+- **SUA**: cálculo de cuotas obrero-patronales y archivos de pago; la información correcta en IDSE es prerequisito para que SUA cuadre.
+- Una aplicación de nómina **no sustituye** los portales del IMSS, pero puede **exportar** datos o **conciliar** totales calculados internamente vs. lo reportable en SUA.
+
+#### Parámetros legales que cambian cada año
+
+- **Salario mínimo** por zona, **UMA**, tablas ISR, cuotas IMSS: deben ser **tablas parametrizables por ejercicio**, no valores fijos en código.
+
+#### Integración con los módulos actuales de Optiexpress
+
+- Reutilizar datos de **Empresa** y **Empleado** (RFC, CURP, NSS, fechas de ingreso y baja).
+- Enlazar el **módulo de préstamos** como fuente de deducciones cuando exista política definida.
+- Usar **asistencia**, **vacaciones** e **incapacidades** como insumos de cálculo o validación.
+
+#### Resumen ejecutivo (México)
+
+- **Obligatorio ante el SAT** para la mayoría de empleadores: nómina electrónica (CFDI de tipo nómina).
+- **Núcleo de cálculo típico**: ISR + IMSS + aportaciones/descuentos INFONAVIT + percepciones y deducciones según contrato y ley.
+- **Operación**: periodicidad configurable, cierre de periodo, recibos, cumplimiento de obligaciones bimestrales/mensuales según aplique.
+- **Mayor complejidad** en: timbrado, catálogos SAT, conciliación con IMSS, reformas anuales; se recomienda validación con **contador o fiscalista** antes de producción.
+
 ---
 
 ## 3. Qué se tendría que hacer
@@ -136,8 +213,8 @@ detalle_nomina_empleado
 
 #### 3.3.1 Configuración
 
-- Cuenta Facturama (API Web o Multiemisor)
-- Cargar CSD del patrón en Facturama
+- Cuenta Facturama (misma anualidad habilita **API Web** y **API Multiemisor**; elegir según 1 RFC vs. varias razones sociales — ver **3.3.4**)
+- Cargar **CSD** del patrón en Facturama
 - Configurar sucursal con código postal
 
 #### 3.3.2 Flujo de timbrado
@@ -154,6 +231,46 @@ detalle_nomina_empleado
 - `POST /api-lite/3/cfdis` — Crear CFDI de nómina
 - `GET /api-lite/3/cfdis/{id}` — Consultar estado
 - Descarga de XML y PDF
+
+#### 3.3.4 Facturama: costos anuales y folios (PAC oficial)
+
+Información tomada de la página de costos de Facturama ([api.facturama.mx/costos](https://api.facturama.mx/costos)) y de la landing de nómina API ([facturama.mx/api/nomina](https://facturama.mx/api/nomina)). Los precios pueden cambiar; conviene confirmar en el sitio antes de contratar.
+
+| Concepto | Detalle |
+|----------|---------|
+| **Módulo API (anualidad)** | **$1,650 MXN** IVA incluido, vigencia de **un año**. |
+| **Incluye en la anualidad** | **100 folios** para timbrar vía API. |
+| **Modalidades** | **API Web** (1 RFC): timbrado, consulta, cancelación, gestión en plataforma web; todo lo generado por API se refleja en facturama.mx. **API Multiemisor** (varios RFC): servicio de timbrado; gestión de sellos digitales de múltiples RFC; **no** se refleja en la plataforma web. |
+| **Nota importante** | Con **una sola suscripción anual** se tiene acceso a **ambas** modalidades (Web y Multiemisor); no son dos pagos distintos de $1,650. |
+
+**Folios adicionales (prepago, IVA incluido)** — típico cuando se superan los 100 folios/año:
+
+| Volumen anual de folios | Precio por folio |
+|-------------------------|------------------|
+| 1 a 10,000 | $0.50 MXN |
+| 10,001 a 50,000 | $0.45 MXN |
+| Más de 50,000 | $0.40 MXN |
+
+**Estimación de costo variable anual (solo PAC):**  
+`(Número de recibos de nómina timbrados al año − 100 folios incluidos) × precio por folio según tramo`, más **$1,650** de anualidad.  
+Ejemplo: 50 empleados × 24 quincenas = **1,200 timbres/año** → 1,100 folios de pago × ~$0.50 ≈ **$550** + **$1,650** anualidad ≈ **$2,200 MXN/año** (orden de magnitud; redondeos y promociones pueden variar).
+
+**Qué cubre la API respecto a nómina (según Facturama):** emisión de CFDI 4.0 y **recibos de nómina** (subsidio, horas extra, incapacidad, indemnización, jubilación, entre otros escenarios documentados), además de otros tipos de comprobantes si se contrata el mismo módulo para facturación global.
+
+#### 3.3.5 Integración técnica con Optiexpress
+
+| Aspecto | Enfoque sugerido |
+|---------|-------------------|
+| **Protocolo** | **REST** (HTTPS); arquitectura orientada a recursos; JSON para el cuerpo del CFDI. |
+| **Ambientes** | **Sandbox** para desarrollo y pruebas ([apisandbox.facturama.mx](https://apisandbox.facturama.mx/)) — documentación y ejemplos; **producción** tras contratar módulo API y folios. |
+| **Autenticación** | Credenciales de usuario API (usuario/contraseña) según documentación Facturama; almacenar de forma segura (variables de entorno, cifrado en BD, nunca en el código fuente). |
+| **Sellos digitales (CSD)** | Carga del **Certificado de Sello Digital** del emisor en el panel Facturama o flujo API según modalidad; sin CSD válido no hay timbrado válido ante el SAT. |
+| **Flujo en Optiexpress** | Backend FastAPI: cliente HTTP (p. ej. `httpx`) que, tras calcular percepciones/deducciones en el propio sistema, arma el **JSON del CFDI de nómina** conforme al esquema Facturama/SAT y llama al endpoint de creación/timbrado; guardar UUID, XML y PDF en `detalle_nomina_empleado` o equivalente. |
+| **SDKs** | Facturama publica ejemplos y librerías para **PHP, .NET, JavaScript, Java, Ruby**; para Python suele usarse integración REST directa (no siempre hay SDK oficial). |
+| **Guía de nómina** | Guías en sandbox, p. ej. [apisandbox.facturama.mx/guias/nominas/sueldo](https://apisandbox.facturama.mx/guias/nominas/sueldo) (validar URL vigente en la documentación actual). |
+| **Riesgos** | Dependencia del PAC; caídas o cambios de API; conviene capa de reintentos idempotentes y registro de errores de timbrado por empleado. |
+
+**Resumen:** la integración no es “instalar un plugin”, sino **desarrollar** el armado del JSON de nómina (alineado a catálogos SAT), **probar en sandbox**, y en producción **descontar folios** por cada timbrado exitoso según el contrato con Facturama.
 
 ### 3.4 Fase 4: Módulo de nómina en el frontend
 
@@ -210,9 +327,9 @@ detalle_nomina_empleado
 
 ### 4.5 Costos
 
-- **Facturama:** ~$1,650 MXN/año (API Web) o ~$3,300 MXN/año (Multiemisor)
-- **Sin licencias adicionales** de software de nómina por puesto
-- **Un solo mantenimiento** en lugar de dos sistemas
+- **Facturama (PAC):** anualidad **$1,650 MXN** IVA incluido, con **100 folios** incluidos; acceso a **API Web y API Multiemisor** con la misma suscripción (ver sección **3.3.4**). Folios extra según volumen ($0.40–$0.50 por folio).
+- **Sin licencias adicionales** de software de nómina por puesto en Optiexpress (el costo variable principal es folios + desarrollo/mantenimiento).
+- **Un solo mantenimiento** de aplicación en lugar de dos sistemas desconectados
 
 ---
 
@@ -337,7 +454,11 @@ Este documento sirve como base para la evaluación y el plan de implementación.
 
 ## Anexo A: Referencias
 
-- [Facturama API Nómina](https://apisandbox.facturama.mx/guias/nominas/sueldo)
+- [Facturama — Costos API y folios](https://api.facturama.mx/costos)
+- [Facturama — Documentación API REST](https://api.facturama.mx/Docs)
+- [Facturama — Sandbox (pruebas)](https://apisandbox.facturama.mx/)
+- [Facturama — Recibos de nómina (API)](https://facturama.mx/api/nomina)
+- [Facturama API Nómina (guía sueldo, sandbox)](https://apisandbox.facturama.mx/guias/nominas/sueldo)
 - [Complemento Nómina 1.2 (SAT)](https://www.sat.gob.mx/cs/Satellite?blobcol=urldata&blobkey=id&blobtable=MungoBlobs&blobwhere=1461174659996&ssbinary=true)
 - [Tablas ISR mensual](https://www.sat.gob.mx/consulta/44953/calculo-del-subsidio-para-el-empleo-efectivamente-a-pagar-a-los-trabajadores)
 - [CFDI 4.0](https://www.sat.gob.mx/cs/Satellite?blobcol=urldata&blobkey=id&blobtable=MungoBlobs&blobwhere=1461174659996&ssbinary=true)

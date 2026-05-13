@@ -88,6 +88,19 @@ function renderizarCatalogos() {
             <p>${catalogo.descripcion}</p>
         `;
 
+        const imgCat = card.querySelector('.recurso-imagen');
+        if (imgCat) {
+            imgCat.decoding = 'async';
+            imgCat.sizes = '(max-width: 768px) 94vw, min(45vw, 520px)';
+            if (index < 3) {
+                imgCat.loading = 'eager';
+                imgCat.fetchPriority = index === 0 ? 'high' : 'auto';
+            } else {
+                imgCat.loading = 'lazy';
+                imgCat.fetchPriority = 'low';
+            }
+        }
+
         const shareMenu = document.createElement('div');
         shareMenu.className = 'share-menu';
         

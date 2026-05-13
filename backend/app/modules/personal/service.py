@@ -647,7 +647,9 @@ class PersonalService:
         elif not incluir_exentos:
             query = query.filter(_no_es_usuario_especial())
 
-        if exento_incidencias is None and admin_rol_ids:
+        # Ocultar cuentas Administrador/Superuser solo en el listado “operativo” reducido.
+        # Si incluir_exentos=True (p. ej. módulo Personal), mostrar también a administradores.
+        if exento_incidencias is None and admin_rol_ids and not incluir_exentos:
             query = query.filter(
                 or_(
                     models.Empleado.rol_id.is_(None),
@@ -767,11 +769,19 @@ class PersonalService:
         from datetime import datetime, timezone
         db_empleado.fecha_baja = datetime.now(timezone.utc)
 
+        # Encolar borrado del empleado en cada reloj donde fue enviado.
+        # IMPORTANTE: filtrar por pin_checador (único globalmente). Si filtramos solo por
+        # numero_empleado podríamos borrar al empleado de otra empresa con el mismo número.
         from app.modules.asistencia import models as asist_models
-        enviados = db.query(asist_models.UsuarioPendienteDispositivo).filter(
+        upd_filter = [
             asist_models.UsuarioPendienteDispositivo.numero_empleado == db_empleado.numero_empleado,
             asist_models.UsuarioPendienteDispositivo.enviado == True,
-        ).all()
+        ]
+        if db_empleado.pin_checador:
+            upd_filter.append(
+                asist_models.UsuarioPendienteDispositivo.pin_checador == db_empleado.pin_checador
+            )
+        enviados = db.query(asist_models.UsuarioPendienteDispositivo).filter(*upd_filter).all()
         for env in enviados:
             existing = db.query(asist_models.PendingDelete).filter(
                 asist_models.PendingDelete.dispositivo_id == env.dispositivo_id,
@@ -831,6 +841,35 @@ class PersonalService:
     def get_es_gerente_o_director(db: Session, empleado_id: int) -> bool:
         """True si puede aprobar solo vacaciones de gerentes/supervisores (Director o Gerente General)."""
         return PersonalService.get_es_gerente_general(db, empleado_id) or PersonalService.get_es_director(db, empleado_id)
+
+    @staticmethod
+    def get_ids_gerentes_area(db: Session, departamento_id: Optional[int]) -> List[int]:
+        """
+        IDs de empleados que tienen rango de GERENTE en el área: jefe del departamento
+        + empleados con 'gerente' en el puesto (excluye supervisores puros).
+        Usado para aprobar vacaciones de supervisores y justificar sus incidencias.
+        """
+        if not departamento_id:
+            return []
+        depto = db.query(models.Departamento).filter(models.Departamento.id == departamento_id).first()
+        if not depto:
+            return []
+        ids = []
+        if depto.jefe_id:
+            ids.append(depto.jefe_id)
+        gerentes = (
+            db.query(models.Empleado)
+            .join(models.Puesto, models.Empleado.puesto_id == models.Puesto.id)
+            .filter(
+                models.Empleado.departamento_id == departamento_id,
+                models.Puesto.nombre.ilike("%gerente%"),
+            )
+            .all()
+        )
+        for e in gerentes:
+            if e.id not in ids:
+                ids.append(e.id)
+        return ids
 
     @staticmethod
     def get_ids_aprobadores_area(db: Session, departamento_id: Optional[int]) -> List[int]:
