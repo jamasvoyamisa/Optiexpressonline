@@ -5,7 +5,7 @@ import uuid
 from typing import Optional
 
 from passlib.context import CryptContext
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import settings
@@ -31,6 +31,51 @@ def _verificar_password_empleado(empleado: personal_models.Empleado, password: s
 class SoporteService:
     ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".txt"}
     MAX_FILE_BYTES = 10 * 1024 * 1024  # 10 MB por archivo
+    # Categorías solo para alta interna (TI/Admin), no en portal público
+    _CLASES_SOLO_INTERNO_KEYWORDS = ("mantenimiento", "ventana", "ventanas")
+
+    @staticmethod
+    def _norm_clase_nombre(nombre: Optional[str]) -> str:
+        return (nombre or "").strip().lower()
+
+    @staticmethod
+    def clase_es_solo_interno(nombre: Optional[str]) -> bool:
+        """True si la categoría es de uso exclusivo TI (mantenimiento, ventanas)."""
+        n = SoporteService._norm_clase_nombre(nombre)
+        if not n:
+            return False
+        return any(k in n for k in SoporteService._CLASES_SOLO_INTERNO_KEYWORDS)
+
+    @staticmethod
+    def _es_depto_ti(nombre: Optional[str]) -> bool:
+        n = (nombre or "").strip().lower()
+        if not n:
+            return False
+        if n in ("ti", "it", "sistemas", "tecnología de la información", "tecnologias de la informacion"):
+            return True
+        return "sistemas" in n or "tecnolog" in n
+
+    @staticmethod
+    def empleado_es_personal_ti(empleado: personal_models.Empleado) -> bool:
+        """Solo personal del departamento de TI puede registrar tickets de Mantenimiento/Ventanas."""
+        if empleado.empresa_id is None:
+            return False
+        if not empleado.departamento_rel:
+            return False
+        return SoporteService._es_depto_ti(empleado.departamento_rel.nombre)
+
+    @staticmethod
+    def _empleado_datos_ticket(empleado: personal_models.Empleado, empresa: personal_models.Empresa):
+        nombre_solicitante = " ".join(
+            [x for x in [empleado.nombre, empleado.apellido_paterno, empleado.apellido_materno] if (x or "").strip()]
+        ).strip() or (empleado.numero_empleado or "Empleado")
+        depto_nombre = None
+        if empleado.departamento_rel:
+            depto_nombre = (empleado.departamento_rel.nombre or "").strip() or None
+        tel_empresa = (getattr(empleado, "telefono_empresa_asignado", None) or "").strip()
+        tel_personal = (empleado.telefono or "").strip()
+        tel_ticket = (tel_empresa or tel_personal) or None
+        return nombre_solicitante, depto_nombre, tel_ticket, (empresa.nombre or "").strip() or None
 
     @staticmethod
     def _resolve_adjuntos_base_dir() -> Path:
@@ -45,11 +90,32 @@ class SoporteService:
             return local
 
     @staticmethod
-    def list_clases(db: Session, solo_activas: bool = False):
+    def list_clases(db: Session, solo_activas: bool = False, solo_interno: Optional[bool] = None):
         q = db.query(models.SoporteTicketClase)
         if solo_activas:
             q = q.filter(models.SoporteTicketClase.activo.is_(True))
-        return q.order_by(models.SoporteTicketClase.nombre.asc()).all()
+        rows = q.order_by(models.SoporteTicketClase.nombre.asc()).all()
+        if solo_interno is True:
+            return [c for c in rows if SoporteService.clase_es_solo_interno(c.nombre)]
+        if solo_interno is False:
+            return [c for c in rows if not SoporteService.clase_es_solo_interno(c.nombre)]
+        return rows
+
+    @staticmethod
+    def list_clases_portal(db: Session):
+        return SoporteService.list_clases(db, solo_activas=True, solo_interno=False)
+
+    @staticmethod
+    def list_tipos_portal(db: Session, clase_id: Optional[int] = None):
+        if clase_id is not None:
+            clase = db.query(models.SoporteTicketClase).filter(models.SoporteTicketClase.id == clase_id).first()
+            if not clase or SoporteService.clase_es_solo_interno(clase.nombre):
+                return []
+        tipos = SoporteService.list_tipos_ticket(db, solo_activos=True, clase_id=clase_id)
+        return [
+            t for t in tipos
+            if not (t.clase and SoporteService.clase_es_solo_interno(t.clase.nombre))
+        ]
 
     @staticmethod
     def create_clase(db: Session, data: schemas.SoporteTicketClaseCreate) -> models.SoporteTicketClase:
@@ -198,25 +264,12 @@ class SoporteService:
         if not empleado or not _verificar_password_empleado(empleado, data.password):
             raise ValueError("Credenciales incorrectas.")
 
-        nombre_solicitante = " ".join(
-            [x for x in [empleado.nombre, empleado.apellido_paterno, empleado.apellido_materno] if (x or "").strip()]
-        ).strip() or (empleado.numero_empleado or "Empleado")
-        depto_nombre = None
-        if empleado.departamento_rel:
-            depto_nombre = (empleado.departamento_rel.nombre or "").strip() or None
-
-        tipo_ticket = None
-        if data.tipo_ticket_id is not None:
-            tipo_ticket = db.query(models.SoporteTicketTipo).filter(
-                models.SoporteTicketTipo.id == data.tipo_ticket_id,
-                models.SoporteTicketTipo.activo.is_(True),
-            ).first()
-            if not tipo_ticket:
-                raise ValueError("Tipo de ticket inválido o inactivo.")
-
-        tel_empresa = (getattr(empleado, "telefono_empresa_asignado", None) or "").strip()
-        tel_personal = (empleado.telefono or "").strip()
-        tel_ticket = (tel_empresa or tel_personal) or None
+        tipo_ticket = SoporteService._resolver_tipo_ticket(
+            db, data.tipo_ticket_id, solo_interno=False, obligatorio=True
+        )
+        nombre_solicitante, depto_nombre, tel_ticket, empresa_nombre = SoporteService._empleado_datos_ticket(
+            empleado, empresa
+        )
 
         ticket = models.SoporteTicket(
             folio=SoporteService._next_folio(db),
@@ -228,7 +281,7 @@ class SoporteService:
             nombre_solicitante=nombre_solicitante,
             email_solicitante=(empleado.email or "").strip() or None,
             telefono_solicitante=tel_ticket,
-            empresa_nombre=(empresa.nombre or "").strip() or None,
+            empresa_nombre=empresa_nombre,
             departamento_nombre=depto_nombre,
             tipo_ticket_id=tipo_ticket.id if tipo_ticket else None,
             empleado_id=int(empleado.id),
@@ -237,6 +290,145 @@ class SoporteService:
         db.commit()
         db.refresh(ticket)
         return ticket
+
+    @staticmethod
+    def _resolver_tipo_ticket(
+        db: Session,
+        tipo_ticket_id: Optional[int],
+        *,
+        solo_interno: bool,
+        obligatorio: bool,
+    ) -> Optional[models.SoporteTicketTipo]:
+        if tipo_ticket_id is None:
+            if obligatorio:
+                raise ValueError("El tipo de ticket es obligatorio.")
+            return None
+        tipo = (
+            db.query(models.SoporteTicketTipo)
+            .options(joinedload(models.SoporteTicketTipo.clase))
+            .filter(
+                models.SoporteTicketTipo.id == tipo_ticket_id,
+                models.SoporteTicketTipo.activo.is_(True),
+            )
+            .first()
+        )
+        if not tipo:
+            raise ValueError("Tipo de ticket inválido o inactivo.")
+        es_interno = bool(tipo.clase and SoporteService.clase_es_solo_interno(tipo.clase.nombre))
+        if solo_interno and not es_interno:
+            raise ValueError("El tipo seleccionado no pertenece a Mantenimiento o Ventanas.")
+        if not solo_interno and es_interno:
+            raise ValueError("Este tipo de ticket solo puede crearse desde Soporte TI (aplicación interna).")
+        return tipo
+
+    @staticmethod
+    def create_ticket_interno(db: Session, data: schemas.SoporteTicketInternoCreate) -> models.SoporteTicket:
+        empleado = (
+            db.query(personal_models.Empleado)
+            .options(joinedload(personal_models.Empleado.departamento_rel))
+            .filter(
+                personal_models.Empleado.id == data.empleado_id,
+                personal_models.Empleado.estado == personal_models.EstadoEmpleado.ACTIVO,
+            )
+            .first()
+        )
+        if not empleado:
+            raise ValueError("Empleado no encontrado o inactivo.")
+        if not SoporteService.empleado_es_personal_ti(empleado):
+            raise ValueError("Solo puede seleccionarse personal del departamento de TI.")
+
+        empresa = (
+            db.query(personal_models.Empresa)
+            .filter(
+                personal_models.Empresa.id == data.empresa_id,
+                personal_models.Empresa.activo.is_(True),
+            )
+            .first()
+        )
+        if not empresa:
+            raise ValueError("Empresa no válida o inactiva.")
+
+        tipo_ticket = SoporteService._resolver_tipo_ticket(
+            db, data.tipo_ticket_id, solo_interno=True, obligatorio=True
+        )
+        nombre_solicitante, depto_nombre, tel_ticket, empresa_nombre = SoporteService._empleado_datos_ticket(
+            empleado, empresa
+        )
+
+        ticket = models.SoporteTicket(
+            folio=SoporteService._next_folio(db),
+            origen="interno",
+            estado=models.TicketEstado.ABIERTO,
+            prioridad=data.prioridad,
+            titulo=data.titulo.strip(),
+            descripcion=data.descripcion.strip(),
+            nombre_solicitante=nombre_solicitante,
+            email_solicitante=(empleado.email or "").strip() or None,
+            telefono_solicitante=tel_ticket,
+            empresa_nombre=empresa_nombre,
+            departamento_nombre=depto_nombre,
+            tipo_ticket_id=tipo_ticket.id if tipo_ticket else None,
+            empleado_id=int(empleado.id),
+        )
+        db.add(ticket)
+        db.commit()
+        db.refresh(ticket)
+        return ticket
+
+    @staticmethod
+    def list_empleados_interno(db: Session) -> list[dict]:
+        """Personal de TI activo (quienes registran tickets de Mantenimiento / Ventanas)."""
+        empleados = (
+            db.query(personal_models.Empleado)
+            .options(
+                joinedload(personal_models.Empleado.departamento_rel),
+                joinedload(personal_models.Empleado.empresa),
+            )
+            .filter(
+                personal_models.Empleado.empresa_id.isnot(None),
+                or_(
+                    personal_models.Empleado.estado == personal_models.EstadoEmpleado.ACTIVO,
+                    personal_models.Empleado.estado.is_(None),
+                ),
+            )
+            .order_by(
+                personal_models.Empleado.nombre.asc(),
+                personal_models.Empleado.apellido_paterno.asc(),
+                personal_models.Empleado.apellido_materno.asc(),
+            )
+            .all()
+        )
+        out: list[dict] = []
+        for e in empleados:
+            if not SoporteService.empleado_es_personal_ti(e):
+                continue
+            nombre = " ".join(
+                [x for x in [e.nombre, e.apellido_paterno, e.apellido_materno] if (x or "").strip()]
+            ).strip()
+            empresa = (e.empresa.nombre if getattr(e, "empresa", None) else None) or ""
+            label = nombre or (e.numero_empleado or f"#{e.id}")
+            if empresa:
+                label = f"{label} ({empresa})"
+            out.append({"id": int(e.id), "nombre_completo": label})
+        return out
+
+    @staticmethod
+    def catalogo_ticket_interno(db: Session) -> dict:
+        clases = SoporteService.list_clases(db, solo_activas=True, solo_interno=True)
+        clase_ids = [int(c.id) for c in clases]
+        tipos_raw = SoporteService.list_tipos_ticket(db, solo_activos=True)
+        tipos = [SoporteService._tipo_to_response(t) for t in tipos_raw if t.clase_id in clase_ids]
+        empresas = (
+            db.query(personal_models.Empresa)
+            .filter(personal_models.Empresa.activo.is_(True))
+            .order_by(personal_models.Empresa.nombre.asc())
+            .all()
+        )
+        return {
+            "empresas": [{"id": int(e.id), "nombre": e.nombre} for e in empresas],
+            "clases": [{"id": int(c.id), "nombre": c.nombre, "activo": bool(c.activo)} for c in clases],
+            "tipos": tipos,
+        }
 
     @staticmethod
     def list_tickets(

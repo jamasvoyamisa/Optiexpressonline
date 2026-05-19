@@ -25,10 +25,15 @@ export function mensajeTicketSoporteWhatsapp(opts: {
   folio: string;
   titulo: string;
   estadoLabel: string;
+  motivoCierre?: string | null;
+  observaciones?: string | null;
+  /** @deprecated usar observaciones */
   notaResolucion?: string | null;
 }): string {
   const nombre = (opts.nombreSolicitante || 'Usuario').trim();
   const tit = (opts.titulo || '—').trim();
+  const observaciones = (opts.observaciones ?? opts.notaResolucion ?? '').trim();
+  const motivo = (opts.motivoCierre || '').trim();
   const lines = [
     `Hola ${nombre},`,
     '',
@@ -38,8 +43,11 @@ export function mensajeTicketSoporteWhatsapp(opts: {
     `Estado: ${opts.estadoLabel}`,
     `Asunto: ${tit}`,
   ];
-  if ((opts.notaResolucion || '').trim()) {
-    lines.push('', 'Nota:', String(opts.notaResolucion).trim().slice(0, 800));
+  if (motivo) {
+    lines.push('', `Motivo: ${motivo.slice(0, 500)}`);
+  }
+  if (observaciones) {
+    lines.push('', 'Observaciones:', observaciones.slice(0, 800));
   }
   lines.push('', 'Saludos.');
   return lines.join('\n');

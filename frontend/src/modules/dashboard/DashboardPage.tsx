@@ -9,6 +9,16 @@ interface AsistenciaGraficaItem {
   con_asistencia: number;
 }
 
+interface AusenteHoyItem {
+  empleado_id: number;
+  nombre_completo: string;
+  numero_empleado?: string | null;
+  empresa_nombre?: string | null;
+  departamento_nombre?: string | null;
+  en_vacaciones: boolean;
+  en_incapacidad: boolean;
+}
+
 interface DashboardData {
   empleados: { total: number; activos: number; inactivos: number; baja: number };
   empresas: number;
@@ -18,6 +28,7 @@ interface DashboardData {
   checadas_por_mes: { mes: string; label: string; checadas: number }[];
   solo_mi_area?: boolean;
   asistencia_grafica?: { tipo: string; items: AsistenciaGraficaItem[] };
+  ausentes_hoy?: AusenteHoyItem[];
 }
 
 interface DepartamentoOption {
@@ -129,6 +140,8 @@ export const DashboardPage = () => {
   const totalAsistHoy = asistItems.reduce((s, i) => s + i.con_asistencia, 0);
   const pctAsistGlobal = totalPersonalHoy > 0 ? Math.round((totalAsistHoy / totalPersonalHoy) * 100) : 0;
   const ausentesHoy = totalPersonalHoy - totalAsistHoy;
+  const listaAusentes = data.ausentes_hoy ?? [];
+  const ausentesSinJustificar = listaAusentes.filter((a) => !a.en_vacaciones && !a.en_incapacidad);
 
   const hoy = new Date();
   const hora = hoy.getHours();
@@ -351,6 +364,105 @@ export const DashboardPage = () => {
               </div>
             );
           })}
+        </div>
+
+        <div style={{ marginTop: isMobile ? 20 : 24, paddingTop: isMobile ? 16 : 20, borderTop: '1px solid #e2e8f0' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, marginBottom: isMobile ? 12 : 14 }}>
+            <h3 style={{ margin: 0, fontSize: isMobile ? '0.85rem' : '0.92rem', fontWeight: 700, color: '#1e293b' }}>
+              Ausentes del día
+            </h3>
+            <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
+              {listaAusentes.length === 0
+                ? 'Sin ausentes registrados'
+                : `${listaAusentes.length} sin checada hoy${ausentesSinJustificar.length < listaAusentes.length ? ` · ${ausentesSinJustificar.length} sin justificar` : ''}`}
+            </span>
+          </div>
+          {listaAusentes.length === 0 ? (
+            <p style={{ margin: 0, fontSize: '0.88rem', color: '#22c55e', fontWeight: 500 }}>
+              Todo el personal activo registró checada hoy.
+            </p>
+          ) : isMobile ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: 320, overflowY: 'auto' }}>
+              {listaAusentes.map((a) => (
+                <div
+                  key={a.empleado_id}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 10,
+                    border: '1px solid #fecaca',
+                    background: '#fff5f5',
+                  }}
+                >
+                  <div style={{ fontWeight: 700, fontSize: '0.88rem', color: '#1e293b', marginBottom: 4 }}>
+                    {a.nombre_completo}
+                    {a.numero_empleado ? (
+                      <span style={{ fontWeight: 500, color: '#94a3b8', marginLeft: 6 }}>#{a.numero_empleado}</span>
+                    ) : null}
+                  </div>
+                  <div style={{ fontSize: '0.78rem', color: '#64748b' }}>
+                    {[a.departamento_nombre, a.empresa_nombre].filter(Boolean).join(' · ') || '—'}
+                  </div>
+                  {(a.en_vacaciones || a.en_incapacidad) && (
+                    <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {a.en_vacaciones && (
+                        <span style={{ fontSize: '0.68rem', fontWeight: 600, padding: '2px 8px', borderRadius: 999, background: '#dbeafe', color: '#1d4ed8' }}>
+                          Vacaciones
+                        </span>
+                      )}
+                      {a.en_incapacidad && (
+                        <span style={{ fontSize: '0.68rem', fontWeight: 600, padding: '2px 8px', borderRadius: 999, background: '#fef3c7', color: '#b45309' }}>
+                          Incapacidad
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto', maxHeight: 280, overflowY: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+                <thead>
+                  <tr style={{ background: '#f8fafc', position: 'sticky', top: 0, zIndex: 1 }}>
+                    {['Empleado', 'No.', 'Área', 'Empresa', 'Estado'].map((h) => (
+                      <th
+                        key={h}
+                        style={{
+                          textAlign: 'left',
+                          padding: '8px 10px',
+                          color: '#64748b',
+                          fontWeight: 600,
+                          borderBottom: '1px solid #e2e8f0',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {listaAusentes.map((a) => (
+                    <tr key={a.empleado_id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                      <td style={{ padding: '9px 10px', fontWeight: 600, color: '#1e293b' }}>{a.nombre_completo}</td>
+                      <td style={{ padding: '9px 10px', color: '#64748b', fontFamily: 'monospace' }}>{a.numero_empleado || '—'}</td>
+                      <td style={{ padding: '9px 10px', color: '#475569' }}>{a.departamento_nombre || '—'}</td>
+                      <td style={{ padding: '9px 10px', color: '#475569' }}>{a.empresa_nombre || '—'}</td>
+                      <td style={{ padding: '9px 10px' }}>
+                        {a.en_incapacidad ? (
+                          <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#b45309' }}>Incapacidad</span>
+                        ) : a.en_vacaciones ? (
+                          <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#1d4ed8' }}>Vacaciones</span>
+                        ) : (
+                          <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#dc2626' }}>Sin checada</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </div>
 

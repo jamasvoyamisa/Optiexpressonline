@@ -70,6 +70,7 @@ class SoporteTicket(Base):
 
     empleado_id = Column(Integer, ForeignKey("empleados.id"), nullable=True)
     asignado_a_id = Column(Integer, ForeignKey("empleados.id"), nullable=True)
+    motivo_cierre = Column(String(500), nullable=True)
     nota_resolucion = Column(Text, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

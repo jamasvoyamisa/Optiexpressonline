@@ -17,6 +17,27 @@ class SoporteTicketPortalCreate(BaseModel):
     tipo_ticket_id: Optional[int] = None
 
 
+class SoporteTicketInternoCreate(BaseModel):
+    """Alta desde app de soporte (TI/Admin): mantenimiento y ventanas."""
+
+    empresa_id: int
+    empleado_id: int
+    tipo_ticket_id: int
+    titulo: str
+    descripcion: str
+    prioridad: TicketPrioridad = TicketPrioridad.MEDIA
+
+
+class SoporteInternoEmpresaItem(BaseModel):
+    id: int
+    nombre: str
+
+
+class SoporteInternoEmpleadoItem(BaseModel):
+    id: int
+    nombre_completo: str
+
+
 class SoporteTicketClaseCreate(BaseModel):
     nombre: str
     activo: bool = True
@@ -59,10 +80,17 @@ class SoporteTicketTipoResponse(BaseModel):
         from_attributes = True
 
 
+class SoporteInternoCatalogoResponse(BaseModel):
+    empresas: List[SoporteInternoEmpresaItem]
+    clases: List[SoporteTicketClaseResponse]
+    tipos: List[SoporteTicketTipoResponse]
+
+
 class SoporteTicketUpdate(BaseModel):
     estado: Optional[TicketEstado] = None
     prioridad: Optional[TicketPrioridad] = None
     asignado_a_id: Optional[int] = None
+    motivo_cierre: Optional[str] = None
     nota_resolucion: Optional[str] = None
 
 
@@ -84,6 +112,7 @@ class SoporteTicketResponse(BaseModel):
     adjuntos_count: int = 0
     empleado_id: Optional[int] = None
     asignado_a_id: Optional[int] = None
+    motivo_cierre: Optional[str] = None
     nota_resolucion: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None

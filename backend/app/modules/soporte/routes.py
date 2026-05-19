@@ -142,7 +142,7 @@ def actualizar_tipo_ticket(
 
 @router.get("/portal/clases", response_model=list[schemas.SoporteTicketClaseResponse])
 def listar_clases_portal(db: Session = Depends(get_db)):
-    return service.SoporteService.list_clases(db, solo_activas=True)
+    return service.SoporteService.list_clases_portal(db)
 
 
 @router.get("/portal/tipos", response_model=list[schemas.SoporteTicketTipoResponse])
@@ -150,7 +150,7 @@ def listar_tipos_ticket_portal(
     clase_id: Optional[int] = Query(None),
     db: Session = Depends(get_db),
 ):
-    return service.SoporteService.list_tipos_ticket(db, solo_activos=True, clase_id=clase_id)
+    return service.SoporteService.list_tipos_portal(db, clase_id=clase_id)
 
 
 @router.get("/portal/catalogo")
@@ -253,6 +253,46 @@ def favicon_soporte():
     raise HTTPException(status_code=404, detail="Favicon no encontrado.")
 
 
+@router.get("/interno/catalogo", response_model=schemas.SoporteInternoCatalogoResponse)
+def catalogo_ticket_interno(
+    current: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db),
+):
+    empleado_id = int(current["user_id"])
+    if not _is_ti_or_admin(db, empleado_id, bool(current.get("is_superuser"))):
+        raise HTTPException(status_code=403, detail="Solo TI o Administrador puede crear tickets internos.")
+    data = service.SoporteService.catalogo_ticket_interno(db)
+    return schemas.SoporteInternoCatalogoResponse(**data)
+
+
+@router.get("/interno/empleados", response_model=list[schemas.SoporteInternoEmpleadoItem])
+def empleados_ticket_interno(
+    current: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db),
+):
+    empleado_id = int(current["user_id"])
+    if not _is_ti_or_admin(db, empleado_id, bool(current.get("is_superuser"))):
+        raise HTTPException(status_code=403, detail="Solo TI o Administrador puede consultar empleados.")
+    return service.SoporteService.list_empleados_interno(db)
+
+
+@router.post("/tickets", response_model=schemas.SoporteTicketResponse, status_code=status.HTTP_201_CREATED)
+def crear_ticket_interno(
+    data: schemas.SoporteTicketInternoCreate,
+    current: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db),
+):
+    empleado_id = int(current["user_id"])
+    if not _is_ti_or_admin(db, empleado_id, bool(current.get("is_superuser"))):
+        raise HTTPException(status_code=403, detail="Solo TI o Administrador puede crear tickets internos.")
+    if not data.titulo.strip() or not data.descripcion.strip():
+        raise HTTPException(status_code=400, detail="Título y descripción son obligatorios.")
+    try:
+        return service.SoporteService.create_ticket_interno(db, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/tickets", response_model=schemas.SoporteTicketListResponse)
 def listar_tickets(
     estado: Optional[models.TicketEstado] = Query(None),
@@ -312,6 +352,39 @@ def crear_ticket_portal(data: schemas.SoporteTicketPortalCreate, db: Session = D
         return service.SoporteService.create_ticket_portal(db, data)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/tickets/{ticket_id}/adjuntos", response_model=list[schemas.SoporteTicketAdjuntoResponse], status_code=status.HTTP_201_CREATED)
+async def subir_adjuntos_ticket(
+    ticket_id: int,
+    files: list[UploadFile] = File(...),
+    current: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db),
+):
+    empleado_id = int(current["user_id"])
+    if not _is_ti_or_admin(db, empleado_id, bool(current.get("is_superuser"))):
+        raise HTTPException(status_code=403, detail="Solo TI o Administrador puede adjuntar archivos.")
+    if not files:
+        raise HTTPException(status_code=400, detail="Debes adjuntar al menos un archivo.")
+    ticket = service.SoporteService.get_ticket(db, ticket_id)
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket no encontrado.")
+    created: list[models.SoporteTicketAdjunto] = []
+    for f in files:
+        raw = await f.read()
+        try:
+            created.append(
+                service.SoporteService.guardar_adjunto_bytes(
+                    db=db,
+                    ticket_id=ticket_id,
+                    filename=f.filename or "",
+                    content_type=f.content_type,
+                    raw_bytes=raw,
+                )
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return created
 
 
 @router.post("/portal/tickets/{ticket_id}/adjuntos", response_model=list[schemas.SoporteTicketAdjuntoResponse], status_code=status.HTTP_201_CREATED)

@@ -27,6 +27,7 @@ type Ticket = {
   adjuntos_count?: number;
   created_at: string;
   closed_at?: string | null;
+  motivo_cierre?: string | null;
   nota_resolucion?: string | null;
 };
 
@@ -81,6 +82,29 @@ export const SoporteTicketsPage = () => {
   const [detalleAdjuntos, setDetalleAdjuntos] = useState<Adjunto[]>([]);
   const [showDetalle, setShowDetalle] = useState(false);
   const [loadingDetalle, setLoadingDetalle] = useState(false);
+  const [showCierreModal, setShowCierreModal] = useState(false);
+  const [cierreMotivo, setCierreMotivo] = useState('');
+  const [cierreObservaciones, setCierreObservaciones] = useState('');
+  const [cierreNextEstado, setCierreNextEstado] = useState<TicketEstado | null>(null);
+  const [cierreTicket, setCierreTicket] = useState<Ticket | null>(null);
+  const [showNuevoModal, setShowNuevoModal] = useState(false);
+  const [loadingCatalogoInterno, setLoadingCatalogoInterno] = useState(false);
+  const [loadingEmpleadosInterno, setLoadingEmpleadosInterno] = useState(false);
+  const [catalogoInterno, setCatalogoInterno] = useState<{
+    empresas: { id: number; nombre: string }[];
+    clases: { id: number; nombre: string }[];
+    tipos: { id: number; nombre: string; clase_id?: number | null }[];
+  } | null>(null);
+  const [empleadosInterno, setEmpleadosInterno] = useState<{ id: number; nombre_completo: string }[]>([]);
+  const [nuevoEmpresaId, setNuevoEmpresaId] = useState('');
+  const [nuevoEmpleadoId, setNuevoEmpleadoId] = useState('');
+  const [nuevoClaseId, setNuevoClaseId] = useState('');
+  const [nuevoTipoId, setNuevoTipoId] = useState('');
+  const [nuevoTitulo, setNuevoTitulo] = useState('');
+  const [nuevoDescripcion, setNuevoDescripcion] = useState('');
+  const [nuevoPrioridad, setNuevoPrioridad] = useState<TicketPrioridad>('media');
+  const [nuevoArchivos, setNuevoArchivos] = useState<File[]>([]);
+  const [creandoTicket, setCreandoTicket] = useState(false);
 
   const cargar = async () => {
     setLoading(true);
@@ -193,20 +217,72 @@ export const SoporteTicketsPage = () => {
     ? { backgroundColor: 'white', borderRadius: '20px 20px 0 0', padding: '16px 16px calc(20px + env(safe-area-inset-bottom, 0px))', width: '100%', maxHeight: '92dvh', overflowY: 'auto', boxShadow: '0 -8px 40px rgba(0,0,0,0.2)' }
     : { ...modalStyle };
 
-  const updateEstado = async (ticket: Ticket) => {
+  const requiereDatosCierre = (next: TicketEstado) => next === 'resuelto' || next === 'cerrado';
+
+  const iniciarCambioEstado = (ticket: Ticket) => {
     const next = siguienteEstado(ticket.estado);
     if (!next) return;
+    if (requiereDatosCierre(next)) {
+      setCierreTicket(ticket);
+      setCierreNextEstado(next);
+      setCierreMotivo(ticket.motivo_cierre?.trim() || '');
+      setCierreObservaciones(ticket.nota_resolucion?.trim() || '');
+      setShowCierreModal(true);
+      return;
+    }
+    void confirmarCambioEstado(ticket, next, null, null, false);
+  };
+
+  const cerrarModalCierre = () => {
+    setShowCierreModal(false);
+    setCierreTicket(null);
+    setCierreNextEstado(null);
+    setCierreMotivo('');
+    setCierreObservaciones('');
+  };
+
+  const confirmarCambioEstado = async (
+    ticket: Ticket,
+    next: TicketEstado,
+    motivo: string | null,
+    observaciones: string | null,
+    conWhatsApp: boolean,
+  ) => {
     setSavingId(ticket.id);
     try {
-      await api.patch(`/soporte/tickets/${ticket.id}`, { estado: next });
-      const actualizado = { ...ticket, estado: next };
-      setTicketDetalle(actualizado);
-      setTickets((prev) => prev.map((x) => (x.id === actualizado.id ? { ...x, estado: next } : x)));
+      const payload: Record<string, string> = { estado: next };
+      if (requiereDatosCierre(next)) {
+        payload.motivo_cierre = (motivo || '').trim();
+        payload.nota_resolucion = (observaciones || '').trim();
+      }
+      const res = await api.patch(`/soporte/tickets/${ticket.id}`, payload);
+      const actualizado: Ticket = { ...ticket, ...res.data, estado: next };
+      setTicketDetalle((prev) => (prev?.id === actualizado.id ? actualizado : prev));
+      setTickets((prev) => prev.map((x) => (x.id === actualizado.id ? { ...actualizado, estado: next } : x)));
+      cerrarModalCierre();
+      if (conWhatsApp) {
+        abrirWhatsAppTicket(actualizado);
+      }
     } catch (e: any) {
       alert(e?.response?.data?.detail || 'No se pudo actualizar el estado');
     } finally {
       setSavingId(null);
     }
+  };
+
+  const guardarCierre = (conWhatsApp: boolean) => {
+    if (!cierreTicket || !cierreNextEstado) return;
+    const motivo = cierreMotivo.trim();
+    const obs = cierreObservaciones.trim();
+    if (!motivo) {
+      alert('Indica el motivo del cierre o resolución.');
+      return;
+    }
+    if (!obs) {
+      alert('Indica las observaciones para el solicitante.');
+      return;
+    }
+    void confirmarCambioEstado(cierreTicket, cierreNextEstado, motivo, obs, conWhatsApp);
   };
 
   const abrirWhatsAppTicket = (t: Ticket) => {
@@ -223,18 +299,129 @@ export const SoporteTicketsPage = () => {
       folio: t.folio,
       titulo: t.titulo,
       estadoLabel: estadoLabel(t.estado),
-      notaResolucion: t.nota_resolucion,
+      motivoCierre: t.motivo_cierre,
+      observaciones: t.nota_resolucion,
     });
     abrirWhatsAppConMensaje(wa, texto);
   };
 
   const waTicketDisponible =
     showDetalle && ticketDetalle ? normalizarTelefonoWhatsAppMexico(ticketDetalle.telefono_solicitante) : null;
+  const waCierreDisponible = cierreTicket
+    ? normalizarTelefonoWhatsAppMexico(cierreTicket.telefono_solicitante)
+    : null;
+
+  const tiposInternosFiltrados = (catalogoInterno?.tipos || []).filter(
+    (t) => nuevoClaseId && String(t.clase_id) === nuevoClaseId,
+  );
+
+  const resetFormNuevoTicket = () => {
+    setNuevoEmpresaId('');
+    setNuevoEmpleadoId('');
+    setNuevoClaseId('');
+    setNuevoTipoId('');
+    setNuevoTitulo('');
+    setNuevoDescripcion('');
+    setNuevoPrioridad('media');
+    setNuevoArchivos([]);
+    setEmpleadosInterno([]);
+  };
+
+  const cerrarModalNuevo = () => {
+    setShowNuevoModal(false);
+    resetFormNuevoTicket();
+  };
+
+  const abrirModalNuevo = async () => {
+    setShowNuevoModal(true);
+    setLoadingCatalogoInterno(true);
+    setLoadingEmpleadosInterno(true);
+    resetFormNuevoTicket();
+    try {
+      const [catRes, empRes] = await Promise.all([
+        api.get('/soporte/interno/catalogo'),
+        api.get('/soporte/interno/empleados'),
+      ]);
+      setCatalogoInterno(catRes.data || null);
+      setEmpleadosInterno(Array.isArray(empRes.data) ? empRes.data : []);
+    } catch (e: any) {
+      alert(e?.response?.data?.detail || 'No se pudo cargar el formulario de tickets internos');
+      setShowNuevoModal(false);
+    } finally {
+      setLoadingCatalogoInterno(false);
+      setLoadingEmpleadosInterno(false);
+    }
+  };
+
+  const crearTicketInterno = async () => {
+    const empresaId = Number(nuevoEmpresaId);
+    const empleadoId = Number(nuevoEmpleadoId);
+    const tipoId = Number(nuevoTipoId);
+    const titulo = nuevoTitulo.trim();
+    const descripcion = nuevoDescripcion.trim();
+    if (!empresaId || !empleadoId || !tipoId) {
+      alert('Selecciona empresa, personal de TI y tipo de ticket.');
+      return;
+    }
+    if (!titulo || !descripcion) {
+      alert('Título y descripción son obligatorios.');
+      return;
+    }
+    setCreandoTicket(true);
+    try {
+      const res = await api.post('/soporte/tickets', {
+        empresa_id: empresaId,
+        empleado_id: empleadoId,
+        tipo_ticket_id: tipoId,
+        titulo,
+        descripcion,
+        prioridad: nuevoPrioridad,
+      });
+      const creado = res.data as Ticket;
+      if (nuevoArchivos.length > 0 && creado?.id) {
+        const formData = new FormData();
+        nuevoArchivos.forEach((f) => formData.append('files', f));
+        await api.post(`/soporte/tickets/${creado.id}/adjuntos`, formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+      }
+      cerrarModalNuevo();
+      await cargar();
+      alert(`Ticket creado: ${creado.folio || ''}`);
+    } catch (e: any) {
+      alert(e?.response?.data?.detail || 'No se pudo crear el ticket');
+    } finally {
+      setCreandoTicket(false);
+    }
+  };
 
   return (
     <div style={{ padding: isMobile ? '14px 14px 30px' : 20 }}>
-      <h1 style={{ marginTop: 0, marginBottom: 4, fontSize: isMobile ? '1.2rem' : '1.5rem' }}>Tickets de soporte</h1>
-      <p style={{ marginTop: 0, marginBottom: 14, color: '#64748b', fontSize: isMobile ? '0.8rem' : '0.9rem' }}>Solo visible para TI y Administrador.</p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
+        <div>
+          <h1 style={{ marginTop: 0, marginBottom: 4, fontSize: isMobile ? '1.2rem' : '1.5rem' }}>Tickets de soporte</h1>
+          <p style={{ marginTop: 0, marginBottom: 0, color: '#64748b', fontSize: isMobile ? '0.8rem' : '0.9rem' }}>
+            Solo visible para TI y Administrador. Mantenimiento y ventanas se registran aquí (no en el portal público).
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void abrirModalNuevo()}
+          style={{
+            padding: '10px 16px',
+            borderRadius: 8,
+            border: 'none',
+            background: '#0ea5e9',
+            color: '#fff',
+            fontWeight: 700,
+            cursor: 'pointer',
+            fontSize: isMobile ? '0.85rem' : '0.9rem',
+            flexShrink: 0,
+          }}
+        >
+          + Nuevo ticket
+        </button>
+      </div>
 
       {/* Filtros */}
       {isMobile ? (
@@ -409,7 +596,7 @@ export const SoporteTicketsPage = () => {
                 </button>
                 {siguienteEstado(ticketDetalle.estado) && (
                   <button
-                    onClick={() => updateEstado(ticketDetalle)}
+                    onClick={() => iniciarCambioEstado(ticketDetalle)}
                     disabled={savingId === ticketDetalle.id}
                     style={{ padding: isMobile ? '10px 14px' : '7px 11px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#fff', cursor: 'pointer', fontSize: isMobile ? '0.85rem' : 12, fontWeight: 700, flex: isMobile ? 1 : 'none', marginTop: 0 }}
                   >
@@ -444,10 +631,21 @@ export const SoporteTicketsPage = () => {
               <div style={{ whiteSpace: 'pre-wrap', color: '#334155', fontSize: isMobile ? '0.88rem' : 'inherit' }}>{ticketDetalle.descripcion}</div>
             </div>
 
-            {ticketDetalle.nota_resolucion && (
+            {(ticketDetalle.motivo_cierre || ticketDetalle.nota_resolucion) && (
               <div style={{ ...sectionCard, marginBottom: 10, borderColor: '#a7f3d0', backgroundColor: '#ecfdf5' }}>
-                <div style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: '.04em', color: '#065f46', fontWeight: 700, marginBottom: 6 }}>Nota de resolución</div>
-                <div style={{ whiteSpace: 'pre-wrap', color: '#064e3b', fontSize: isMobile ? '0.88rem' : 'inherit' }}>{ticketDetalle.nota_resolucion}</div>
+                <div style={{ fontSize: 12, textTransform: 'uppercase', letterSpacing: '.04em', color: '#065f46', fontWeight: 700, marginBottom: 6 }}>Cierre / resolución</div>
+                {ticketDetalle.motivo_cierre && (
+                  <div style={{ marginBottom: 8 }}>
+                    <div style={{ fontSize: 11, color: '#047857', fontWeight: 700, marginBottom: 4 }}>Motivo</div>
+                    <div style={{ whiteSpace: 'pre-wrap', color: '#064e3b', fontSize: isMobile ? '0.88rem' : 'inherit' }}>{ticketDetalle.motivo_cierre}</div>
+                  </div>
+                )}
+                {ticketDetalle.nota_resolucion && (
+                  <div>
+                    <div style={{ fontSize: 11, color: '#047857', fontWeight: 700, marginBottom: 4 }}>Observaciones</div>
+                    <div style={{ whiteSpace: 'pre-wrap', color: '#064e3b', fontSize: isMobile ? '0.88rem' : 'inherit' }}>{ticketDetalle.nota_resolucion}</div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -473,6 +671,241 @@ export const SoporteTicketsPage = () => {
                 Cerrar
               </button>
             )}
+          </div>
+        </div>
+      )}
+
+      {showCierreModal && cierreTicket && cierreNextEstado && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 90,
+            backgroundColor: 'rgba(2,6,23,0.55)',
+            display: 'flex',
+            alignItems: isMobile ? 'flex-end' : 'center',
+            justifyContent: 'center',
+            padding: isMobile ? 0 : 16,
+          }}
+          onClick={cerrarModalCierre}
+        >
+          <div
+            style={isMobile ? { ...sheetContainer, maxHeight: '85dvh' } : { ...modalStyle, maxWidth: 520 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {isMobile && <div style={{ width: 40, height: 4, backgroundColor: '#d1d5db', borderRadius: 2, margin: '0 auto 14px' }} />}
+            <h3 style={{ margin: '0 0 4px', fontSize: isMobile ? '1rem' : '1.1rem' }}>
+              {cierreNextEstado === 'cerrado' ? 'Cerrar ticket' : 'Resolver ticket'}
+            </h3>
+            <p style={{ margin: '0 0 14px', color: '#64748b', fontSize: '0.85rem' }}>
+              Folio {cierreTicket.folio} → {estadoLabel(cierreNextEstado)}. Estos datos se guardan y se incluyen en WhatsApp.
+            </p>
+            <label style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#334155', marginBottom: 6 }}>
+              Motivo <span style={{ color: '#dc2626' }}>*</span>
+            </label>
+            <input
+              type="text"
+              value={cierreMotivo}
+              onChange={(e) => setCierreMotivo(e.target.value)}
+              placeholder="Ej. Contraseña restablecida, equipo reemplazado…"
+              maxLength={500}
+              style={{ ...filtroSelectStyle, marginBottom: 12, height: 40 }}
+            />
+            <label style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#334155', marginBottom: 6 }}>
+              Observaciones <span style={{ color: '#dc2626' }}>*</span>
+            </label>
+            <textarea
+              value={cierreObservaciones}
+              onChange={(e) => setCierreObservaciones(e.target.value)}
+              placeholder="Detalle para el solicitante (aparece en el mensaje de WhatsApp)"
+              rows={4}
+              style={{
+                ...filtroSelectStyle,
+                height: 'auto',
+                minHeight: 96,
+                padding: '10px 12px',
+                resize: 'vertical',
+                marginBottom: 16,
+                fontFamily: 'inherit',
+              }}
+            />
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={cerrarModalCierre}
+                disabled={savingId === cierreTicket.id}
+                style={{ padding: '9px 14px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#fff', cursor: 'pointer', fontWeight: 600 }}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => guardarCierre(false)}
+                disabled={savingId === cierreTicket.id}
+                style={{ padding: '9px 14px', borderRadius: 8, border: 'none', background: '#1e3a5f', color: '#fff', cursor: 'pointer', fontWeight: 700 }}
+              >
+                {savingId === cierreTicket.id ? 'Guardando…' : 'Guardar'}
+              </button>
+              <button
+                type="button"
+                onClick={() => guardarCierre(true)}
+                disabled={savingId === cierreTicket.id || !waCierreDisponible}
+                title={waCierreDisponible ? 'Guarda y abre WhatsApp con el mensaje' : 'Sin teléfono en el ticket'}
+                style={{
+                  padding: '9px 14px',
+                  borderRadius: 8,
+                  border: 'none',
+                  background: waCierreDisponible ? '#25D366' : '#94a3b8',
+                  color: '#fff',
+                  cursor: waCierreDisponible ? 'pointer' : 'not-allowed',
+                  fontWeight: 700,
+                }}
+              >
+                Guardar y WhatsApp
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showNuevoModal && (
+        <div style={sheetOverlay} onClick={cerrarModalNuevo}>
+          <div style={sheetContainer} onClick={(e) => e.stopPropagation()}>
+            <h2 style={{ marginTop: 0, marginBottom: 8, fontSize: '1.15rem', color: '#1e3a5f' }}>Nuevo ticket (Mantenimiento / Ventanas)</h2>
+            <p style={{ marginTop: 0, marginBottom: 14, color: '#64748b', fontSize: '0.85rem' }}>
+              Solo personal de TI registra estos tickets (Mantenimiento / Ventanas). No aparecen en el portal público.
+            </p>
+            {loadingCatalogoInterno || loadingEmpleadosInterno ? (
+              <p style={{ color: '#64748b' }}>Cargando formulario…</p>
+            ) : !(catalogoInterno?.clases?.length) ? (
+              <p style={{ color: '#b45309' }}>
+                No hay categorías de Mantenimiento o Ventanas activas. Configúralas en Administración → Soporte (el nombre de la clase debe incluir
+                «mantenimiento» o «ventana»).
+              </p>
+            ) : empleadosInterno.length === 0 ? (
+              <p style={{ color: '#b45309' }}>
+                No hay personal de TI activo con departamento configurado (TI, Sistemas, etc.). Revisa Personal → departamento del colaborador.
+              </p>
+            ) : (
+              <>
+                <label style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#334155', marginBottom: 6 }}>
+                  Personal de TI que registra *
+                </label>
+                <select
+                  value={nuevoEmpleadoId}
+                  onChange={(e) => setNuevoEmpleadoId(e.target.value)}
+                  style={{ ...filtroSelectStyle, marginBottom: 12 }}
+                >
+                  <option value="">Selecciona quién de TI registra el ticket</option>
+                  {empleadosInterno.map((e) => (
+                    <option key={e.id} value={String(e.id)}>{e.nombre_completo}</option>
+                  ))}
+                </select>
+                <label style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#334155', marginBottom: 6 }}>Empresa del reporte *</label>
+                <select
+                  value={nuevoEmpresaId}
+                  onChange={(e) => setNuevoEmpresaId(e.target.value)}
+                  style={{ ...filtroSelectStyle, marginBottom: 12 }}
+                >
+                  <option value="">Selecciona empresa</option>
+                  {(catalogoInterno?.empresas || []).map((e) => (
+                    <option key={e.id} value={String(e.id)}>{e.nombre}</option>
+                  ))}
+                </select>
+                <label style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#334155', marginBottom: 6 }}>Categoría *</label>
+                <select
+                  value={nuevoClaseId}
+                  onChange={(e) => {
+                    setNuevoClaseId(e.target.value);
+                    setNuevoTipoId('');
+                  }}
+                  style={{ ...filtroSelectStyle, marginBottom: 12 }}
+                >
+                  <option value="">Selecciona categoría</option>
+                  {(catalogoInterno?.clases || []).map((c) => (
+                    <option key={c.id} value={String(c.id)}>{c.nombre}</option>
+                  ))}
+                </select>
+                <label style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#334155', marginBottom: 6 }}>Tipo *</label>
+                <select
+                  value={nuevoTipoId}
+                  onChange={(e) => setNuevoTipoId(e.target.value)}
+                  disabled={!nuevoClaseId}
+                  style={{ ...filtroSelectStyle, marginBottom: 12 }}
+                >
+                  <option value="">Selecciona tipo</option>
+                  {tiposInternosFiltrados.map((t) => (
+                    <option key={t.id} value={String(t.id)}>{t.nombre}</option>
+                  ))}
+                </select>
+                <label style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#334155', marginBottom: 6 }}>Prioridad</label>
+                <select
+                  value={nuevoPrioridad}
+                  onChange={(e) => setNuevoPrioridad(e.target.value as TicketPrioridad)}
+                  style={{ ...filtroSelectStyle, marginBottom: 12 }}
+                >
+                  <option value="baja">Baja</option>
+                  <option value="media">Media</option>
+                  <option value="alta">Alta</option>
+                  <option value="critica">Crítica</option>
+                </select>
+                <label style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#334155', marginBottom: 6 }}>Título *</label>
+                <input
+                  type="text"
+                  value={nuevoTitulo}
+                  onChange={(e) => setNuevoTitulo(e.target.value)}
+                  maxLength={255}
+                  style={{ ...filtroSelectStyle, marginBottom: 12, height: 40 }}
+                />
+                <label style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#334155', marginBottom: 6 }}>Descripción *</label>
+                <textarea
+                  value={nuevoDescripcion}
+                  onChange={(e) => setNuevoDescripcion(e.target.value)}
+                  rows={4}
+                  style={{
+                    ...filtroSelectStyle,
+                    height: 'auto',
+                    minHeight: 96,
+                    padding: '10px 12px',
+                    resize: 'vertical',
+                    marginBottom: 12,
+                    fontFamily: 'inherit',
+                  }}
+                />
+                <label style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#334155', marginBottom: 6 }}>Adjuntos (opcional)</label>
+                <input
+                  type="file"
+                  multiple
+                  accept=".png,.jpg,.jpeg,.webp,.pdf,.doc,.docx,.xls,.xlsx,.txt"
+                  onChange={(e) => setNuevoArchivos(Array.from(e.target.files || []))}
+                  style={{ marginBottom: 16, fontSize: 13 }}
+                />
+              </>
+            )}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={cerrarModalNuevo}
+                disabled={creandoTicket}
+                style={{ padding: '9px 14px', borderRadius: 8, border: '1px solid #cbd5e1', background: '#fff', cursor: 'pointer', fontWeight: 600 }}
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => void crearTicketInterno()}
+                disabled={
+                  creandoTicket
+                  || loadingCatalogoInterno
+                  || loadingEmpleadosInterno
+                  || !(catalogoInterno?.clases?.length)
+                  || empleadosInterno.length === 0
+                }
+                style={{ padding: '9px 14px', borderRadius: 8, border: 'none', background: '#0ea5e9', color: '#fff', cursor: 'pointer', fontWeight: 700 }}
+              >
+                {creandoTicket ? 'Creando…' : 'Crear ticket'}
+              </button>
+            </div>
           </div>
         </div>
       )}

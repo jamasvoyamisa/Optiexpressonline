@@ -1084,6 +1084,64 @@ def get_dashboard_stats(
     else:
         asistencia_grafica = {"tipo": "global", "items": []}
 
+    # Ausentes hoy: activos operativos en alcance sin checada (misma base que KPI «Ausentes hoy»)
+    ausentes_ids = sorted(activos_operativos_ids - empleados_con_checada_hoy)
+    ausentes_hoy: list[dict] = []
+    if ausentes_ids:
+        from app.modules.incapacidades import models as inc_models
+
+        incap_set = {
+            int(r[0])
+            for r in db.query(inc_models.Incapacidad.empleado_id)
+            .filter(
+                inc_models.Incapacidad.empleado_id.in_(ausentes_ids),
+                inc_models.Incapacidad.estado == inc_models.EstadoIncapacidad.ACTIVA,
+                inc_models.Incapacidad.fecha_inicio <= hoy,
+                inc_models.Incapacidad.fecha_fin >= hoy,
+            )
+            .distinct()
+            .all()
+        }
+        vac_set = service.AsistenciaService.empleados_cubiertos_por_solicitud_vacaciones_aprobada(
+            db, hoy
+        ) & set(ausentes_ids)
+
+        empleados_ausentes = (
+            db.query(pm.Empleado)
+            .options(
+                joinedload(pm.Empleado.empresa),
+                joinedload(pm.Empleado.departamento_rel),
+            )
+            .filter(pm.Empleado.id.in_(ausentes_ids))
+            .order_by(
+                pm.Empleado.apellido_paterno.asc(),
+                pm.Empleado.apellido_materno.asc(),
+                pm.Empleado.nombre.asc(),
+            )
+            .limit(500)
+            .all()
+        )
+        for emp in empleados_ausentes:
+            nombre = " ".join(
+                x
+                for x in [emp.nombre, emp.apellido_paterno, emp.apellido_materno]
+                if (x or "").strip()
+            ).strip()
+            eid = int(emp.id)
+            ausentes_hoy.append(
+                {
+                    "empleado_id": eid,
+                    "nombre_completo": nombre or (emp.numero_empleado or f"#{eid}"),
+                    "numero_empleado": emp.numero_empleado,
+                    "empresa_nombre": (emp.empresa.nombre if emp.empresa else None),
+                    "departamento_nombre": (
+                        emp.departamento_rel.nombre if emp.departamento_rel else None
+                    ),
+                    "en_vacaciones": eid in vac_set,
+                    "en_incapacidad": eid in incap_set,
+                }
+            )
+
     return {
         "empleados": {
             "total": total_empleados,
@@ -1098,6 +1156,7 @@ def get_dashboard_stats(
         "checadas_por_mes": checadas_por_mes,
         "solo_mi_area": solo_mi_area,
         "asistencia_grafica": asistencia_grafica,
+        "ausentes_hoy": ausentes_hoy,
     }
 
 
