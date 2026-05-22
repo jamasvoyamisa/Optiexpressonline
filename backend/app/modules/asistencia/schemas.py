@@ -108,8 +108,17 @@ class EmpleadoDispositivoEstado(BaseModel):
     pending_user_id: Optional[int] = None
     pending_enroll_id: Optional[int] = None
     pending_delete_id: Optional[int] = None
+    # Plantilla capturada en ESTE checador (source_device_id coincide).
     tiene_huella_en_bd: bool = False
     finger_indices: List[int] = []
+    # Huella almacenada en servidor (puede haberse capturado en otro checador).
+    huella_en_servidor: bool = False
+    finger_indices_servidor: List[int] = []
+    huella_origen_dispositivo_id: Optional[int] = None
+    huella_origen_dispositivo_nombre: Optional[str] = None
+    replicacion_pendiente: bool = False
+    replicacion_completada: bool = False
+    presente_en_checador: bool = False
     checadas_total: int = 0
     ultima_checada: Optional[datetime] = None
 

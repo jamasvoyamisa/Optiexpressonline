@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, type Dispatch, type SetStateAction } from 'react';
+import { useState, useEffect, useCallback, useMemo, type Dispatch, type SetStateAction } from 'react';
 import api from '../../services/api';
 import { descargarArchivo, XLSX_MIME } from '../../utils/download';
 import { parseTimestampForMexico, toMexicoDateString } from '../../utils/date';
@@ -517,6 +517,13 @@ export const PersonalPage = () => {
     pending_delete_id: number | null;
     tiene_huella_en_bd: boolean;
     finger_indices: number[];
+    huella_en_servidor: boolean;
+    finger_indices_servidor: number[];
+    huella_origen_dispositivo_id: number | null;
+    huella_origen_dispositivo_nombre: string | null;
+    replicacion_pendiente: boolean;
+    replicacion_completada: boolean;
+    presente_en_checador: boolean;
     checadas_total: number;
     ultima_checada: string | null;
   }[]>([]);
@@ -624,6 +631,23 @@ export const PersonalPage = () => {
     }, 500);
     return () => clearTimeout(timer);
   }, [form.username, editingId, showFormModal]);
+
+  const dispositivoYaTieneHuella = useCallback((dispositivoId: number) => {
+    const row = empleadoDispositivos.find(d => d.dispositivo_id === dispositivoId);
+    return !!(row?.tiene_huella_en_bd || row?.replicacion_completada);
+  }, [empleadoDispositivos]);
+
+  const dispositivosSinHuella = useMemo(
+    () => dispositivos.filter(
+      d => d.activo && !d.nombre.toLowerCase().includes('portal') && !dispositivoYaTieneHuella(d.id),
+    ),
+    [dispositivos, dispositivoYaTieneHuella],
+  );
+
+  useEffect(() => {
+    if (enrollDevice != null && dispositivoYaTieneHuella(enrollDevice)) setEnrollDevice(null);
+    if (replicaDevice != null && dispositivoYaTieneHuella(replicaDevice)) setReplicaDevice(null);
+  }, [empleadoDispositivos, enrollDevice, replicaDevice, dispositivoYaTieneHuella]);
 
   const handleChange = (field: keyof FormData, value: string | boolean | number | number[] | null | undefined) => {
     const sanitized = typeof value === 'string' ? sanitizeText(value) : value;
@@ -2804,7 +2828,7 @@ export const PersonalPage = () => {
                       Estado en cada checador
                     </p>
                     <p style={{ margin: '0 0 10px', fontSize: '0.82rem', color: '#6b7280' }}>
-                      Aquí se ve dónde está dado de alta el empleado y dónde checa físicamente.
+                      Aquí se ve dónde está dado de alta el empleado y dónde tiene huella.
                     </p>
                     {loadingEmpDisp ? (
                       <p style={{ color: '#6b7280', fontSize: '0.85rem' }}>Cargando…</p>
@@ -2823,7 +2847,7 @@ export const PersonalPage = () => {
                             {empleadoDispositivos
                               .filter(d => !d.dispositivo_nombre.toLowerCase().includes('portal'))
                               .map(d => {
-                                const tieneActividad = d.enviado || d.checadas_total > 0 || d.tiene_huella_en_bd;
+                                const tieneActividad = d.enviado || d.tiene_huella_en_bd || d.replicacion_completada || d.checadas_total > 0;
                                 return (
                                   <tr key={d.dispositivo_id} style={{ borderBottom: '1px solid #f3f4f6' }}>
                                     <td style={{ padding: '8px', verticalAlign: 'top' }}>
@@ -2838,6 +2862,10 @@ export const PersonalPage = () => {
                                           <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: '12px', backgroundColor: '#d1fae5', color: '#065f46', fontSize: '0.75rem', fontWeight: 600, alignSelf: 'flex-start' }}>
                                             Dado de alta
                                           </span>
+                                        ) : d.replicacion_completada ? (
+                                          <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: '12px', backgroundColor: '#d1fae5', color: '#065f46', fontSize: '0.75rem', fontWeight: 600, alignSelf: 'flex-start' }}>
+                                            Dado de alta
+                                          </span>
                                         ) : (
                                           <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: '12px', backgroundColor: '#f3f4f6', color: '#6b7280', fontSize: '0.75rem', alignSelf: 'flex-start' }}>
                                             Sin alta
@@ -2845,7 +2873,12 @@ export const PersonalPage = () => {
                                         )}
                                         {d.tiene_huella_en_bd && (
                                           <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: '12px', backgroundColor: '#dbeafe', color: '#1e40af', fontSize: '0.75rem', alignSelf: 'flex-start' }}>
-                                            Huella guardada ({d.finger_indices.map(f => f + 1).join(', ')})
+                                            Huella guardada ({d.finger_indices.length})
+                                          </span>
+                                        )}
+                                        {d.replicacion_completada && !d.tiene_huella_en_bd && (
+                                          <span style={{ display: 'inline-block', padding: '2px 8px', borderRadius: '12px', backgroundColor: '#dbeafe', color: '#1e40af', fontSize: '0.75rem', alignSelf: 'flex-start' }}>
+                                            Huella guardada (replicada)
                                           </span>
                                         )}
                                         {d.pending_enroll_id != null && (
@@ -2926,7 +2959,7 @@ export const PersonalPage = () => {
                         Selecciona el dispositivo donde el empleado registrara su huella. Debe estar presente fisicamente frente al checador.
                       </p>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
-                        {activeDevices.filter(d => !d.nombre.toLowerCase().includes('portal')).map(d => (
+                        {dispositivosSinHuella.map(d => (
                           <label key={d.id} style={{
                             ...checkboxDeviceStyle,
                             backgroundColor: enrollDevice === d.id ? '#e0f2f1' : 'white',
@@ -2941,7 +2974,11 @@ export const PersonalPage = () => {
                             </div>
                           </label>
                         ))}
-                        {activeDevices.filter(d => !d.nombre.toLowerCase().includes('portal')).length === 0 && <p style={{ color: '#999', fontSize: '0.85rem' }}>No hay dispositivos activos.</p>}
+                        {dispositivosSinHuella.length === 0 && (
+                          <p style={{ color: '#999', fontSize: '0.85rem' }}>
+                            {loadingEmpDisp ? 'Cargando checadores…' : 'Ya tiene huella en todos los checadores. No hay otro dispositivo para registrar.'}
+                          </p>
+                        )}
                       </div>
                       <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
                         <button onClick={iniciarEnrollHuella}
@@ -2954,7 +2991,7 @@ export const PersonalPage = () => {
                   )}
 
                   {/* ── Sección Replicar Huella ── */}
-                  {tieneHuella && activeDevices.filter(d => !d.nombre.toLowerCase().includes('portal')).length > 1 && (
+                  {tieneHuella && dispositivosSinHuella.length > 0 && (
                     <div style={{ marginTop: '20px', borderTop: '1px solid #e5e7eb', paddingTop: '16px' }}>
                       <p style={{ fontWeight: 600, fontSize: '0.9rem', margin: '0 0 6px', color: '#374151' }}>
                         Replicar huella a otro dispositivo
@@ -2970,9 +3007,7 @@ export const PersonalPage = () => {
                       )}
 
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '12px' }}>
-                        {activeDevices
-                          .filter(d => !d.nombre.toLowerCase().includes('portal'))
-                          .map(d => (
+                        {dispositivosSinHuella.map(d => (
                             <label key={d.id} style={{
                               ...checkboxDeviceStyle,
                               backgroundColor: replicaDevice === d.id ? '#eff6ff' : 'white',
@@ -3110,7 +3145,7 @@ export const PersonalPage = () => {
                         Selecciona el dispositivo donde el empleado registrara su huella. Debe estar presente fisicamente frente al checador.
                       </p>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '16px' }}>
-                        {activeDevices.map(d => (
+                        {dispositivosSinHuella.map(d => (
                           <label key={d.id} style={{
                             ...checkboxDeviceStyle,
                             backgroundColor: enrollDevice === d.id ? '#e0f2f1' : 'white',
@@ -3125,7 +3160,11 @@ export const PersonalPage = () => {
                             </div>
                           </label>
                         ))}
-                        {activeDevices.length === 0 && <p style={{ color: '#999', fontSize: '0.85rem' }}>No hay dispositivos activos.</p>}
+                        {dispositivosSinHuella.length === 0 && (
+                          <p style={{ color: '#999', fontSize: '0.85rem' }}>
+                            {loadingEmpDisp ? 'Cargando checadores…' : 'Ya tiene huella en todos los checadores.'}
+                          </p>
+                        )}
                       </div>
                       <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
                         <button onClick={cerrarHuellaModal} style={btnSecondary}>Cancelar</button>

@@ -392,6 +392,47 @@ class AsistenciaService:
         return updated
 
     @staticmethod
+    def marcar_empleado_enviado_en_dispositivo(
+        db: Session,
+        device_id: int,
+        empleado: personal_models.Empleado,
+    ) -> None:
+        """Marca al empleado como dado de alta en el checador (p. ej. tras replicar huella con éxito)."""
+        numero = (empleado.numero_empleado or "").strip()
+        if not numero:
+            return
+        pin = (empleado.pin_checador or "").strip() or None
+        nombre = f"{empleado.nombre or ''} {empleado.apellido_paterno or ''} {empleado.apellido_materno or ''}".strip() or numero
+        q = db.query(models.UsuarioPendienteDispositivo).filter(
+            models.UsuarioPendienteDispositivo.dispositivo_id == device_id,
+            models.UsuarioPendienteDispositivo.numero_empleado == numero,
+        )
+        if pin:
+            q = q.filter(
+                (models.UsuarioPendienteDispositivo.pin_checador == pin)
+                | (models.UsuarioPendienteDispositivo.pin_checador.is_(None))
+            )
+        pendiente = q.order_by(models.UsuarioPendienteDispositivo.id.desc()).first()
+        now = datetime.now(timezone.utc)
+        if pendiente:
+            if not pendiente.enviado:
+                pendiente.enviado = True
+                pendiente.enviado_at = now
+            if pin and not pendiente.pin_checador:
+                pendiente.pin_checador = pin
+        else:
+            pendiente = models.UsuarioPendienteDispositivo(
+                dispositivo_id=device_id,
+                numero_empleado=numero,
+                pin_checador=pin,
+                nombre=nombre,
+                enviado=True,
+                enviado_at=now,
+            )
+            db.add(pendiente)
+        db.commit()
+
+    @staticmethod
     def start_enroll(
         db: Session,
         device_id: int,

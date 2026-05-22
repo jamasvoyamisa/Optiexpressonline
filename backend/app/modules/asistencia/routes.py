@@ -420,9 +420,31 @@ def get_empleado_dispositivos(empleado_id: int, db: Session = Depends(get_db)):
         models.FingerprintTemplate.empleado_id == empleado_id,
     ).all()
     templates_by_dev: dict[int, list[int]] = {}
+    finger_indices_servidor: list[int] = []
+    origen_dev_id: int | None = None
     for t in templates:
+        finger_indices_servidor.append(t.finger_index)
         if t.source_device_id is not None:
             templates_by_dev.setdefault(t.source_device_id, []).append(t.finger_index)
+            if origen_dev_id is None:
+                origen_dev_id = t.source_device_id
+    finger_indices_servidor = sorted(set(finger_indices_servidor))
+    origen_nombre: str | None = None
+    if origen_dev_id is not None:
+        dev_origen = db.query(models.Dispositivo).filter(models.Dispositivo.id == origen_dev_id).first()
+        origen_nombre = dev_origen.nombre if dev_origen else None
+
+    replicates = db.query(models.PendingReplicate).filter(
+        models.PendingReplicate.dispositivo_id.in_(dev_ids),
+        models.PendingReplicate.numero_empleado == numero,
+    ).all()
+    replicate_pending: set[int] = set()
+    replicate_done: set[int] = set()
+    for r in replicates:
+        if r.procesado:
+            replicate_done.add(r.dispositivo_id)
+        else:
+            replicate_pending.add(r.dispositivo_id)
 
     from sqlalchemy import func as sa_func
     checadas_rows = db.query(
@@ -442,18 +464,27 @@ def get_empleado_dispositivos(empleado_id: int, db: Session = Depends(get_db)):
         de = delete_map.get(d.id)
         finger_idx = sorted(set(templates_by_dev.get(d.id, [])))
         checadas_total, ultima = checadas_map.get(d.id, (0, None))
+        checadas_n = int(checadas_total or 0)
+        enviado = bool(p.enviado) if p else False
         result.append(schemas.EmpleadoDispositivoEstado(
             dispositivo_id=d.id,
             dispositivo_nombre=d.nombre,
             dispositivo_ubicacion=d.ubicacion,
-            enviado=bool(p.enviado) if p else False,
+            enviado=enviado,
             enviado_at=p.enviado_at if p else None,
             pending_user_id=p.id if p else None,
             pending_enroll_id=e.id if e else None,
             pending_delete_id=de.id if de else None,
             tiene_huella_en_bd=len(finger_idx) > 0,
             finger_indices=finger_idx,
-            checadas_total=int(checadas_total or 0),
+            huella_en_servidor=len(finger_indices_servidor) > 0,
+            finger_indices_servidor=finger_indices_servidor,
+            huella_origen_dispositivo_id=origen_dev_id,
+            huella_origen_dispositivo_nombre=origen_nombre,
+            replicacion_pendiente=d.id in replicate_pending,
+            replicacion_completada=d.id in replicate_done,
+            presente_en_checador=enviado or checadas_n > 0,
+            checadas_total=checadas_n,
             ultima_checada=ultima,
         ))
     return result
@@ -795,6 +826,25 @@ def agent_mark_replicate_done(
     if success:
         pr.procesado = True
         pr.procesado_at = datetime.now(timezone.utc)
+        emp = None
+        upd = db.query(models.UsuarioPendienteDispositivo).filter(
+            models.UsuarioPendienteDispositivo.dispositivo_id == dispositivo.id,
+            models.UsuarioPendienteDispositivo.numero_empleado == pr.numero_empleado,
+        ).order_by(models.UsuarioPendienteDispositivo.id.desc()).first()
+        if upd and upd.pin_checador:
+            emp = db.query(personal_models.Empleado).filter(
+                personal_models.Empleado.pin_checador == upd.pin_checador
+            ).first()
+        if not emp:
+            candidatos = db.query(personal_models.Empleado).filter(
+                personal_models.Empleado.numero_empleado == pr.numero_empleado
+            ).all()
+            if len(candidatos) == 1:
+                emp = candidatos[0]
+        if emp:
+            service.AsistenciaService.marcar_empleado_enviado_en_dispositivo(
+                db, dispositivo.id, emp
+            )
     db.commit()
     return {"ok": True, "success": success}
 
