@@ -11,7 +11,7 @@ import {
 } from '../../utils/quincena';
 import { fmtNombreEmpleado, cmpNombreEmpleado } from '../../utils/format';
 import { useAuth } from '../../hooks/useAuth';
-import { isNominaEnabled } from '../../config/features';
+import { canAccessNomina } from '../../config/features';
 import { Empleado, EmpleadoCreate, Dispositivo, Asistencia, EmpresaResponse, DepartamentoResponse, PuestoResponse, SolicitudVacaciones } from '../../types';
 
 interface FormData extends Omit<EmpleadoCreate, 'registrar_en_checador' | 'dispositivo_ids'> {
@@ -419,8 +419,8 @@ export const PersonalPage = () => {
   const isAdmin = authMe?.is_superuser === true;
   const isRH = authMe?.is_rh === true;
   const canExport = isAdmin || isRH;
-  /** Solo administrador (API nómina restringida a require_superuser). */
-  const canEditNomina = isAdmin;
+  /** Solo administrador: módulo nómina (no RH). */
+  const canEditNomina = canAccessNomina(isAdmin);
   const [mainTab, setMainTab] = useState<'empleados' | 'departamentos' | 'puestos'>('empleados');
   const [empleados, setEmpleados] = useState<Empleado[]>([]);
   /** Incluye usuarios especiales (p. ej. directores) para asignar gerente de departamento. */
@@ -557,7 +557,7 @@ export const PersonalPage = () => {
         api.get('/personal/departamentos?limit=500'),
         api.get('/personal/puestos'), // sin activo = todos (para puestos tab); form filtra activos
         api.get('/asistencia/horarios?activo=true'),
-        (isNominaEnabled && isAdmin ? api.get('/nomina/catalogos') : Promise.resolve({ data: null })).catch(() => ({ data: null })),
+        (canEditNomina ? api.get('/nomina/catalogos') : Promise.resolve({ data: null })).catch(() => ({ data: null })),
       ]);
       setEmpleados(empRes.data);
       setEmpleadosCandidatosGerente(Array.isArray(empGerRes.data) ? empGerRes.data : []);
@@ -582,11 +582,11 @@ export const PersonalPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [search, filtroEstado, isNominaEnabled, isAdmin]);
+  }, [search, filtroEstado, canEditNomina]);
 
   useEffect(() => {
-    if ((!isNominaEnabled || !isAdmin) && formTab === 'nomina') setFormTab('personales');
-  }, [isNominaEnabled, isAdmin, formTab]);
+    if (!canEditNomina && formTab === 'nomina') setFormTab('personales');
+  }, [canEditNomina, formTab]);
 
   useEffect(() => { loadData(); }, [loadData]);
 
@@ -779,7 +779,7 @@ export const PersonalPage = () => {
           (form.registrar_en_checador && devCount > 0 ? `Empleado creado y agregado a ${devCount} checador(es). ` : 'Empleado creado. ') + msgLogin
         );
       }
-      if (savedEmpleadoId && isNominaEnabled && isAdmin) {
+      if (savedEmpleadoId && canEditNomina) {
         setSavingNomina(true);
         try {
           await api.put(`/nomina/empleados/${savedEmpleadoId}/datos`, buildNominaApiPayload(nominaForm));
@@ -1258,7 +1258,7 @@ export const PersonalPage = () => {
     setUsernameStatus('idle');
     setFormTab('personales');
     setNominaForm(emptyNominaForm());
-    if (isNominaEnabled && isAdmin) {
+    if (canEditNomina) {
       api.get(`/nomina/empleados/${emp.id}/datos`)
         .then(r => {
           const d = r.data;
@@ -1698,7 +1698,7 @@ export const PersonalPage = () => {
                 <button type="button" style={formTabStyle(formTab === 'laborales')} onClick={() => setFormTab('laborales')}>
                   Datos laborales
                 </button>
-                {isNominaEnabled && isAdmin && (
+                {canEditNomina && (
                   <button type="button" style={formTabStyle(formTab === 'nomina')} onClick={() => setFormTab('nomina')}>
                     Nómina / Banco
                   </button>
@@ -1989,7 +1989,7 @@ export const PersonalPage = () => {
                 </div>
               )}
 
-              {isNominaEnabled && isAdmin && formTab === 'nomina' && (
+              {canEditNomina && formTab === 'nomina' && (
                 <>
                   <NominaBancoFormFields nominaForm={nominaForm} setNominaForm={setNominaForm} catNomina={catNomina} />
                   {savingNomina && <p style={{ marginTop: '8px', fontSize: '0.78rem', color: '#6b7280' }}>Guardando datos de nómina…</p>}
@@ -2538,7 +2538,7 @@ export const PersonalPage = () => {
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', borderBottom: '2px solid #e5e7eb', marginBottom: '16px' }}>
                     <button type="button" style={formTabStyle(formTab === 'personales')} onClick={() => setFormTab('personales')}>Datos personales</button>
                     <button type="button" style={formTabStyle(formTab === 'laborales')} onClick={() => setFormTab('laborales')}>Datos laborales</button>
-                    {canEditNomina && isNominaEnabled && (
+                    {canEditNomina && (
                       <button
                         type="button"
                         style={formTabStyle(formTab === 'nomina')}
@@ -2745,7 +2745,7 @@ export const PersonalPage = () => {
                     </div>
                   )}
 
-                  {formTab === 'nomina' && canEditNomina && isNominaEnabled && (
+                  {formTab === 'nomina' && canEditNomina && (
                     <div style={{ padding: '8px 0 4px' }}>
                       <NominaBancoFormFields nominaForm={nominaForm} setNominaForm={setNominaForm} catNomina={catNomina} />
                       <p style={{ margin: '12px 0 0', fontSize: '0.78rem', color: '#6b7280' }}>

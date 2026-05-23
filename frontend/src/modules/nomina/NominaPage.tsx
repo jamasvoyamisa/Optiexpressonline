@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import axios from 'axios';
 import api from '../../services/api';
 import { useAuth } from '../../hooks/useAuth';
+import { canAccessNomina } from '../../config/features';
 
 // ── Tipos ─────────────────────────────────────────────────────────────────
 
@@ -20,6 +21,31 @@ interface PeriodoNomina {
   total_neto?: string;
   notas?: string;
   created_at: string;
+}
+
+interface DetalleNomina {
+  id: number;
+  periodo_nomina_id: number;
+  empleado_id: number;
+  empleado_nombre?: string;
+  dias_pagados?: string;
+  dias_laborados?: string;
+  dias_fuente?: string;
+  total_percepciones?: string;
+  total_gravado?: string;
+  total_deducciones?: string;
+  total_neto?: string;
+  subsidio_causado?: string;
+  percepciones_json?: string;
+  deducciones_json?: string;
+}
+
+interface ConceptoLinea {
+  clave?: string;
+  concepto?: string;
+  importe?: number;
+  importe_gravado?: number;
+  importe_exento?: number;
 }
 
 // ── Estilos base ──────────────────────────────────────────────────────────
@@ -47,23 +73,43 @@ const ESTADO_COLOR: Record<string, string> = {
   borrador: '#f59e0b', calculada: '#3b82f6', timbrada: '#10b981', pagada: '#6b7280',
 };
 
+const overlay: React.CSSProperties = {
+  position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
+  display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+};
+const modal: React.CSSProperties = {
+  background: '#fff', borderRadius: 12, maxWidth: 920, width: '94%',
+  maxHeight: '88vh', overflow: 'auto', padding: '22px 24px',
+};
+
+function parseLineas(json?: string): ConceptoLinea[] {
+  if (!json) return [];
+  try {
+    const v = JSON.parse(json);
+    return Array.isArray(v) ? v : [];
+  } catch {
+    return [];
+  }
+}
+
+function money(v?: string | number | null) {
+  if (v == null || v === '') return '—';
+  return `$${Number(v).toLocaleString('es-MX', { minimumFractionDigits: 2 })}`;
+}
+
 // ── Componente principal ──────────────────────────────────────────────────
 
 export const NominaPage = () => {
   const { authMe } = useAuth();
-  const isSuperuser = authMe?.is_superuser === true;
+  const puedeAcceder = canAccessNomina(authMe?.is_superuser);
 
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<{ tipo: 'ok' | 'err'; texto: string } | null>(null);
 
-  // Catálogos (solo periodicidad para los selects del formulario)
   const [periodicidadCat, setPeriodicidadCat] = useState<CatalogoItem[]>([]);
-
-  // Empresas
   const [empresas, setEmpresas] = useState<EmpresaBasic[]>([]);
   const [empresaSelId, setEmpresaSelId] = useState<number | ''>('');
 
-  // Periodos
   const [periodos, setPeriodos] = useState<PeriodoNomina[]>([]);
   const [totalPeriodos, setTotalPeriodos] = useState(0);
   const [nuevoPeriodo, setNuevoPeriodo] = useState({
@@ -72,7 +118,10 @@ export const NominaPage = () => {
   const [creandoPeriodo, setCreandoPeriodo] = useState(false);
   const [calculandoId, setCalculandoId] = useState<number | null>(null);
 
-  // ── Carga inicial ────────────────────────────────────────────────────────
+  const [detallePeriodoId, setDetallePeriodoId] = useState<number | null>(null);
+  const [detalles, setDetalles] = useState<DetalleNomina[]>([]);
+  const [cargandoDetalles, setCargandoDetalles] = useState(false);
+  const [empleadoDetalle, setEmpleadoDetalle] = useState<DetalleNomina | null>(null);
 
   useEffect(() => {
     const init = async () => {
@@ -93,7 +142,6 @@ export const NominaPage = () => {
     void init();
   }, []);
 
-  // Periodos
   const cargarPeriodos = useCallback(() => {
     const q = empresaSelId ? `?empresa_id=${empresaSelId}` : '';
     api.get(`/nomina/periodos${q}`)
@@ -109,7 +157,20 @@ export const NominaPage = () => {
 
   useEffect(() => { cargarPeriodos(); }, [cargarPeriodos]);
 
-  // ── Handlers ─────────────────────────────────────────────────────────────
+  const abrirDetallePeriodo = async (periodoId: number) => {
+    setDetallePeriodoId(periodoId);
+    setCargandoDetalles(true);
+    setEmpleadoDetalle(null);
+    try {
+      const r = await api.get<DetalleNomina[]>(`/nomina/periodos/${periodoId}/detalles`);
+      setDetalles(r.data ?? []);
+    } catch {
+      setMsg({ tipo: 'err', texto: 'No se pudo cargar el detalle del periodo.' });
+      setDetallePeriodoId(null);
+    } finally {
+      setCargandoDetalles(false);
+    }
+  };
 
   const crearPeriodo = async () => {
     setCreandoPeriodo(true);
@@ -148,23 +209,24 @@ export const NominaPage = () => {
     }
   };
 
-  const calcularPeriodoPrueba = async (id: number) => {
-    if (!confirm('Ejecutar cálculo de prueba (ISR/IMSS ilustrativos, solo local). ¿Continuar?')) return;
+  const calcularPeriodo = async (id: number) => {
+    if (!confirm('Calcular nómina del periodo (ISR, subsidio, IMSS, días por asistencia). ¿Continuar?')) return;
     setCalculandoId(id);
     setMsg(null);
     try {
       const r = await api.post<{
         empleados_procesados: number;
         omitidos: { empleado_id: number; motivo: string }[];
+        advertencias?: string[];
         totales: { percepciones: number; deducciones: number; neto: number };
-        advertencia?: string;
-      }>(`/nomina/periodos/${id}/calcular-prueba`);
+      }>(`/nomina/periodos/${id}/calcular`);
       const om = r.data.omitidos?.length
         ? ` Omitidos: ${r.data.omitidos.map((o) => `#${o.empleado_id} ${o.motivo}`).join('; ')}.`
         : '';
+      const adv = r.data.advertencias?.length ? ` ${r.data.advertencias.slice(0, 3).join(' ')}` : '';
       setMsg({
         tipo: 'ok',
-        texto: `Cálculo de prueba: ${r.data.empleados_procesados} empleados. Neto periodo $${r.data.totales?.neto?.toLocaleString('es-MX', { minimumFractionDigits: 2 })}.${om} ${r.data.advertencia ?? ''}`,
+        texto: `Nómina calculada: ${r.data.empleados_procesados} empleados. Neto $${r.data.totales?.neto?.toLocaleString('es-MX', { minimumFractionDigits: 2 })}.${om}${adv}`,
       });
       cargarPeriodos();
     } catch (err: unknown) {
@@ -172,9 +234,6 @@ export const NominaPage = () => {
       if (axios.isAxiosError(err)) {
         const d = err.response?.data as { detail?: string };
         if (typeof d?.detail === 'string') texto = d.detail;
-        if (err.response?.status === 403) {
-          texto = `${d?.detail ?? texto} Añade en backend/.env: DEBUG=true o NOMINA_CALCULO_PRUEBAS=true`;
-        }
       }
       setMsg({ tipo: 'err', texto });
     } finally {
@@ -182,28 +241,40 @@ export const NominaPage = () => {
     }
   };
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  const exportarCsv = async (id: number) => {
+    try {
+      const r = await api.get(`/nomina/periodos/${id}/export`, { responseType: 'blob' });
+      const url = window.URL.createObjectURL(new Blob([r.data]));
+      const a = document.createElement('a');
+      a.href = url;
+      const cd = r.headers['content-disposition'] as string | undefined;
+      const match = cd?.match(/filename="?([^"]+)"?/);
+      a.download = match?.[1] ?? `nomina_periodo_${id}.csv`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch {
+      setMsg({ tipo: 'err', texto: 'No se pudo exportar (calcule el periodo primero).' });
+    }
+  };
 
-  if (!isSuperuser) {
+  if (!puedeAcceder) {
     return (
       <div style={{ padding: 40, color: '#6b7280' }}>
-        No tienes permiso para acceder a este módulo.
+        El módulo de nómina solo está disponible para el administrador del sistema.
       </div>
     );
   }
 
+  const periodoModal = periodos.find(p => p.id === detallePeriodoId);
+
   return (
-    <div style={{ padding: '24px 20px', maxWidth: 1000 }}>
+    <div style={{ padding: '24px 20px', maxWidth: 1100 }}>
       <h1 style={{ margin: '0 0 6px', fontSize: '1.4rem', fontWeight: 700, color: '#111827' }}>
         Nómina — Periodos
       </h1>
       <p style={{ margin: '0 0 20px', color: '#6b7280', fontSize: '0.9rem' }}>
-        Los datos fiscales de empresa y empleado se configuran desde sus respectivos formularios en Configuración y Personal.
-      </p>
-      <p style={{ margin: '0 0 16px', padding: '10px 14px', background: '#fffbeb', border: '1px solid #fcd34d', borderRadius: 8, fontSize: '0.82rem', color: '#92400e' }}>
-        <strong>Cálculo de prueba (Fase 2):</strong> el botón morado ejecuta el motor ilustrativo. En el servidor debe estar{' '}
-        <code style={{ fontSize: '0.78rem' }}>DEBUG=true</code> o <code style={{ fontSize: '0.78rem' }}>NOMINA_CALCULO_PRUEBAS=true</code> en{' '}
-        <code style={{ fontSize: '0.78rem' }}>backend/.env</code>. No usar como nómina oficial.
+        Cálculo v1: días por checadas (o calendario si no hay asistencia), ISR con subsidio, IMSS por ramos.
+        Los datos fiscales de empresa y empleado se configuran en Configuración y Personal.
       </p>
 
       {msg && (
@@ -222,7 +293,6 @@ export const NominaPage = () => {
 
       {!loading && (
         <div style={card}>
-          {/* Crear nuevo periodo */}
           <h3 style={{ margin: '0 0 14px', fontSize: '1rem', color: '#111827' }}>Nuevo periodo</h3>
           <div style={row}>
             <div style={col()}>
@@ -277,7 +347,6 @@ export const NominaPage = () => {
             </button>
           </div>
 
-          {/* Lista de periodos */}
           <div style={{ ...row, marginTop: 28, marginBottom: 14, alignItems: 'center' }}>
             <h3 style={{ margin: 0, fontSize: '1rem', color: '#111827', flex: 1 }}>
               Periodos — {totalPeriodos} en total
@@ -315,26 +384,44 @@ export const NominaPage = () => {
                         <span style={{
                           display: 'inline-block', padding: '2px 10px',
                           borderRadius: 12, fontSize: '0.8rem', fontWeight: 600,
-                          background: ESTADO_COLOR[p.estado] + '22',
+                          background: (ESTADO_COLOR[p.estado] ?? '#6b7280') + '22',
                           color: ESTADO_COLOR[p.estado] ?? '#6b7280',
                         }}>
                           {p.estado}
                         </span>
                       </td>
                       <td style={{ padding: '8px 10px' }}>
-                        {p.total_neto ? `$${Number(p.total_neto).toLocaleString('es-MX', { minimumFractionDigits: 2 })}` : '—'}
+                        {p.total_neto ? money(p.total_neto) : '—'}
                       </td>
                       <td style={{ padding: '8px 10px' }}>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
                           {(p.estado === 'borrador' || p.estado === 'calculada') && (
                             <button
                               type="button"
-                              style={{ ...btn('#7c3aed'), padding: '4px 12px', fontSize: '0.8rem' }}
+                              style={{ ...btn('#059669'), padding: '4px 12px', fontSize: '0.8rem' }}
                               disabled={calculandoId === p.id}
-                              onClick={() => calcularPeriodoPrueba(p.id)}
+                              onClick={() => calcularPeriodo(p.id)}
                             >
-                              {calculandoId === p.id ? 'Calculando…' : p.estado === 'calculada' ? 'Recalcular (prueba)' : 'Calcular (prueba)'}
+                              {calculandoId === p.id ? 'Calculando…' : p.estado === 'calculada' ? 'Recalcular' : 'Calcular nómina'}
                             </button>
+                          )}
+                          {p.estado === 'calculada' && (
+                            <>
+                              <button
+                                type="button"
+                                style={{ ...btn('#2563eb'), padding: '4px 12px', fontSize: '0.8rem' }}
+                                onClick={() => abrirDetallePeriodo(p.id)}
+                              >
+                                Ver detalle
+                              </button>
+                              <button
+                                type="button"
+                                style={{ ...btn('#6b7280'), padding: '4px 12px', fontSize: '0.8rem' }}
+                                onClick={() => exportarCsv(p.id)}
+                              >
+                                Exportar CSV
+                              </button>
+                            </>
                           )}
                           {p.estado === 'borrador' && (
                             <button
@@ -353,6 +440,112 @@ export const NominaPage = () => {
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {detallePeriodoId != null && (
+        <div style={overlay} onClick={() => setDetallePeriodoId(null)}>
+          <div style={modal} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+              <div>
+                <h2 style={{ margin: 0, fontSize: '1.15rem' }}>
+                  Detalle periodo #{detallePeriodoId}
+                </h2>
+                {periodoModal && (
+                  <p style={{ margin: '6px 0 0', color: '#6b7280', fontSize: '0.85rem' }}>
+                    {periodoModal.fecha_inicio.slice(0, 10)} — {periodoModal.fecha_fin.slice(0, 10)}
+                    {' · '}Neto {money(periodoModal.total_neto)}
+                  </p>
+                )}
+              </div>
+              <button type="button" style={{ ...btn('#6b7280'), padding: '6px 14px' }} onClick={() => setDetallePeriodoId(null)}>
+                Cerrar
+              </button>
+            </div>
+
+            {cargandoDetalles && <p style={{ color: '#6b7280' }}>Cargando empleados…</p>}
+
+            {!cargandoDetalles && detalles.length === 0 && (
+              <p style={{ color: '#9ca3af' }}>Sin detalle. Calcule el periodo primero.</p>
+            )}
+
+            {!cargandoDetalles && detalles.length > 0 && !empleadoDetalle && (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
+                  <thead>
+                    <tr style={{ background: '#f9fafb' }}>
+                      {['Empleado', 'Días lab.', 'Días pag.', 'Fuente', 'Percepciones', 'Deducciones', 'Neto', ''].map(h => (
+                        <th key={h} style={{ padding: '8px', textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {detalles.map(d => (
+                      <tr key={d.id}>
+                        <td style={{ padding: '8px' }}>{d.empleado_nombre || `#${d.empleado_id}`}</td>
+                        <td style={{ padding: '8px' }}>{d.dias_laborados ?? '—'}</td>
+                        <td style={{ padding: '8px' }}>{d.dias_pagados ?? '—'}</td>
+                        <td style={{ padding: '8px' }}>{d.dias_fuente ?? '—'}</td>
+                        <td style={{ padding: '8px' }}>{money(d.total_percepciones)}</td>
+                        <td style={{ padding: '8px' }}>{money(d.total_deducciones)}</td>
+                        <td style={{ padding: '8px' }}>{money(d.total_neto)}</td>
+                        <td style={{ padding: '8px' }}>
+                          <button
+                            type="button"
+                            style={{ ...btn('#2563eb'), padding: '4px 10px', fontSize: '0.78rem' }}
+                            onClick={() => setEmpleadoDetalle(d)}
+                          >
+                            Conceptos
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {empleadoDetalle && (
+              <div>
+                <button
+                  type="button"
+                  style={{ ...btn('#6b7280'), padding: '4px 12px', fontSize: '0.8rem', marginBottom: 12 }}
+                  onClick={() => setEmpleadoDetalle(null)}
+                >
+                  ← Volver a lista
+                </button>
+                <h3 style={{ margin: '0 0 8px', fontSize: '1rem' }}>
+                  {empleadoDetalle.empleado_nombre || `Empleado #${empleadoDetalle.empleado_id}`}
+                </h3>
+                <p style={{ margin: '0 0 12px', fontSize: '0.85rem', color: '#6b7280' }}>
+                  Días: {empleadoDetalle.dias_laborados} laborados / {empleadoDetalle.dias_pagados} pagados
+                  ({empleadoDetalle.dias_fuente}) · Subsidio {money(empleadoDetalle.subsidio_causado)} · Neto {money(empleadoDetalle.total_neto)}
+                </p>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                  <div>
+                    <h4 style={{ margin: '0 0 8px', fontSize: '0.9rem' }}>Percepciones</h4>
+                    <ul style={{ margin: 0, paddingLeft: 18, fontSize: '0.85rem' }}>
+                      {parseLineas(empleadoDetalle.percepciones_json).map((c, i) => (
+                        <li key={i}>
+                          {c.concepto}: {money(c.importe_gravado ?? c.importe)}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div>
+                    <h4 style={{ margin: '0 0 8px', fontSize: '0.9rem' }}>Deducciones</h4>
+                    <ul style={{ margin: 0, paddingLeft: 18, fontSize: '0.85rem' }}>
+                      {parseLineas(empleadoDetalle.deducciones_json).map((c, i) => (
+                        <li key={i}>
+                          {c.concepto}: {money(c.importe)}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

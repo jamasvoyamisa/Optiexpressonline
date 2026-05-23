@@ -16,7 +16,7 @@ import { useAuth } from '../hooks/useAuth';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { NotificationBell } from './NotificationBell';
 import api from '../services/api';
-import { isNominaEnabled } from '../config/features';
+import { canAccessNomina } from '../config/features';
 import type { Dispositivo } from '../types';
 
 interface LayoutProps {
@@ -246,7 +246,7 @@ export const Layout = ({ children }: LayoutProps) => {
       </nav>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-        {showFullAdmin && superAdminItems.filter((i) => i.to !== '/nomina' || isNominaEnabled).map(item => (
+        {showFullAdmin && superAdminItems.filter((i) => i.to !== '/nomina' || canAccessNomina(isSuperuser)).map(item => (
           <Link key={item.to} to={item.to} style={linkStyle(item.to)}>
             <NavIcon path={item.to} />{item.label}
           </Link>

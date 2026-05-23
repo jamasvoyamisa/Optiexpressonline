@@ -147,6 +147,9 @@ class DetalleNominaEmpleado(Base):
     dias_pagados = Column(Numeric(5, 2), nullable=True, default=Decimal("15"))
     dias_laborados = Column(Numeric(5, 2), nullable=True)
     dias_descuento = Column(Numeric(5, 2), nullable=True, default=Decimal("0"))
+    dias_pagados_override = Column(Numeric(5, 2), nullable=True)
+    dias_fuente = Column(String(20), nullable=True)  # manual | asistencia | calendario
+    calculo_version = Column(Integer, nullable=True)
 
     # Importes calculados
     total_percepciones = Column(Numeric(14, 4), nullable=True)
@@ -171,3 +174,19 @@ class DetalleNominaEmpleado(Base):
 
     periodo = relationship("PeriodoNomina", back_populates="detalles")
     empleado = relationship("Empleado", backref="detalles_nomina")
+
+
+class NominaEjercicioFiscal(Base):
+    """Parámetros fiscales por ejercicio (ISR, subsidio, UMA, IMSS)."""
+    __tablename__ = "nomina_ejercicio_fiscal"
+
+    ejercicio = Column(Integer, primary_key=True)
+    uma_diaria = Column(Numeric(12, 4), nullable=False)
+    dias_base_mes = Column(Numeric(6, 2), nullable=False, default=Decimal("30.4"))
+    tope_uma_sbc = Column(Integer, nullable=False, default=25)
+    isr_quincenal_json = Column(Text, nullable=False)
+    subsidio_quincenal_json = Column(Text, nullable=False)
+    imss_obrero_json = Column(Text, nullable=False)
+    activo = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())

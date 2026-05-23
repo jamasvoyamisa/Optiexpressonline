@@ -195,7 +195,13 @@ class NominaService:
         if detalle is None:
             detalle = DetalleNominaEmpleado(periodo_nomina_id=periodo_id, empleado_id=empleado_id)
             db.add(detalle)
+        if "dias_pagados_override" in data and data["dias_pagados_override"] is not None:
+            detalle.dias_pagados_override = data["dias_pagados_override"]
+        elif data.get("dias_pagados") is not None:
+            detalle.dias_pagados_override = data["dias_pagados"]
         for k, v in data.items():
+            if k == "dias_pagados_override":
+                continue
             if hasattr(detalle, k):
                 setattr(detalle, k, v)
         db.commit()
@@ -203,11 +209,29 @@ class NominaService:
         return detalle
 
     @staticmethod
+    def _nombre_empleado(emp) -> str:
+        if not emp:
+            return ""
+        parts = [emp.nombre or "", emp.apellido_paterno or "", emp.apellido_materno or ""]
+        return " ".join(p.strip() for p in parts if p and p.strip())
+
+    @staticmethod
     def listar_detalles_periodo(
         db: Session, periodo_id: int
-    ) -> List[DetalleNominaEmpleado]:
-        return (
+    ) -> List[dict]:
+        from sqlalchemy.orm import joinedload
+        from app.modules.personal.models import Empleado
+
+        rows = (
             db.query(DetalleNominaEmpleado)
+            .options(joinedload(DetalleNominaEmpleado.empleado))
             .filter(DetalleNominaEmpleado.periodo_nomina_id == periodo_id)
+            .order_by(DetalleNominaEmpleado.empleado_id)
             .all()
         )
+        out = []
+        for d in rows:
+            item = {c.name: getattr(d, c.name) for c in d.__table__.columns}
+            item["empleado_nombre"] = NominaService._nombre_empleado(d.empleado)
+            out.append(item)
+        return out

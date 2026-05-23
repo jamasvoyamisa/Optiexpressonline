@@ -159,15 +159,20 @@ class DetalleNominaCreate(BaseModel):
     dias_pagados: Optional[Decimal] = Field(Decimal("15"), ge=0)
     dias_laborados: Optional[Decimal] = Field(None, ge=0)
     dias_descuento: Optional[Decimal] = Field(Decimal("0"), ge=0)
+    dias_pagados_override: Optional[Decimal] = Field(None, ge=0)
 
 
 class DetalleNominaResponse(BaseModel):
     id: int
     periodo_nomina_id: int
     empleado_id: int
+    empleado_nombre: Optional[str] = None
     dias_pagados: Optional[Decimal] = None
     dias_laborados: Optional[Decimal] = None
     dias_descuento: Optional[Decimal] = None
+    dias_pagados_override: Optional[Decimal] = None
+    dias_fuente: Optional[str] = None
+    calculo_version: Optional[int] = None
     total_percepciones: Optional[Decimal] = None
     total_gravado: Optional[Decimal] = None
     total_exento: Optional[Decimal] = None
@@ -192,6 +197,17 @@ class DetalleNominaResponse(BaseModel):
 class CatalogoItem(BaseModel):
     clave: str
     descripcion: str
+
+
+class CalcularNominaResponse(BaseModel):
+    periodo_id: int
+    estado: str
+    empleados_procesados: int
+    omitidos: List[dict]
+    advertencias: List[str] = []
+    ejercicio_fiscal: int
+    calculo_version: int
+    totales: dict
 
 
 class CatalogosResponse(BaseModel):

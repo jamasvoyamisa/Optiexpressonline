@@ -1,6 +1,7 @@
 """Rutas API para el módulo de Nómina (Fase 1)."""
 from typing import Optional, Any, Dict
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -21,9 +22,12 @@ from .schemas import (
     PeriodoNominaListResponse,
     DetalleNominaCreate,
     DetalleNominaResponse,
+    CalcularNominaResponse,
 )
 from .service import NominaService
 from .calculo_prueba import calcular_periodo_prueba
+from .calculo_nomina import calcular_periodo_nomina
+from .export_nomina import generar_csv_periodo
 
 router = APIRouter(
     prefix=f"{settings.API_V1_PREFIX}/nomina",
@@ -168,6 +172,40 @@ def actualizar_periodo(
     if not periodo:
         raise HTTPException(status_code=404, detail="Periodo no encontrado.")
     return periodo
+
+
+@router.post("/periodos/{periodo_id}/calcular", response_model=CalcularNominaResponse)
+def calcular_periodo_endpoint(
+    periodo_id: int,
+    _ctx: dict = Depends(require_superuser),
+    db: Session = Depends(get_db),
+):
+    """
+    Calcula nómina del periodo (ISR, subsidio, IMSS, días por asistencia).
+    Periodos en borrador o calculada; no timbrados ni pagados.
+    """
+    try:
+        return calcular_periodo_nomina(db, periodo_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get("/periodos/{periodo_id}/export")
+def exportar_periodo_csv(
+    periodo_id: int,
+    _ctx: dict = Depends(require_superuser),
+    db: Session = Depends(get_db),
+):
+    """Exporta detalle del periodo en CSV."""
+    try:
+        filename, content = generar_csv_periodo(db, periodo_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    return Response(
+        content=content.encode("utf-8-sig"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/periodos/{periodo_id}/calcular-prueba")
