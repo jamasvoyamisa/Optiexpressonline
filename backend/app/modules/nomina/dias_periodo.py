@@ -8,7 +8,7 @@ from typing import Optional, Set
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.core.timezone_utils import utc_to_mexico
+from app.core.timezone_utils import to_mexico
 from app.modules.asistencia.models import Asistencia
 from app.modules.personal.models import Empresa
 
@@ -55,7 +55,7 @@ def contar_dias_con_checada(
     for (ts,) in rows:
         if ts is None:
             continue
-        mx = utc_to_mexico(ts)
+        mx = to_mexico(ts)
         fechas.add(mx.date())
     return len(fechas)
 
