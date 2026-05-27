@@ -2,6 +2,7 @@
 
 export type {
   DispositivoCreate,
+  DispositivoUpdate,
   DispositivoResponse,
   AsistenciaResponse,
   EmpleadoResponse,

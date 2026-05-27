@@ -174,9 +174,19 @@ export const MisAsistenciasPage = () => {
   );
 
   const navBtn: React.CSSProperties = {
-    padding: isMobile ? '10px 18px' : '8px 14px',
-    backgroundColor: '#e5e7eb', border: 'none',
-    borderRadius: '6px', cursor: 'pointer', fontWeight: 600, fontSize: '1rem',
+    background: 'white',
+    border: '1px solid #d1d5db',
+    borderRadius: 8,
+    width: isMobile ? 36 : 32,
+    height: isMobile ? 36 : 32,
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: isMobile ? '1.1rem' : '1rem',
+    fontWeight: 800,
+    color: '#374151',
+    flexShrink: 0,
   };
 
   return (
@@ -184,26 +194,53 @@ export const MisAsistenciasPage = () => {
       <h1 style={{ marginBottom: '14px', fontSize: isMobile ? '1.2rem' : '1.6rem' }}>Mis asistencias</h1>
 
       {/* Navegación de quincena */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '16px' }}>
-        <button type="button" style={{ ...navBtn, padding: isMobile ? '10px 16px' : '8px 14px' }} onClick={() => {
-          if (quincena.num === 1) {
-            const pm = quincena.month - 1;
-            setQuincena({ year: pm < 0 ? quincena.year - 1 : quincena.year, month: pm < 0 ? 11 : pm, num: 2 });
-          } else {
-            setQuincena({ ...quincena, num: 1 });
-          }
-        }}>←</button>
-        <span style={{ fontSize: isMobile ? '0.85rem' : '1.1rem', fontWeight: 700, color: '#1f2937', flex: 1, textAlign: 'center' }}>
-          {formatQuincenaLabel(quincena.year, quincena.month, quincena.num)}
-        </span>
-        <button type="button" style={{ ...navBtn, padding: isMobile ? '10px 16px' : '8px 14px' }} onClick={() => {
-          if (quincena.num === 2) {
-            const nm = quincena.month + 1;
-            setQuincena({ year: nm > 11 ? quincena.year + 1 : quincena.year, month: nm > 11 ? 0 : nm, num: 1 });
-          } else {
-            setQuincena({ ...quincena, num: 2 });
-          }
-        }}>→</button>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, marginBottom: '16px', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button
+            type="button"
+            style={navBtn}
+            aria-label="Quincena anterior"
+            onClick={() => {
+              if (quincena.num === 1) {
+                const pm = quincena.month - 1;
+                setQuincena({ year: pm < 0 ? quincena.year - 1 : quincena.year, month: pm < 0 ? 11 : pm, num: 2 });
+              } else {
+                setQuincena({ ...quincena, num: 1 });
+              }
+            }}
+          >
+            ‹
+          </button>
+          <span
+            style={{
+              fontSize: isMobile ? '0.82rem' : '0.9rem',
+              fontWeight: 700,
+              color: '#0369a1',
+              backgroundColor: '#f0f9ff',
+              border: '1px solid #bae6fd',
+              borderRadius: 6,
+              padding: isMobile ? '6px 10px' : '4px 12px',
+              textAlign: 'center',
+            }}
+          >
+            {formatQuincenaLabel(quincena.year, quincena.month, quincena.num)}
+          </span>
+          <button
+            type="button"
+            style={navBtn}
+            aria-label="Quincena siguiente"
+            onClick={() => {
+              if (quincena.num === 2) {
+                const nm = quincena.month + 1;
+                setQuincena({ year: nm > 11 ? quincena.year + 1 : quincena.year, month: nm > 11 ? 0 : nm, num: 1 });
+              } else {
+                setQuincena({ ...quincena, num: 2 });
+              }
+            }}
+          >
+            ›
+          </button>
+        </div>
       </div>
 
       {loading ? (

@@ -44,14 +44,11 @@ def _portal_logo_candidates() -> list[Path]:
     ]
 
 
-def _is_ti_or_admin(db: Session, empleado_id: int, is_superuser: bool) -> bool:
-    if is_superuser:
-        return True
-    emp = db.query(Empleado).filter(Empleado.id == empleado_id).first()
-    if not emp or not emp.departamento_rel:
-        return False
-    nombre_depto = (emp.departamento_rel.nombre or "").strip().lower()
-    return nombre_depto in ("ti", "it", "sistemas", "tecnologia", "tecnologías de la información") or "sistemas" in nombre_depto or "tecnolog" in nombre_depto
+def _require_soporte_ti(current: dict) -> None:
+    """Misma regla que el menú Soporte TI en el frontend (is_superuser o is_ti)."""
+    if current.get("is_superuser") or current.get("is_ti"):
+        return
+    raise HTTPException(status_code=403, detail="Solo TI o Administrador puede acceder a Soporte TI.")
 
 
 @router.get("/clases", response_model=list[schemas.SoporteTicketClaseResponse])
@@ -258,9 +255,7 @@ def catalogo_ticket_interno(
     current: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db),
 ):
-    empleado_id = int(current["user_id"])
-    if not _is_ti_or_admin(db, empleado_id, bool(current.get("is_superuser"))):
-        raise HTTPException(status_code=403, detail="Solo TI o Administrador puede crear tickets internos.")
+    _require_soporte_ti(current)
     data = service.SoporteService.catalogo_ticket_interno(db)
     return schemas.SoporteInternoCatalogoResponse(**data)
 
@@ -270,9 +265,7 @@ def empleados_ticket_interno(
     current: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db),
 ):
-    empleado_id = int(current["user_id"])
-    if not _is_ti_or_admin(db, empleado_id, bool(current.get("is_superuser"))):
-        raise HTTPException(status_code=403, detail="Solo TI o Administrador puede consultar empleados.")
+    _require_soporte_ti(current)
     return service.SoporteService.list_empleados_interno(db)
 
 
@@ -282,9 +275,7 @@ def crear_ticket_interno(
     current: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db),
 ):
-    empleado_id = int(current["user_id"])
-    if not _is_ti_or_admin(db, empleado_id, bool(current.get("is_superuser"))):
-        raise HTTPException(status_code=403, detail="Solo TI o Administrador puede crear tickets internos.")
+    _require_soporte_ti(current)
     if not data.titulo.strip() or not data.descripcion.strip():
         raise HTTPException(status_code=400, detail="Título y descripción son obligatorios.")
     try:
@@ -302,9 +293,7 @@ def listar_tickets(
     current: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db),
 ):
-    empleado_id = int(current["user_id"])
-    if not _is_ti_or_admin(db, empleado_id, bool(current.get("is_superuser"))):
-        raise HTTPException(status_code=403, detail="Solo TI o Administrador puede acceder a tickets.")
+    _require_soporte_ti(current)
     items, total = service.SoporteService.list_tickets(db, estado=estado, prioridad=prioridad, skip=skip, limit=limit)
     return schemas.SoporteTicketListResponse(items=items, total=total)
 
@@ -315,9 +304,7 @@ def obtener_ticket(
     current: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db),
 ):
-    empleado_id = int(current["user_id"])
-    if not _is_ti_or_admin(db, empleado_id, bool(current.get("is_superuser"))):
-        raise HTTPException(status_code=403, detail="Solo TI o Administrador puede consultar tickets.")
+    _require_soporte_ti(current)
     ticket = service.SoporteService.get_ticket(db, ticket_id)
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket no encontrado")
@@ -331,9 +318,7 @@ def actualizar_ticket(
     current: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db),
 ):
-    empleado_id = int(current["user_id"])
-    if not _is_ti_or_admin(db, empleado_id, bool(current.get("is_superuser"))):
-        raise HTTPException(status_code=403, detail="Solo TI o Administrador puede actualizar tickets.")
+    _require_soporte_ti(current)
     updated = service.SoporteService.update_ticket(db, ticket_id, data)
     if not updated:
         raise HTTPException(status_code=404, detail="Ticket no encontrado")
@@ -361,9 +346,7 @@ async def subir_adjuntos_ticket(
     current: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db),
 ):
-    empleado_id = int(current["user_id"])
-    if not _is_ti_or_admin(db, empleado_id, bool(current.get("is_superuser"))):
-        raise HTTPException(status_code=403, detail="Solo TI o Administrador puede adjuntar archivos.")
+    _require_soporte_ti(current)
     if not files:
         raise HTTPException(status_code=400, detail="Debes adjuntar al menos un archivo.")
     ticket = service.SoporteService.get_ticket(db, ticket_id)
@@ -419,9 +402,7 @@ def listar_adjuntos_ticket(
     current: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db),
 ):
-    empleado_id = int(current["user_id"])
-    if not _is_ti_or_admin(db, empleado_id, bool(current.get("is_superuser"))):
-        raise HTTPException(status_code=403, detail="Solo TI o Administrador puede consultar adjuntos.")
+    _require_soporte_ti(current)
     return service.SoporteService.list_adjuntos(db, ticket_id)
 
 
@@ -431,9 +412,7 @@ def descargar_adjunto(
     current: dict = Depends(get_current_empleado_with_rol_download),
     db: Session = Depends(get_db),
 ):
-    empleado_id = int(current["user_id"])
-    if not _is_ti_or_admin(db, empleado_id, bool(current.get("is_superuser"))):
-        raise HTTPException(status_code=403, detail="Solo TI o Administrador puede descargar adjuntos.")
+    _require_soporte_ti(current)
     adj = service.SoporteService.get_adjunto(db, adjunto_id)
     if not adj:
         raise HTTPException(status_code=404, detail="Adjunto no encontrado.")

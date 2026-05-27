@@ -162,16 +162,16 @@ export const Layout = ({ children }: LayoutProps) => {
     return {
       color: 'white',
       textDecoration: 'none',
-      padding: '9px 12px',
+      padding: isMobile ? '9px 12px' : '7px 10px',
       borderRadius: '8px',
       backgroundColor: active ? 'rgba(14,165,233,0.25)' : 'transparent',
       borderLeft: active ? '3px solid #0ea5e9' : '3px solid transparent',
       fontWeight: active ? 600 : 400,
-      fontSize: isMobile ? '1rem' : '0.88rem',
+      fontSize: isMobile ? '1rem' : '0.84rem',
       transition: 'background-color 0.15s',
       display: 'flex',
       alignItems: 'center',
-      gap: '10px',
+      gap: isMobile ? '10px' : '8px',
     };
   };
 
@@ -189,11 +189,11 @@ export const Layout = ({ children }: LayoutProps) => {
 
   const navContent = (
     <>
-      <Link to="/" style={{ display: 'block', marginBottom: '24px', textDecoration: 'none' }}>
+      <Link to="/" style={{ display: 'block', marginBottom: isMobile ? '24px' : '18px', textDecoration: 'none' }}>
         <img
           src={logoSidebar}
           alt="Grupo Cristal"
-          style={{ width: '100%', maxWidth: '160px', height: 'auto', objectFit: 'contain', display: 'block' }}
+          style={{ width: '100%', maxWidth: isMobile ? '160px' : '128px', height: 'auto', objectFit: 'contain', display: 'block' }}
         />
       </Link>
 
@@ -265,11 +265,11 @@ export const Layout = ({ children }: LayoutProps) => {
       {/* ── Sidebar desktop ── */}
       {!isMobile && (
         <aside style={{
-          width: '200px',
+          width: '172px',
           flexShrink: 0,
           backgroundColor: '#1e3a5f',
           color: 'white',
-          padding: '20px',
+          padding: '14px 12px',
           display: 'flex',
           flexDirection: 'column',
           overflowY: 'auto',
@@ -293,10 +293,10 @@ export const Layout = ({ children }: LayoutProps) => {
           {/* Panel lateral */}
           <aside style={{
             position: 'fixed', top: 0, left: 0, bottom: 0,
-            width: '260px',
+            width: '232px',
             backgroundColor: '#1e3a5f',
             color: 'white',
-            padding: '20px',
+            padding: '16px 14px',
             display: 'flex',
             flexDirection: 'column',
             overflowY: 'auto',

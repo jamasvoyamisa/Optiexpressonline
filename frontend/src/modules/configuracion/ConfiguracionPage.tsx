@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
 import { fmtNombreEmpleado } from '../../utils/format';
 import { useAuth } from '../../hooks/useAuth';
-import { ActividadLogResponse, ActividadPurgeRequest, DepartamentoResponse, Dispositivo, DispositivoCreate, EmpresaResponse, EmpleadoResponse, PuestoResponse, SoporteTicketClaseResponse, SoporteTicketTipoResponse, UsuarioEspecialCreate } from '../../types';
+import { ActividadLogResponse, ActividadPurgeRequest, DepartamentoResponse, Dispositivo, DispositivoCreate, DispositivoUpdate, EmpresaResponse, EmpleadoResponse, PuestoResponse, SoporteTicketClaseResponse, SoporteTicketTipoResponse, UsuarioEspecialCreate } from '../../types';
 import { VacacionesGeneralesPage } from '../vacaciones/VacacionesGeneralesPage';
 import { ChecadasEspecialesPage } from './ChecadasEspecialesPage';
 import { isNominaEnabled } from '../../config/features';
@@ -13,6 +13,22 @@ const ACTIVIDAD_PAGE_SIZE = 50;
 
 /** Dispositivo virtual del flujo de importación histórica (no se muestra en Configuración). */
 const NOMBRE_DISPOSITIVO_IMPORTACION_HISTORICA = 'Importación Histórica';
+
+type DeviceFormState = {
+  nombre: string;
+  ubicacion: string;
+  ip_local: string;
+  serial_number: string;
+  activo: boolean;
+};
+
+const emptyDeviceForm = (): DeviceFormState => ({
+  nombre: '',
+  ubicacion: '',
+  ip_local: '',
+  serial_number: '',
+  activo: true,
+});
 
 function filtrarDispositivosConfiguracion(list: Dispositivo[]): Dispositivo[] {
   return (Array.isArray(list) ? list : []).filter(
@@ -224,6 +240,10 @@ export const ConfiguracionPage = () => {
   const [empleados, setEmpleados] = useState<{ id: number; empresa_id?: number | null }[]>([]);
   const [loading, setLoading] = useState(true);
   const [showDeviceForm, setShowDeviceForm] = useState(false);
+  const [showDeviceEditModal, setShowDeviceEditModal] = useState(false);
+  const [editingDeviceId, setEditingDeviceId] = useState<number | null>(null);
+  const [deviceEditForm, setDeviceEditForm] = useState<DeviceFormState>(() => emptyDeviceForm());
+  const [savingDevice, setSavingDevice] = useState(false);
   const [showApiKey, setShowApiKey] = useState<Record<number, boolean>>({});
   const [showEmpresaModal, setShowEmpresaModal] = useState(false);
   const [editingEmpresaId, setEditingEmpresaId] = useState<number | null>(null);
@@ -875,6 +895,52 @@ export const ConfiguracionPage = () => {
     }
   };
 
+  const startEditDispositivo = (device: Dispositivo) => {
+    setEditingDeviceId(device.id);
+    setDeviceEditForm({
+      nombre: device.nombre || '',
+      ubicacion: device.ubicacion || '',
+      ip_local: device.ip_local || '',
+      serial_number: device.serial_number || '',
+      activo: device.activo,
+    });
+    setShowDeviceEditModal(true);
+  };
+
+  const cerrarEditarDispositivo = () => {
+    setShowDeviceEditModal(false);
+    setEditingDeviceId(null);
+    setDeviceEditForm(emptyDeviceForm());
+  };
+
+  const guardarDispositivo = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingDeviceId) return;
+    const nombre = deviceEditForm.nombre.trim();
+    if (!nombre) {
+      alert('El nombre del equipo es obligatorio');
+      return;
+    }
+    const payload: DispositivoUpdate = {
+      nombre,
+      ubicacion: deviceEditForm.ubicacion.trim() || null,
+      ip_local: deviceEditForm.ip_local.trim() || null,
+      serial_number: deviceEditForm.serial_number.trim() || null,
+      activo: deviceEditForm.activo,
+    };
+    setSavingDevice(true);
+    try {
+      await api.patch(`/asistencia/devices/${editingDeviceId}`, payload);
+      cerrarEditarDispositivo();
+      loadData();
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { detail?: string } } };
+      alert(err.response?.data?.detail || 'Error al guardar dispositivo');
+    } finally {
+      setSavingDevice(false);
+    }
+  };
+
   const eliminarDispositivo = async (deviceId: number, nombre: string) => {
     if (!confirm(`Eliminar el dispositivo "${nombre}"? No se puede deshacer.`)) return;
     try {
@@ -1173,6 +1239,75 @@ export const ConfiguracionPage = () => {
         </div>
       )}
 
+      {/* Modal editar dispositivo */}
+      {showDeviceEditModal && (
+        <div style={modalOverlay} onClick={cerrarEditarDispositivo}>
+          <div style={{ ...modalSmall, maxWidth: '420px' }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', paddingBottom: '12px', borderBottom: '1px solid #e5e7eb' }}>
+              <h3 style={{ margin: 0, fontSize: '1.15rem' }}>Editar dispositivo</h3>
+              <button type="button" onClick={cerrarEditarDispositivo} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#9ca3af', lineHeight: 1 }}>&times;</button>
+            </div>
+            <form onSubmit={guardarDispositivo}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '20px' }}>
+                <div>
+                  <label style={labelStyle}>Nombre del equipo *</label>
+                  <input
+                    type="text"
+                    value={deviceEditForm.nombre}
+                    onChange={(e) => setDeviceEditForm(p => ({ ...p, nombre: e.target.value }))}
+                    required
+                    style={inputStyle}
+                  />
+                </div>
+                <div>
+                  <label style={labelStyle}>Ubicacion</label>
+                  <input
+                    type="text"
+                    value={deviceEditForm.ubicacion}
+                    onChange={(e) => setDeviceEditForm(p => ({ ...p, ubicacion: e.target.value }))}
+                    placeholder="Ej: Recepcion, Oficina 1"
+                    style={inputStyle}
+                  />
+                </div>
+                <div>
+                  <label style={labelStyle}>IP local</label>
+                  <input
+                    type="text"
+                    value={deviceEditForm.ip_local}
+                    onChange={(e) => setDeviceEditForm(p => ({ ...p, ip_local: e.target.value }))}
+                    placeholder="Ej: 192.168.1.201"
+                    style={inputStyle}
+                  />
+                </div>
+                <div>
+                  <label style={labelStyle}>Numero de serie (SN)</label>
+                  <input
+                    type="text"
+                    value={deviceEditForm.serial_number}
+                    onChange={(e) => setDeviceEditForm(p => ({ ...p, serial_number: e.target.value }))}
+                    style={inputStyle}
+                  />
+                </div>
+                <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 8, marginBottom: 0 }}>
+                  <input
+                    type="checkbox"
+                    checked={deviceEditForm.activo}
+                    onChange={(e) => setDeviceEditForm(p => ({ ...p, activo: e.target.checked }))}
+                  />
+                  Dispositivo activo
+                </label>
+              </div>
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                <button type="button" onClick={cerrarEditarDispositivo} style={btnSecondary} disabled={savingDevice}>Cancelar</button>
+                <button type="submit" style={savingDevice ? { ...btnSuccess, opacity: 0.6, cursor: 'not-allowed' } : btnSuccess} disabled={savingDevice}>
+                  {savingDevice ? 'Guardando...' : 'Guardar cambios'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* Resumen */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '16px', marginBottom: '24px' }}>
         <div style={{ padding: '16px', backgroundColor: 'white', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
@@ -1207,6 +1342,8 @@ export const ConfiguracionPage = () => {
                 </span>
               </div>
               {device.ubicacion && <p style={{ margin: '4px 0', color: '#666', fontSize: '0.9rem' }}>Ubicacion: {device.ubicacion}</p>}
+              {device.ip_local && <p style={{ margin: '4px 0', color: '#666', fontSize: '0.9rem' }}>IP local: {device.ip_local}</p>}
+              {device.serial_number && <p style={{ margin: '4px 0', color: '#666', fontSize: '0.9rem' }}>SN: {device.serial_number}</p>}
 
               {/* Última conexión del agente (portal web no usa agente) */}
               <p style={{ margin: '6px 0', fontSize: '0.9rem' }}>
@@ -1252,6 +1389,13 @@ export const ConfiguracionPage = () => {
 
               {/* Acciones */}
               <div style={{ marginTop: '12px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={() => startEditDispositivo(device)}
+                  style={{ padding: '6px 12px', fontSize: '0.8rem', backgroundColor: '#ffc107', color: '#000', border: 'none', borderRadius: '4px', cursor: 'pointer' }}
+                >
+                  Editar
+                </button>
                 {(device.nombre || '').trim() !== 'Portal Checadas Remotas' && (
                   <button onClick={() => probarComoAgente(device.id)} style={{ padding: '6px 12px', fontSize: '0.8rem', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>
                     Probar agente
@@ -2063,6 +2207,9 @@ export const ConfiguracionPage = () => {
             <p style={{ margin: 0, fontSize: '0.9rem', color: '#0369a1' }}>
               Define primero las <strong>categorías</strong> (ej. Hardware, Software, Redes) y luego los <strong>tipos de ticket</strong> dentro de cada categoría. El portal mostrará un selector en cascada: categoría → tipo.
             </p>
+            <p style={{ margin: '10px 0 0', fontSize: '0.85rem', color: '#0c4a6e' }}>
+              Las categorías <strong>Mantenimiento</strong> y <strong>Ventanas</strong> (nombre con «mantenimiento» o «ventana») son solo para <strong>Soporte TI</strong> en la app interna; deben estar <strong>activas</strong> y con tipos activos.
+            </p>
           </div>
 
           {/* ── Categorías ── */}
@@ -2082,9 +2229,19 @@ export const ConfiguracionPage = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {clasesSoporte.map((clase) => (
+                  {clasesSoporte.map((clase) => {
+                    const n = clase.nombre.trim().toLowerCase();
+                    const esInternaTi = n.includes('mantenimiento') || n.includes('ventana');
+                    return (
                     <tr key={clase.id} style={{ borderBottom: '1px solid #eee' }}>
-                      <td style={{ padding: '11px 14px', fontWeight: 500 }}>{clase.nombre}</td>
+                      <td style={{ padding: '11px 14px', fontWeight: 500 }}>
+                        {clase.nombre}
+                        {esInternaTi ? (
+                          <span style={{ marginLeft: 8, padding: '2px 8px', borderRadius: 4, fontSize: '0.72rem', backgroundColor: '#e0f2fe', color: '#0369a1', fontWeight: 600 }}>
+                            Solo app TI
+                          </span>
+                        ) : null}
+                      </td>
                       <td style={{ padding: '11px 14px' }}>
                         <span style={{ padding: '3px 10px', borderRadius: '4px', fontSize: '0.8rem', backgroundColor: clase.activo ? '#d4edda' : '#f8d7da', color: clase.activo ? '#155724' : '#721c24', fontWeight: 500 }}>
                           {clase.activo ? 'Activo' : 'Inactivo'}
@@ -2096,7 +2253,7 @@ export const ConfiguracionPage = () => {
                         </button>
                       </td>
                     </tr>
-                  ))}
+                  );})}
                 </tbody>
               </table>
             </div>

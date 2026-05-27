@@ -1912,6 +1912,7 @@ export const MiAreaPage = () => {
                       pendiente: 'Pendiente',
                       aprobada_departamento: 'Aprobada por área',
                       depositado: 'Depositada',
+                      finalizado: 'Finalizado',
                       rechazada: 'Rechazada',
                     };
                     return (

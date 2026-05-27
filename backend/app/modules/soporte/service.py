@@ -33,6 +33,22 @@ class SoporteService:
     MAX_FILE_BYTES = 10 * 1024 * 1024  # 10 MB por archivo
     # Categorías solo para alta interna (TI/Admin), no en portal público
     _CLASES_SOLO_INTERNO_KEYWORDS = ("mantenimiento", "ventana", "ventanas")
+    _ADMIN_ROL_NAMES = ("Administrador", "Superuser")
+    _CLASES_INTERNAS_SEED: dict[str, list[str]] = {
+        "Mantenimiento": [
+            "Equipo de cómputo",
+            "Red y conectividad",
+            "Impresora / periféricos",
+            "Otro (mantenimiento)",
+        ],
+        "Ventanas": [
+            "Instalación de Windows",
+            "Actualización y parches",
+            "Activación / licencia",
+            "Falla del sistema",
+            "Otro (Windows)",
+        ],
+    }
 
     @staticmethod
     def _norm_clase_nombre(nombre: Optional[str]) -> str:
@@ -57,12 +73,60 @@ class SoporteService:
 
     @staticmethod
     def empleado_es_personal_ti(empleado: personal_models.Empleado) -> bool:
-        """Solo personal del departamento de TI puede registrar tickets de Mantenimiento/Ventanas."""
+        """Personal del departamento de TI."""
         if empleado.empresa_id is None:
             return False
         if not empleado.departamento_rel:
             return False
         return SoporteService._es_depto_ti(empleado.departamento_rel.nombre)
+
+    @staticmethod
+    def empleado_es_administrador(empleado: personal_models.Empleado) -> bool:
+        rol = getattr(empleado, "rol", None)
+        if rol and (rol.nombre or "") in SoporteService._ADMIN_ROL_NAMES:
+            return True
+        return False
+
+    @staticmethod
+    def empleado_puede_registrar_ticket_interno(empleado: personal_models.Empleado) -> bool:
+        """TI o Administrador pueden registrar tickets de Mantenimiento / Ventanas."""
+        if SoporteService.empleado_es_administrador(empleado):
+            return True
+        return SoporteService.empleado_es_personal_ti(empleado)
+
+    @staticmethod
+    def _empresa_etiqueta(empresa: Optional[personal_models.Empresa]) -> Optional[str]:
+        """Siglas si están definidas; si no, nombre completo."""
+        if not empresa:
+            return None
+        siglas = (empresa.siglas or "").strip()
+        if siglas:
+            return siglas
+        return (empresa.nombre or "").strip() or None
+
+    @staticmethod
+    def _aplicar_empresa_etiqueta_en_tickets(db: Session, tickets: list) -> None:
+        """Sustituye empresa_nombre en memoria por siglas (vía empleado) para la respuesta API."""
+        emp_ids = [int(t.empleado_id) for t in tickets if getattr(t, "empleado_id", None)]
+        if not emp_ids:
+            return
+        rows = (
+            db.query(personal_models.Empleado)
+            .options(joinedload(personal_models.Empleado.empresa))
+            .filter(personal_models.Empleado.id.in_(emp_ids))
+            .all()
+        )
+        etiqueta_por_empleado = {
+            int(e.id): SoporteService._empresa_etiqueta(e.empresa)
+            for e in rows
+        }
+        for t in tickets:
+            eid = getattr(t, "empleado_id", None)
+            if eid is None:
+                continue
+            etiqueta = etiqueta_por_empleado.get(int(eid))
+            if etiqueta:
+                t.empresa_nombre = etiqueta
 
     @staticmethod
     def _empleado_datos_ticket(empleado: personal_models.Empleado, empresa: personal_models.Empresa):
@@ -75,7 +139,7 @@ class SoporteService:
         tel_empresa = (getattr(empleado, "telefono_empresa_asignado", None) or "").strip()
         tel_personal = (empleado.telefono or "").strip()
         tel_ticket = (tel_empresa or tel_personal) or None
-        return nombre_solicitante, depto_nombre, tel_ticket, (empresa.nombre or "").strip() or None
+        return nombre_solicitante, depto_nombre, tel_ticket, SoporteService._empresa_etiqueta(empresa)
 
     @staticmethod
     def _resolve_adjuntos_base_dir() -> Path:
@@ -88,6 +152,40 @@ class SoporteService:
             local = Path(__file__).resolve().parents[3] / "storage" / "soporte" / "adjuntos"
             local.mkdir(parents=True, exist_ok=True)
             return local
+
+    @staticmethod
+    def ensure_clases_internas_activas(db: Session) -> None:
+        """Crea o reactiva Mantenimiento/Ventanas y sus tipos si faltan en BD."""
+        for clase_nombre, tipos in SoporteService._CLASES_INTERNAS_SEED.items():
+            clase = (
+                db.query(models.SoporteTicketClase)
+                .filter(models.SoporteTicketClase.nombre.ilike(clase_nombre))
+                .first()
+            )
+            if not clase:
+                clase = models.SoporteTicketClase(nombre=clase_nombre, activo=True)
+                db.add(clase)
+                db.flush()
+            elif not clase.activo:
+                clase.activo = True
+            for tipo_nombre in tipos:
+                tipo = (
+                    db.query(models.SoporteTicketTipo)
+                    .filter(models.SoporteTicketTipo.nombre.ilike(tipo_nombre))
+                    .first()
+                )
+                if not tipo:
+                    db.add(
+                        models.SoporteTicketTipo(
+                            nombre=tipo_nombre,
+                            clase_id=int(clase.id),
+                            activo=True,
+                        )
+                    )
+                else:
+                    tipo.clase_id = int(clase.id)
+                    tipo.activo = True
+        db.commit()
 
     @staticmethod
     def list_clases(db: Session, solo_activas: bool = False, solo_interno: Optional[bool] = None):
@@ -328,14 +426,17 @@ class SoporteService:
             .options(joinedload(personal_models.Empleado.departamento_rel))
             .filter(
                 personal_models.Empleado.id == data.empleado_id,
-                personal_models.Empleado.estado == personal_models.EstadoEmpleado.ACTIVO,
+                or_(
+                    personal_models.Empleado.estado == personal_models.EstadoEmpleado.ACTIVO,
+                    personal_models.Empleado.estado.is_(None),
+                ),
             )
             .first()
         )
         if not empleado:
             raise ValueError("Empleado no encontrado o inactivo.")
-        if not SoporteService.empleado_es_personal_ti(empleado):
-            raise ValueError("Solo puede seleccionarse personal del departamento de TI.")
+        if not SoporteService.empleado_puede_registrar_ticket_interno(empleado):
+            raise ValueError("Solo puede seleccionarse personal de TI o Administrador.")
 
         empresa = (
             db.query(personal_models.Empresa)
@@ -377,15 +478,15 @@ class SoporteService:
 
     @staticmethod
     def list_empleados_interno(db: Session) -> list[dict]:
-        """Personal de TI activo (quienes registran tickets de Mantenimiento / Ventanas)."""
+        """Personal de TI y administradores activos (quienes registran tickets internos)."""
         empleados = (
             db.query(personal_models.Empleado)
             .options(
                 joinedload(personal_models.Empleado.departamento_rel),
                 joinedload(personal_models.Empleado.empresa),
+                joinedload(personal_models.Empleado.rol),
             )
             .filter(
-                personal_models.Empleado.empresa_id.isnot(None),
                 or_(
                     personal_models.Empleado.estado == personal_models.EstadoEmpleado.ACTIVO,
                     personal_models.Empleado.estado.is_(None),
@@ -400,7 +501,7 @@ class SoporteService:
         )
         out: list[dict] = []
         for e in empleados:
-            if not SoporteService.empleado_es_personal_ti(e):
+            if not SoporteService.empleado_puede_registrar_ticket_interno(e):
                 continue
             nombre = " ".join(
                 [x for x in [e.nombre, e.apellido_paterno, e.apellido_materno] if (x or "").strip()]
@@ -415,6 +516,9 @@ class SoporteService:
     @staticmethod
     def catalogo_ticket_interno(db: Session) -> dict:
         clases = SoporteService.list_clases(db, solo_activas=True, solo_interno=True)
+        if not clases:
+            SoporteService.ensure_clases_internas_activas(db)
+            clases = SoporteService.list_clases(db, solo_activas=True, solo_interno=True)
         clase_ids = [int(c.id) for c in clases]
         tipos_raw = SoporteService.list_tipos_ticket(db, solo_activos=True)
         tipos = [SoporteService._tipo_to_response(t) for t in tipos_raw if t.clase_id in clase_ids]
@@ -457,6 +561,7 @@ class SoporteService:
             count_map = {int(ticket_id): int(cnt) for ticket_id, cnt in rows}
         for it in items:
             setattr(it, "_adjuntos_count", count_map.get(int(it.id), 0))
+        SoporteService._aplicar_empresa_etiqueta_en_tickets(db, items)
         return items, total
 
     @staticmethod
@@ -469,6 +574,7 @@ class SoporteService:
                 .scalar()
             ) or 0
             setattr(ticket, "_adjuntos_count", int(cnt))
+            SoporteService._aplicar_empresa_etiqueta_en_tickets(db, [ticket])
         return ticket
 
     @staticmethod
@@ -489,6 +595,7 @@ class SoporteService:
             .scalar()
             or 0
         ))
+        SoporteService._aplicar_empresa_etiqueta_en_tickets(db, [ticket])
         return ticket
 
     @staticmethod

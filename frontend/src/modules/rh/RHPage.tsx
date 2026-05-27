@@ -49,7 +49,7 @@ export const RHPage = () => {
         ))}
       </div>
 
-      {activeTab === 'personal' && <PersonalPage />}
+      {activeTab === 'personal' && <PersonalPage hideImport />}
       {activeTab === 'vacaciones' && <VacacionesPage />}
       {activeTab === 'incapacidades' && <IncapacidadesPage />}
       {activeTab === 'prestamos' && <PrestamosPage />}

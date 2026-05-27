@@ -20,7 +20,12 @@ def build_empleado_rol_context(empleado_id: int, db: Session) -> dict:
     """
     Contexto de permisos del empleado (misma lógica para Bearer y para ?download_token=).
     """
-    empleado = db.query(Empleado).options(joinedload(Empleado.puesto_rel)).filter(Empleado.id == empleado_id).first()
+    empleado = (
+        db.query(Empleado)
+        .options(joinedload(Empleado.puesto_rel), joinedload(Empleado.departamento_rel))
+        .filter(Empleado.id == empleado_id)
+        .first()
+    )
     is_superuser = False
     is_jefe = False
     is_rh = False

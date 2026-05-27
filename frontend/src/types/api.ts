@@ -11,10 +11,20 @@ export interface DispositivoCreate {
   serial_number?: string | null;
 }
 
+export interface DispositivoUpdate {
+  nombre?: string;
+  ubicacion?: string | null;
+  ip_local?: string | null;
+  serial_number?: string | null;
+  activo?: boolean;
+}
+
 export interface DispositivoResponse {
   id: number;
   nombre: string;
   ubicacion?: string | null;
+  ip_local?: string | null;
+  serial_number?: string | null;
   api_key: string;
   activo: boolean;
   ultima_sync_agente?: string | null;

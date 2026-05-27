@@ -224,6 +224,8 @@ def _contar_quincenas_calendario_utc(desde: datetime) -> int:
 
 def calcular_saldo_restante(sol: models.SolicitudPrestamo) -> Optional[Decimal]:
     """Saldo restante para préstamos depositados: monto - (quincenas pasadas * descuento_quincenal). None si no aplica."""
+    if sol.estado == models.EstadoSolicitudPrestamo.FINALIZADO:
+        return Decimal("0")
     if sol.estado != models.EstadoSolicitudPrestamo.DEPOSITADO:
         return None
     fecha_base = sol.fecha_deposito or sol.fecha_aprobacion
@@ -236,6 +238,33 @@ def calcular_saldo_restante(sol: models.SolicitudPrestamo) -> Optional[Decimal]:
     n = _contar_quincenas_calendario_utc(fecha_base)
     saldo = monto - (n * desc)
     return max(Decimal("0"), saldo)
+
+
+def sincronizar_estado_liquidado(db: Session, sol: models.SolicitudPrestamo) -> models.SolicitudPrestamo:
+    """Si el préstamo depositado ya no tiene saldo, pasa a finalizado."""
+    if sol.estado != models.EstadoSolicitudPrestamo.DEPOSITADO:
+        return sol
+    saldo = calcular_saldo_restante(sol)
+    if saldo is not None and saldo <= Decimal("0"):
+        sol.estado = models.EstadoSolicitudPrestamo.FINALIZADO
+        db.commit()
+        db.refresh(sol)
+    return sol
+
+
+def saldo_restante_para_respuesta(db: Session, sol: models.SolicitudPrestamo) -> Optional[Decimal]:
+    """Calcula saldo y, si aplica, actualiza el estado a finalizado."""
+    if sol.estado == models.EstadoSolicitudPrestamo.FINALIZADO:
+        return Decimal("0")
+    sol = sincronizar_estado_liquidado(db, sol)
+    if sol.estado == models.EstadoSolicitudPrestamo.FINALIZADO:
+        return Decimal("0")
+    return calcular_saldo_restante(sol)
+
+
+def to_response(db: Session, sol: models.SolicitudPrestamo) -> schemas.SolicitudPrestamoResponse:
+    saldo = saldo_restante_para_respuesta(db, sol)
+    return schemas.SolicitudPrestamoResponse.model_validate(sol).model_copy(update={"saldo_restante": saldo})
 
 
 def listar_solicitudes(

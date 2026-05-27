@@ -414,7 +414,12 @@ function PermisosEspecialesPanel({ emp, onUpdated }: { emp: Empleado; onUpdated:
 }
 
 
-export const PersonalPage = () => {
+type PersonalPageProps = {
+  /** Oculta importación XLSX (p. ej. vista Recursos Humanos). */
+  hideImport?: boolean;
+};
+
+export const PersonalPage = ({ hideImport = false }: PersonalPageProps) => {
   const { authMe } = useAuth();
   const isAdmin = authMe?.is_superuser === true;
   const isRH = authMe?.is_rh === true;
@@ -1551,10 +1556,8 @@ export const PersonalPage = () => {
                   <button type="button" onClick={exportarEmpleadosXlsx} style={{ ...btnSuccess, backgroundColor: '#0d9488' }}>⬇ Exportar XLSX</button>
                 </>
               )}
-              {isAdmin && (
-                <>
-                  <button type="button" onClick={() => setShowImport(true)} style={{ ...btnSuccess, backgroundColor: '#6366f1' }}>⬆ Importar XLSX</button>
-                </>
+              {isAdmin && !hideImport && (
+                <button type="button" onClick={() => setShowImport(true)} style={{ ...btnSuccess, backgroundColor: '#6366f1' }}>⬆ Importar XLSX</button>
               )}
               <button onClick={openNewForm} style={btnSuccess}>+ Nuevo Empleado</button>
             </div>
@@ -2655,7 +2658,7 @@ export const PersonalPage = () => {
                         </div>
                         {isAdmin && (
                         <div>
-                          <label style={labelStyle}>Teléfono asignado por la empresa (WhatsApp)</label>
+                          <label style={labelStyle}>Teléfono asignado por la empresa</label>
                           <input
                             style={inputStyle}
                             value={form.telefono_empresa_asignado}
@@ -2663,9 +2666,6 @@ export const PersonalPage = () => {
                             placeholder="10 dígitos"
                             maxLength={15}
                           />
-                          <span style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 4, display: 'block' }}>
-                            Se usa en tickets de soporte (WhatsApp); si está vacío, se usa el teléfono personal del empleado.
-                          </span>
                         </div>
                         )}
                         <div>
@@ -3306,7 +3306,7 @@ export const PersonalPage = () => {
         </div>
       )}
       {/* ── Modal Importar XLSX (solo admin) ── */}
-      {isAdmin && showImport && (
+      {isAdmin && !hideImport && showImport && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
           onClick={() => { setShowImport(false); setImportFile(null); setImportEmpresaId(''); setImportActualizarExistentes(false); setImportResult(null); }}>
           <div style={{ background: '#fff', borderRadius: 14, padding: 28, minWidth: 420, maxWidth: 600, maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 8px 30px rgba(0,0,0,0.18)' }}

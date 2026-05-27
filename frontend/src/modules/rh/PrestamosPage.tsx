@@ -52,6 +52,7 @@ const ESTADO_LABEL: Record<string, string> = {
   pendiente: 'Pendiente',
   aprobada_departamento: 'Autorizada por departamento',
   depositado: 'Depositado',
+  finalizado: 'Finalizado',
   rechazada: 'Rechazada',
   cancelada: 'Cancelada',
 };
@@ -60,6 +61,7 @@ const ESTADO_STYLE: Record<string, { bg: string; color: string }> = {
   pendiente: { bg: '#fef3c7', color: '#92400e' },
   aprobada_departamento: { bg: '#e0f2fe', color: '#0369a1' },
   depositado: { bg: '#d1fae5', color: '#065f46' },
+  finalizado: { bg: '#ecfdf5', color: '#047857' },
   rechazada: { bg: '#fee2e2', color: '#991b1b' },
   cancelada: { bg: '#f3f4f6', color: '#6b7280' },
 };
@@ -103,8 +105,17 @@ const formatMonto = (v: string | number) => {
   return new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(n);
 };
 
-/** Saldo por pagar vía nómina; solo aplica cuando el préstamo ya está depositado. */
+const prestamoEstaLiquidado = (sol: SolicitudPrestamo): boolean => {
+  if (sol.estado === 'finalizado') return true;
+  if (sol.estado !== 'depositado') return false;
+  if (sol.saldo_restante == null || sol.saldo_restante === '') return false;
+  const n = typeof sol.saldo_restante === 'string' ? parseFloat(sol.saldo_restante) : sol.saldo_restante;
+  return !isNaN(n) && n <= 0;
+};
+
+/** Saldo por pagar vía nómina; si ya está pagado muestra «Finalizado». */
 const formatSaldoPrestamo = (sol: SolicitudPrestamo) => {
+  if (prestamoEstaLiquidado(sol)) return 'Finalizado';
   if (sol.estado !== 'depositado') return '—';
   if (sol.saldo_restante == null || sol.saldo_restante === '') return '—';
   const n = typeof sol.saldo_restante === 'string' ? parseFloat(sol.saldo_restante) : sol.saldo_restante;
@@ -116,6 +127,32 @@ const nombreEmpleado = (e?: Empleado | null) => {
   if (!e) return '—';
   return fmtNombreEmpleado(e);
 };
+
+function dividirNumeroSolicitud(numero: string): { linea1: string; linea2: string } {
+  const f = numero.trim();
+  if (!f) return { linea1: '—', linea2: '' };
+  const lastDash = f.lastIndexOf('-');
+  if (lastDash > 0 && lastDash < f.length - 1) {
+    return { linea1: f.slice(0, lastDash), linea2: f.slice(lastDash + 1) };
+  }
+  return { linea1: f, linea2: '' };
+}
+
+function NumeroSolicitudCelda({ numero }: { numero: string }) {
+  const { linea1, linea2 } = dividirNumeroSolicitud(numero);
+  return (
+    <div style={{ lineHeight: 1.25 }}>
+      <div style={{ fontFamily: 'monospace', fontSize: 10, fontWeight: 600, color: '#334155', whiteSpace: 'nowrap' }}>
+        {linea1}
+      </div>
+      {linea2 ? (
+        <div style={{ fontFamily: 'monospace', fontSize: 10, color: '#64748b', whiteSpace: 'nowrap' }}>
+          {linea2}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 export const PrestamosPage = () => {
   const { authMe } = useAuth();
@@ -407,6 +444,7 @@ export const PrestamosPage = () => {
           <option value="pendiente">Pendiente</option>
           <option value="aprobada_departamento">Autorizada por departamento</option>
           <option value="depositado">Depositado</option>
+          <option value="finalizado">Finalizado</option>
           <option value="rechazada">Rechazada</option>
           <option value="cancelada">Cancelada</option>
         </select>
@@ -478,9 +516,7 @@ export const PrestamosPage = () => {
                 return (
                   <tr key={sol.id} style={{ borderBottom: '1px solid #f0f0f0' }}>
                     <td style={td}>
-                      <span style={{ fontFamily: 'monospace', fontSize: '0.78rem', backgroundColor: '#f1f5f9', color: '#334155', padding: '2px 7px', borderRadius: 4, fontWeight: 700, whiteSpace: 'nowrap' }}>
-                        {sol.numero_solicitud ?? `#${sol.id}`}
-                      </span>
+                      <NumeroSolicitudCelda numero={sol.numero_solicitud ?? `#${sol.id}`} />
                     </td>
                     <td style={td}>
                       <div style={{ fontWeight: 600, fontSize: '0.86rem' }}>{nombreEmpleado(sol.empleado)}</div>
@@ -495,7 +531,12 @@ export const PrestamosPage = () => {
                     <td style={{ ...td, textAlign: 'right', fontWeight: 600 }}>{formatMonto(sol.monto)}</td>
                     <td style={{ ...td, textAlign: 'center' }}>{sol.plazo_meses} quincenas</td>
                     <td style={{ ...td, textAlign: 'right', color: '#0369a1' }}>{sol.descuento_quincenal ? formatMonto(sol.descuento_quincenal) : '—'}</td>
-                    <td style={{ ...td, textAlign: 'right', fontWeight: 600, color: sol.estado === 'depositado' ? '#0f766e' : '#9ca3af' }}>
+                    <td style={{
+                      ...td,
+                      textAlign: 'right',
+                      fontWeight: 600,
+                      color: prestamoEstaLiquidado(sol) ? '#047857' : sol.estado === 'depositado' ? '#0f766e' : '#9ca3af',
+                    }}>
                       {formatSaldoPrestamo(sol)}
                     </td>
                     <td style={{ ...td, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={sol.motivo ?? ''}>

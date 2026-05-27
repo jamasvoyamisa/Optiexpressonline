@@ -317,6 +317,36 @@ const selectStyle: React.CSSProperties = {
   paddingRight: '28px',
 };
 
+const filtroFieldStyle: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 4,
+  minWidth: 0,
+};
+
+const filtroLabelStyle: React.CSSProperties = {
+  fontSize: '0.72rem',
+  fontWeight: 600,
+  color: '#6b7280',
+  lineHeight: 1.2,
+};
+
+const filtroControlStyle: React.CSSProperties = {
+  ...inputStyle,
+  width: '100%',
+  boxSizing: 'border-box',
+  fontSize: '0.82rem',
+  minHeight: 36,
+};
+
+const filtroSelectStyle: React.CSSProperties = {
+  ...selectStyle,
+  width: '100%',
+  boxSizing: 'border-box',
+  fontSize: '0.82rem',
+  minHeight: 36,
+};
+
 export const VacacionesPage = () => {
   const { authMe } = useAuth();
   const isSuperuser = authMe?.is_superuser === true;
@@ -458,58 +488,93 @@ export const VacacionesPage = () => {
     <div style={{ padding: '24px' }}>
       <h1 style={{ marginBottom: '20px' }}>Solicitudes de Vacaciones</h1>
 
-      {/* ── Barra de búsqueda y filtros en una sola línea ── */}
+      {/* ── Barra de búsqueda y filtros ── */}
       <div style={{ backgroundColor: 'white', borderRadius: '10px', border: '1px solid #e5e7eb', padding: '12px 16px', marginBottom: '20px', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'nowrap', overflowX: 'auto' }}>
-
-          {/* Búsqueda — se encoge si hay poco espacio */}
-          <div style={{ position: 'relative', flex: '1 1 160px', minWidth: '120px' }}>
-            <span style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: '#9ca3af', fontSize: '0.85rem', pointerEvents: 'none' }}>🔍</span>
-            <input
-              type="text"
-              placeholder="Nombre o No. empleado..."
-              value={busqueda}
-              onChange={e => setBusqueda(e.target.value)}
-              style={{ ...inputStyle, width: '100%', paddingLeft: '28px', fontSize: '0.82rem' }}
-            />
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: hayFiltros
+              ? 'repeat(auto-fit, minmax(150px, 1fr)) auto'
+              : 'repeat(auto-fit, minmax(150px, 1fr))',
+            gap: 10,
+            alignItems: 'end',
+          }}
+        >
+          <div style={filtroFieldStyle}>
+            <span style={filtroLabelStyle}>Buscar</span>
+            <div style={{ position: 'relative' }}>
+              <span style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: '#9ca3af', fontSize: '0.85rem', pointerEvents: 'none' }}>🔍</span>
+              <input
+                type="text"
+                placeholder="Nombre o No. empleado"
+                value={busqueda}
+                onChange={e => setBusqueda(e.target.value)}
+                style={{ ...filtroControlStyle, paddingLeft: 28 }}
+              />
+            </div>
           </div>
 
-          <select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)} style={{ ...selectStyle, flex: '0 0 auto', fontSize: '0.82rem' }}>
-            <option value="">Todos los estados</option>
-            <option value="pendiente">Pendiente</option>
-            <option value="aprobada_jefe">Aprobada por jefe</option>
-            <option value="aprobada">Aprobada</option>
-            <option value="rechazada">Rechazada</option>
-            <option value="cancelada">Cancelada</option>
-          </select>
-
-          <select value={filtroEmpresa} onChange={e => { setFiltroEmpresa(e.target.value); setFiltroDepartamento(''); }} style={{ ...selectStyle, flex: '0 0 auto', fontSize: '0.82rem' }}>
-            <option value="">Todas las empresas</option>
-            {empresas.map(emp => <option key={emp} value={emp}>{emp}</option>)}
-          </select>
-
-          <select value={filtroDepartamento} onChange={e => setFiltroDepartamento(e.target.value)} style={{ ...selectStyle, flex: '0 0 auto', fontSize: '0.82rem' }}>
-            <option value="">Todos los deptos.</option>
-            {departamentos.map(d => <option key={d} value={d}>{d}</option>)}
-          </select>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flex: '0 0 auto' }}>
-            <label style={{ fontSize: '0.78rem', color: '#6b7280', whiteSpace: 'nowrap' }}>Desde:</label>
-            <input type="date" value={filtroFechaInicio} onChange={e => setFiltroFechaInicio(e.target.value)} style={{ ...inputStyle, fontSize: '0.82rem', width: '130px' }} />
+          <div style={filtroFieldStyle}>
+            <span style={filtroLabelStyle}>Estado</span>
+            <select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)} style={filtroSelectStyle}>
+              <option value="">Todos</option>
+              <option value="pendiente">Pendiente</option>
+              <option value="aprobada_jefe">Aprobada por jefe</option>
+              <option value="aprobada">Aprobada</option>
+              <option value="rechazada">Rechazada</option>
+              <option value="cancelada">Cancelada</option>
+            </select>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flex: '0 0 auto' }}>
-            <label style={{ fontSize: '0.78rem', color: '#6b7280', whiteSpace: 'nowrap' }}>Hasta:</label>
-            <input type="date" value={filtroFechaFin} onChange={e => setFiltroFechaFin(e.target.value)} style={{ ...inputStyle, fontSize: '0.82rem', width: '130px' }} />
+          <div style={filtroFieldStyle}>
+            <span style={filtroLabelStyle}>Empresa</span>
+            <select
+              value={filtroEmpresa}
+              onChange={e => { setFiltroEmpresa(e.target.value); setFiltroDepartamento(''); }}
+              style={filtroSelectStyle}
+            >
+              <option value="">Todas</option>
+              {empresas.map(emp => <option key={emp} value={emp}>{emp}</option>)}
+            </select>
+          </div>
+
+          <div style={filtroFieldStyle}>
+            <span style={filtroLabelStyle}>Departamento</span>
+            <select value={filtroDepartamento} onChange={e => setFiltroDepartamento(e.target.value)} style={filtroSelectStyle}>
+              <option value="">Todos</option>
+              {departamentos.map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+          </div>
+
+          <div style={filtroFieldStyle}>
+            <span style={filtroLabelStyle}>Desde</span>
+            <input type="date" value={filtroFechaInicio} onChange={e => setFiltroFechaInicio(e.target.value)} style={filtroControlStyle} />
+          </div>
+
+          <div style={filtroFieldStyle}>
+            <span style={filtroLabelStyle}>Hasta</span>
+            <input type="date" value={filtroFechaFin} onChange={e => setFiltroFechaFin(e.target.value)} style={filtroControlStyle} />
           </div>
 
           {hayFiltros && (
             <button
               type="button"
               onClick={limpiarFiltros}
-              style={{ flex: '0 0 auto', padding: '7px 12px', backgroundColor: '#fee2e2', color: '#991b1b', border: '1px solid #fecaca', borderRadius: '6px', fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}
+              style={{
+                alignSelf: 'end',
+                padding: '8px 12px',
+                minHeight: 36,
+                backgroundColor: '#fee2e2',
+                color: '#991b1b',
+                border: '1px solid #fecaca',
+                borderRadius: 6,
+                fontSize: '0.78rem',
+                fontWeight: 600,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
             >
-              ✕ Limpiar
+              Limpiar
             </button>
           )}
         </div>

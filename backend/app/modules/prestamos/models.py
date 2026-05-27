@@ -12,6 +12,8 @@ class EstadoSolicitudPrestamo(str, enum.Enum):
     APROBADA_DEPARTAMENTO = "aprobada_departamento"
     """Monto depositado; referencia bancaria registrada por Gerente General."""
     DEPOSITADO = "depositado"
+    """Préstamo liquidado (saldo en cero por descuentos de nómina)."""
+    FINALIZADO = "finalizado"
     RECHAZADA = "rechazada"
     CANCELADA = "cancelada"
 

@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import api from '../../services/api';
+import { useAuth } from '../../hooks/useAuth';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { descargarArchivo } from '../../utils/download';
 import {
@@ -70,8 +71,227 @@ const sectionCard: React.CSSProperties = {
   padding: 12,
 };
 
+const FILAS_POR_PAGINA = 25;
+
+function dividirFolio(folio: string): { linea1: string; linea2: string } {
+  const f = folio.trim();
+  if (!f) return { linea1: '—', linea2: '' };
+  const lastDash = f.lastIndexOf('-');
+  if (lastDash > 0 && lastDash < f.length - 1) {
+    return { linea1: f.slice(0, lastDash), linea2: f.slice(lastDash + 1) };
+  }
+  return { linea1: f, linea2: '' };
+}
+
+function FolioCelda({ folio }: { folio: string }) {
+  const { linea1, linea2 } = dividirFolio(folio);
+  return (
+    <div style={{ lineHeight: 1.25 }}>
+      <div
+        style={{
+          fontFamily: 'monospace',
+          fontSize: 10,
+          fontWeight: 600,
+          color: '#475569',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {linea1}
+      </div>
+      {linea2 ? (
+        <div
+          style={{
+            fontFamily: 'monospace',
+            fontSize: 10,
+            color: '#64748b',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {linea2}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function dividirNombreSolicitante(nombre: string): { linea1: string; linea2: string } {
+  const partes = nombre.trim().split(/\s+/).filter(Boolean);
+  if (partes.length === 0) return { linea1: '—', linea2: '' };
+  if (partes.length === 1) return { linea1: partes[0], linea2: '' };
+  return { linea1: partes[0], linea2: partes.slice(1).join(' ') };
+}
+
+function SolicitanteCelda({ nombre, maxWidth = 140 }: { nombre: string; maxWidth?: number }) {
+  const { linea1, linea2 } = dividirNombreSolicitante(nombre);
+  return (
+    <div style={{ maxWidth, lineHeight: 1.25 }}>
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 600,
+          color: '#334155',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        }}
+      >
+        {linea1}
+      </div>
+      {linea2 ? (
+        <div
+          style={{
+            fontSize: 10,
+            color: '#64748b',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          {linea2}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function TituloCelda({
+  titulo,
+  descripcion,
+  maxWidth = 280,
+  descripcionLineas = 1,
+}: {
+  titulo: string;
+  descripcion: string;
+  maxWidth?: number;
+  /** 1 = una línea con ellipsis; 2 = hasta dos líneas (tarjetas móviles). */
+  descripcionLineas?: 1 | 2;
+}) {
+  return (
+    <div style={{ maxWidth, lineHeight: 1.25 }}>
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 600,
+          color: '#334155',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {titulo || '—'}
+      </div>
+      <div
+        style={{
+          fontSize: 10,
+          color: '#64748b',
+          marginTop: 2,
+          overflow: 'hidden',
+          ...(descripcionLineas === 2
+            ? {
+                display: '-webkit-box',
+                WebkitLineClamp: 2,
+                WebkitBoxOrient: 'vertical' as const,
+              }
+            : {
+                whiteSpace: 'nowrap',
+                textOverflow: 'ellipsis',
+              }),
+        }}
+      >
+        {descripcion || '—'}
+      </div>
+    </div>
+  );
+}
+
+function EmpresaDeptoCelda({
+  empresa,
+  depto,
+  maxWidth = 160,
+}: {
+  empresa?: string | null;
+  depto?: string | null;
+  maxWidth?: number;
+}) {
+  const emp = (empresa || '').trim() || '—';
+  const dep = (depto || '').trim();
+  return (
+    <div style={{ maxWidth }}>
+      <div style={{ fontWeight: 600 }}>{emp}</div>
+      <div
+        style={{
+          fontSize: 12,
+          color: '#64748b',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+        }}
+      >
+        {dep || '—'}
+      </div>
+    </div>
+  );
+}
+
+function PaginacionTickets({
+  inicio,
+  total,
+  paginaSegura,
+  totalPaginas,
+  onAnterior,
+  onSiguiente,
+}: {
+  inicio: number;
+  total: number;
+  paginaSegura: number;
+  totalPaginas: number;
+  onAnterior: () => void;
+  onSiguiente: () => void;
+}) {
+  if (total <= FILAS_POR_PAGINA) return null;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', marginBottom: '12px', padding: '0 4px' }}>
+      <span style={{ color: '#555', fontSize: '0.9rem' }}>
+        Mostrando {inicio + 1}–{Math.min(inicio + FILAS_POR_PAGINA, total)} de {total} tickets
+      </span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <button
+          type="button"
+          disabled={paginaSegura <= 1}
+          onClick={onAnterior}
+          style={{
+            padding: '6px 14px',
+            border: '1px solid #ccc',
+            borderRadius: '6px',
+            background: paginaSegura <= 1 ? '#f5f5f5' : 'white',
+            cursor: paginaSegura <= 1 ? 'not-allowed' : 'pointer',
+          }}
+        >
+          Anterior
+        </button>
+        <span style={{ color: '#333', fontSize: '0.9rem' }}>Página {paginaSegura} de {totalPaginas}</span>
+        <button
+          type="button"
+          disabled={paginaSegura >= totalPaginas}
+          onClick={onSiguiente}
+          style={{
+            padding: '6px 14px',
+            border: '1px solid #ccc',
+            borderRadius: '6px',
+            background: paginaSegura >= totalPaginas ? '#f5f5f5' : 'white',
+            cursor: paginaSegura >= totalPaginas ? 'not-allowed' : 'pointer',
+          }}
+        >
+          Siguiente
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export const SoporteTicketsPage = () => {
   const isMobile = useIsMobile();
+  const { authMe } = useAuth();
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(true);
   const [filtroEstado, setFiltroEstado] = useState('');
@@ -105,6 +325,8 @@ export const SoporteTicketsPage = () => {
   const [nuevoPrioridad, setNuevoPrioridad] = useState<TicketPrioridad>('media');
   const [nuevoArchivos, setNuevoArchivos] = useState<File[]>([]);
   const [creandoTicket, setCreandoTicket] = useState(false);
+  const [errorModalNuevo, setErrorModalNuevo] = useState('');
+  const [pagina, setPagina] = useState(1);
 
   const cargar = async () => {
     setLoading(true);
@@ -126,6 +348,22 @@ export const SoporteTicketsPage = () => {
   };
 
   useEffect(() => { cargar(); }, [filtroEstado, filtroPrioridad, filtroTipo]);
+
+  useEffect(() => {
+    setPagina(1);
+  }, [filtroEstado, filtroPrioridad, filtroTipo]);
+
+  const totalPaginas = Math.max(1, Math.ceil(tickets.length / FILAS_POR_PAGINA));
+  const paginaSegura = Math.min(pagina, totalPaginas);
+  const inicio = (paginaSegura - 1) * FILAS_POR_PAGINA;
+  const ticketsPagina = useMemo(
+    () => tickets.slice(inicio, inicio + FILAS_POR_PAGINA),
+    [tickets, inicio],
+  );
+
+  useEffect(() => {
+    setPagina((p) => Math.min(p, totalPaginas));
+  }, [totalPaginas]);
 
   const estiloPrioridad = (p: TicketPrioridad): React.CSSProperties => {
     const m: Record<TicketPrioridad, { bg: string; c: string; label: string }> = {
@@ -315,7 +553,7 @@ export const SoporteTicketsPage = () => {
     (t) => nuevoClaseId && String(t.clase_id) === nuevoClaseId,
   );
 
-  const resetFormNuevoTicket = () => {
+  const resetCamposNuevoTicket = () => {
     setNuevoEmpresaId('');
     setNuevoEmpleadoId('');
     setNuevoClaseId('');
@@ -324,19 +562,18 @@ export const SoporteTicketsPage = () => {
     setNuevoDescripcion('');
     setNuevoPrioridad('media');
     setNuevoArchivos([]);
-    setEmpleadosInterno([]);
   };
 
   const cerrarModalNuevo = () => {
     setShowNuevoModal(false);
-    resetFormNuevoTicket();
+    setErrorModalNuevo('');
+    resetCamposNuevoTicket();
   };
 
-  const abrirModalNuevo = async () => {
-    setShowNuevoModal(true);
+  const cargarFormularioInterno = useCallback(async () => {
     setLoadingCatalogoInterno(true);
     setLoadingEmpleadosInterno(true);
-    resetFormNuevoTicket();
+    setErrorModalNuevo('');
     try {
       const [catRes, empRes] = await Promise.all([
         api.get('/soporte/interno/catalogo'),
@@ -344,13 +581,35 @@ export const SoporteTicketsPage = () => {
       ]);
       setCatalogoInterno(catRes.data || null);
       setEmpleadosInterno(Array.isArray(empRes.data) ? empRes.data : []);
-    } catch (e: any) {
-      alert(e?.response?.data?.detail || 'No se pudo cargar el formulario de tickets internos');
-      setShowNuevoModal(false);
+    } catch (e: unknown) {
+      const err = e as { response?: { data?: { detail?: string } } };
+      setCatalogoInterno(null);
+      setEmpleadosInterno([]);
+      setErrorModalNuevo(err?.response?.data?.detail || 'No se pudo cargar el formulario de tickets internos.');
+      return false;
     } finally {
       setLoadingCatalogoInterno(false);
       setLoadingEmpleadosInterno(false);
     }
+    return true;
+  }, []);
+
+  useEffect(() => {
+    if (!authMe?.is_ti && !authMe?.is_superuser) return;
+    void cargarFormularioInterno();
+  }, [authMe?.is_ti, authMe?.is_superuser, cargarFormularioInterno]);
+
+  useEffect(() => {
+    if (!showNuevoModal || !authMe?.id || nuevoEmpleadoId) return;
+    if (empleadosInterno.some((e) => e.id === authMe.id)) {
+      setNuevoEmpleadoId(String(authMe.id));
+    }
+  }, [showNuevoModal, authMe?.id, empleadosInterno, nuevoEmpleadoId]);
+
+  const abrirModalNuevo = async () => {
+    setShowNuevoModal(true);
+    resetCamposNuevoTicket();
+    await cargarFormularioInterno();
   };
 
   const crearTicketInterno = async () => {
@@ -360,7 +619,7 @@ export const SoporteTicketsPage = () => {
     const titulo = nuevoTitulo.trim();
     const descripcion = nuevoDescripcion.trim();
     if (!empresaId || !empleadoId || !tipoId) {
-      alert('Selecciona empresa, personal de TI y tipo de ticket.');
+      alert('Selecciona empresa, quién registra y tipo de ticket.');
       return;
     }
     if (!titulo || !descripcion) {
@@ -401,7 +660,7 @@ export const SoporteTicketsPage = () => {
         <div>
           <h1 style={{ marginTop: 0, marginBottom: 4, fontSize: isMobile ? '1.2rem' : '1.5rem' }}>Tickets de soporte</h1>
           <p style={{ marginTop: 0, marginBottom: 0, color: '#64748b', fontSize: isMobile ? '0.8rem' : '0.9rem' }}>
-            Solo visible para TI y Administrador. Mantenimiento y ventanas se registran aquí (no en el portal público).
+            Visible para TI y Administrador. Mantenimiento y Ventanas se registran aquí (no en el portal público); el administrador puede levantar estos tickets.
           </p>
         </div>
         <button
@@ -461,15 +720,25 @@ export const SoporteTicketsPage = () => {
             <div style={{ padding: '32px', textAlign: 'center', backgroundColor: 'white', borderRadius: 14, border: '1px solid #e5e7eb', color: '#9ca3af' }}>
               No hay tickets con los filtros seleccionados
             </div>
-          ) : tickets.map((t) => (
+          ) : (
+            <>
+          <PaginacionTickets
+            inicio={inicio}
+            total={tickets.length}
+            paginaSegura={paginaSegura}
+            totalPaginas={totalPaginas}
+            onAnterior={() => setPagina((p) => Math.max(1, p - 1))}
+            onSiguiente={() => setPagina((p) => Math.min(totalPaginas, p + 1))}
+          />
+          {ticketsPagina.map((t) => (
             <button key={t.id} onClick={() => verDetalle(t.id)} disabled={loadingDetalle}
               style={{ backgroundColor: 'white', borderRadius: 14, border: '1.5px solid #e5e7eb', padding: '14px', boxShadow: '0 1px 4px rgba(0,0,0,0.06)', textAlign: 'left', cursor: 'pointer', width: '100%' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 700, color: '#1e3a5f', fontSize: '0.92rem', marginBottom: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {t.titulo}
+                  <TituloCelda titulo={t.titulo} descripcion={t.descripcion} maxWidth={999} descripcionLineas={2} />
+                  <div style={{ marginTop: 4 }}>
+                    <FolioCelda folio={t.folio} />
                   </div>
-                  <div style={{ fontFamily: 'monospace', fontSize: '0.72rem', color: '#64748b' }}>{t.folio}</div>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0, marginLeft: 8 }}>
                   <span style={estiloPrioridad(t.prioridad)}>
@@ -478,13 +747,17 @@ export const SoporteTicketsPage = () => {
                   <span style={estadoBadgeStyle(t.estado)}>{estadoLabel(t.estado)}</span>
                 </div>
               </div>
-              <div style={{ fontSize: '0.78rem', color: '#64748b', marginBottom: 6, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' as const }}>
-                {t.descripcion}
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
-                  {t.nombre_solicitante} · {t.empresa_nombre || ''}
-                  {t.tipo_ticket_nombre && <span style={{ marginLeft: 4, backgroundColor: '#f1f5f9', color: '#475569', padding: '1px 6px', borderRadius: 4 }}>{t.tipo_ticket_nombre}</span>}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 8, marginTop: 6 }}>
+                <div style={{ fontSize: '0.72rem', color: '#94a3b8', minWidth: 0 }}>
+                  <div style={{ marginBottom: 4 }}>
+                    <SolicitanteCelda nombre={t.nombre_solicitante} maxWidth={200} />
+                  </div>
+                  <EmpresaDeptoCelda empresa={t.empresa_nombre} depto={t.departamento_nombre} maxWidth={200} />
+                  {t.tipo_ticket_nombre && (
+                    <span style={{ marginTop: 4, display: 'inline-block', backgroundColor: '#f1f5f9', color: '#475569', padding: '1px 6px', borderRadius: 4 }}>
+                      {t.tipo_ticket_nombre}
+                    </span>
+                  )}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   {(t.adjuntos_count || 0) > 0 && <span style={{ fontSize: 14 }}>📎</span>}
@@ -493,30 +766,52 @@ export const SoporteTicketsPage = () => {
               </div>
             </button>
           ))}
-          <p style={{ textAlign: 'center', color: '#94a3b8', fontSize: '0.8rem', marginTop: 4 }}>{tickets.length} ticket{tickets.length !== 1 ? 's' : ''}</p>
+          <p style={{ textAlign: 'center', color: '#94a3b8', fontSize: '0.8rem', marginTop: 4 }}>
+            {tickets.length} ticket{tickets.length !== 1 ? 's' : ''}
+            {tickets.length > FILAS_POR_PAGINA ? ` · página ${paginaSegura} de ${totalPaginas}` : ''}
+          </p>
+            </>
+          )}
         </div>
       ) : (
         /* ── Vista desktop: tabla ── */
+        <>
+          <PaginacionTickets
+            inicio={inicio}
+            total={tickets.length}
+            paginaSegura={paginaSegura}
+            totalPaginas={totalPaginas}
+            onAnterior={() => setPagina((p) => Math.max(1, p - 1))}
+            onSiguiente={() => setPagina((p) => Math.min(totalPaginas, p + 1))}
+          />
         <div style={{ overflowX: 'auto', background: '#fff', borderRadius: 10, boxShadow: '0 1px 3px rgba(0,0,0,.05)' }}>
+          {tickets.length === 0 ? (
+            <p style={{ padding: '32px', textAlign: 'center', color: '#9ca3af', margin: 0 }}>No hay tickets con los filtros seleccionados</p>
+          ) : (
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
               <tr style={{ background: '#f8fafc' }}>
-                {['Folio', 'Solicitante', 'Título', 'Tipo', 'Empresa/Área', 'Prioridad', 'Estado', 'Creación', 'Cierre', 'Acciones'].map((h) => (
+                {['Folio', 'Solicitante', 'Título', 'Tipo', 'Empresa / Depto.', 'Prioridad', 'Estado', 'Creación', 'Cierre', 'Acciones'].map((h) => (
                   <th key={h} style={{ textAlign: 'left', padding: '10px 12px', fontSize: 13, color: '#475569', borderBottom: '1px solid #e2e8f0' }}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {tickets.map((t) => (
+              {ticketsPagina.map((t) => (
                 <tr key={t.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                  <td style={{ padding: '10px 12px', fontFamily: 'monospace' }}>{t.folio}</td>
-                  <td style={{ padding: '10px 12px' }}>{t.nombre_solicitante}</td>
-                  <td style={{ padding: '10px 12px', maxWidth: 280 }}>
-                    <div style={{ fontWeight: 600 }}>{t.titulo}</div>
-                    <div style={{ fontSize: 12, color: '#64748b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.descripcion}</div>
+                  <td style={{ padding: '10px 12px' }}>
+                    <FolioCelda folio={t.folio} />
+                  </td>
+                  <td style={{ padding: '10px 12px' }}>
+                    <SolicitanteCelda nombre={t.nombre_solicitante} />
+                  </td>
+                  <td style={{ padding: '10px 12px' }}>
+                    <TituloCelda titulo={t.titulo} descripcion={t.descripcion} />
                   </td>
                   <td style={{ padding: '10px 12px' }}>{t.tipo_ticket_nombre || '—'}</td>
-                  <td style={{ padding: '10px 12px', fontSize: 13 }}>{t.empresa_nombre || '—'} / {t.departamento_nombre || '—'}</td>
+                  <td style={{ padding: '10px 12px' }}>
+                    <EmpresaDeptoCelda empresa={t.empresa_nombre} depto={t.departamento_nombre} />
+                  </td>
                   <td style={{ padding: '10px 12px' }}>
                     <span style={estiloPrioridad(t.prioridad)}>
                       {t.prioridad === 'critica' ? 'Crítica' : t.prioridad.charAt(0).toUpperCase() + t.prioridad.slice(1)}
@@ -542,7 +837,9 @@ export const SoporteTicketsPage = () => {
               ))}
             </tbody>
           </table>
+          )}
         </div>
+        </>
       )}
 
       {/* Modal/Bottom-sheet detalle */}
@@ -773,30 +1070,42 @@ export const SoporteTicketsPage = () => {
           <div style={sheetContainer} onClick={(e) => e.stopPropagation()}>
             <h2 style={{ marginTop: 0, marginBottom: 8, fontSize: '1.15rem', color: '#1e3a5f' }}>Nuevo ticket (Mantenimiento / Ventanas)</h2>
             <p style={{ marginTop: 0, marginBottom: 14, color: '#64748b', fontSize: '0.85rem' }}>
-              Solo personal de TI registra estos tickets (Mantenimiento / Ventanas). No aparecen en el portal público.
+              Registra el ticket personal de TI o Administrador. No aparecen en el portal público.
             </p>
+            {errorModalNuevo ? (
+              <p style={{ color: '#b91c1c', marginBottom: 12, fontSize: '0.85rem' }}>{errorModalNuevo}</p>
+            ) : null}
             {loadingCatalogoInterno || loadingEmpleadosInterno ? (
               <p style={{ color: '#64748b' }}>Cargando formulario…</p>
             ) : !(catalogoInterno?.clases?.length) ? (
-              <p style={{ color: '#b45309' }}>
-                No hay categorías de Mantenimiento o Ventanas activas. Configúralas en Administración → Soporte (el nombre de la clase debe incluir
-                «mantenimiento» o «ventana»).
-              </p>
+              <div style={{ color: '#b45309' }}>
+                <p style={{ marginTop: 0 }}>
+                  No hay categorías de Mantenimiento o Ventanas activas. Configúralas en Administración → Soporte (el nombre debe incluir
+                  «mantenimiento» o «ventana») y marca la categoría y sus tipos como activos.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void cargarFormularioInterno()}
+                  style={{ padding: '6px 12px', borderRadius: 6, border: '1px solid #f59e0b', background: '#fffbeb', cursor: 'pointer', fontWeight: 600 }}
+                >
+                  Reintentar carga
+                </button>
+              </div>
             ) : empleadosInterno.length === 0 ? (
               <p style={{ color: '#b45309' }}>
-                No hay personal de TI activo con departamento configurado (TI, Sistemas, etc.). Revisa Personal → departamento del colaborador.
+                No hay personal de TI ni administradores activos para registrar. Revisa Personal (departamento TI o rol Administrador).
               </p>
             ) : (
               <>
                 <label style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#334155', marginBottom: 6 }}>
-                  Personal de TI que registra *
+                  Quién registra el ticket *
                 </label>
                 <select
                   value={nuevoEmpleadoId}
                   onChange={(e) => setNuevoEmpleadoId(e.target.value)}
                   style={{ ...filtroSelectStyle, marginBottom: 12 }}
                 >
-                  <option value="">Selecciona quién de TI registra el ticket</option>
+                  <option value="">Selecciona quién registra (TI o Administrador)</option>
                   {empleadosInterno.map((e) => (
                     <option key={e.id} value={String(e.id)}>{e.nombre_completo}</option>
                   ))}

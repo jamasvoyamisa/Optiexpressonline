@@ -9,7 +9,7 @@ interface AsistenciaConEmpleado extends Asistencia {
   dispositivo?: Dispositivo;
 }
 
-const FILAS_POR_PAGINA = 50;
+const FILAS_POR_PAGINA = 25;
 
 export const AsistenciaPage = () => {
   const [checadas, setChecadas] = useState<AsistenciaConEmpleado[]>([]);
@@ -17,7 +17,8 @@ export const AsistenciaPage = () => {
   const [empleados, setEmpleados] = useState<Empleado[]>([]);
   const [loading, setLoading] = useState(true);
   const hoy = toMexicoDateString(new Date());
-  const [filtros, setFiltros] = useState({ empleado_id: '', dispositivo_id: '', fecha_inicio: hoy, fecha_fin: hoy });
+  const [filtros, setFiltros] = useState({ dispositivo_id: '', fecha_inicio: hoy, fecha_fin: hoy });
+  const [busquedaNombre, setBusquedaNombre] = useState('');
   const [pagina, setPagina] = useState(1);
   const filtrosRef = useRef(filtros);
   filtrosRef.current = filtros;
@@ -33,7 +34,6 @@ export const AsistenciaPage = () => {
     try {
       const params = new URLSearchParams();
       params.set('limit', '500');
-      if (f.empleado_id) params.append('empleado_id', f.empleado_id);
       if (f.dispositivo_id) params.append('dispositivo_id', f.dispositivo_id);
       if (f.fecha_inicio) params.append('fecha_inicio', f.fecha_inicio + 'T00:00:00');
       if (f.fecha_fin) params.append('fecha_fin', f.fecha_fin + 'T23:59:59');
@@ -150,10 +150,23 @@ export const AsistenciaPage = () => {
     return list.sort((a, b) => b.fechaSort.localeCompare(a.fechaSort) || a.empleadoNombre.localeCompare(b.empleadoNombre));
   }, [checadas, empleados]);
 
-  const totalPaginas = Math.max(1, Math.ceil(dayRows.length / FILAS_POR_PAGINA));
+  const dayRowsFiltrados = useMemo(() => {
+    const q = busquedaNombre.trim().toLowerCase();
+    if (!q) return dayRows;
+    return dayRows.filter(row =>
+      row.empleadoNombre.toLowerCase().includes(q) ||
+      row.numeroEmpleado.toLowerCase().includes(q)
+    );
+  }, [dayRows, busquedaNombre]);
+
+  const totalPaginas = Math.max(1, Math.ceil(dayRowsFiltrados.length / FILAS_POR_PAGINA));
   const paginaSegura = Math.min(pagina, totalPaginas);
   const inicio = (paginaSegura - 1) * FILAS_POR_PAGINA;
-  const dayRowsPagina = dayRows.slice(inicio, inicio + FILAS_POR_PAGINA);
+  const dayRowsPagina = dayRowsFiltrados.slice(inicio, inicio + FILAS_POR_PAGINA);
+
+  useEffect(() => {
+    setPagina(1);
+  }, [busquedaNombre]);
 
   useEffect(() => {
     setPagina(p => Math.min(p, totalPaginas));
@@ -192,36 +205,66 @@ export const AsistenciaPage = () => {
       {/* Filtros */}
       <div style={{ padding: '18px', backgroundColor: 'white', borderRadius: '8px', border: '1px solid #e5e7eb', marginBottom: '24px' }}>
         <h3 style={{ margin: '0 0 12px 0' }}>Filtros</h3>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px', marginBottom: '12px' }}>
-          <select value={filtros.empleado_id} onChange={(e) => setFiltros({ ...filtros, empleado_id: e.target.value })} style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}>
-            <option value="">Todos los empleados</option>
-            {empleados.map(emp => (
-              <option key={emp.id} value={emp.id}>{fmtNombreEmpleado(emp)}</option>
-            ))}
-          </select>
-          <select value={filtros.dispositivo_id} onChange={(e) => setFiltros({ ...filtros, dispositivo_id: e.target.value })} style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center' }}>
+          <input
+            type="search"
+            value={busquedaNombre}
+            onChange={(e) => setBusquedaNombre(e.target.value)}
+            placeholder="Buscar por nombre o no. empleado"
+            style={{ flex: '1 1 200px', minWidth: '180px', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
+          />
+          <select
+            value={filtros.dispositivo_id}
+            onChange={(e) => setFiltros({ ...filtros, dispositivo_id: e.target.value })}
+            style={{ flex: '1 1 180px', minWidth: '160px', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
+          >
             <option value="">Todos los dispositivos</option>
             {dispositivos.map(dev => (
               <option key={dev.id} value={dev.id}>{dev.nombre}</option>
             ))}
           </select>
-          <input type="date" value={filtros.fecha_inicio} onChange={(e) => setFiltros({ ...filtros, fecha_inicio: e.target.value })} style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} placeholder="Desde" />
-          <input type="date" value={filtros.fecha_fin} onChange={(e) => setFiltros({ ...filtros, fecha_fin: e.target.value })} style={{ padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} placeholder="Hasta" />
+          <input
+            type="date"
+            value={filtros.fecha_inicio}
+            onChange={(e) => setFiltros({ ...filtros, fecha_inicio: e.target.value })}
+            style={{ flex: '1 1 150px', minWidth: '140px', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
+          />
+          <input
+            type="date"
+            value={filtros.fecha_fin}
+            onChange={(e) => setFiltros({ ...filtros, fecha_fin: e.target.value })}
+            style={{ flex: '1 1 150px', minWidth: '140px', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
+          />
+          <button
+            type="button"
+            onClick={handleFiltros}
+            style={{
+              flex: '0 0 auto',
+              padding: '8px 20px',
+              backgroundColor: '#0ea5e9',
+              color: 'white',
+              border: 'none',
+              borderRadius: '5px',
+              cursor: 'pointer',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Aplicar Filtros
+          </button>
         </div>
-        <button onClick={handleFiltros} style={{ padding: '8px 20px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>
-          Aplicar Filtros
-        </button>
       </div>
 
       {/* Tabla de Asistencia agrupada */}
-      {dayRows.length === 0 ? (
-        <p style={{ color: '#666', textAlign: 'center', padding: '40px 0' }}>No hay checadas registradas.</p>
+      {dayRowsFiltrados.length === 0 ? (
+        <p style={{ color: '#666', textAlign: 'center', padding: '40px 0' }}>
+          {dayRows.length === 0 ? 'No hay checadas registradas.' : 'Ningún empleado coincide con la búsqueda.'}
+        </p>
       ) : (
         <div style={{ overflowX: 'auto' }}>
-          {dayRows.length > FILAS_POR_PAGINA && (
+          {dayRowsFiltrados.length > FILAS_POR_PAGINA && (
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', marginBottom: '12px', padding: '0 4px' }}>
               <span style={{ color: '#555', fontSize: '0.9rem' }}>
-                Mostrando {inicio + 1}–{Math.min(inicio + FILAS_POR_PAGINA, dayRows.length)} de {dayRows.length} registros
+                Mostrando {inicio + 1}–{Math.min(inicio + FILAS_POR_PAGINA, dayRowsFiltrados.length)} de {dayRowsFiltrados.length} registros
               </span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <button

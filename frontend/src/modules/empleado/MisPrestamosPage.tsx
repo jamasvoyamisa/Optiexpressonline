@@ -27,6 +27,7 @@ const ESTADO_LABEL: Record<string, string> = {
   pendiente: 'Pendiente',
   aprobada_departamento: 'Autorizada por departamento',
   depositado: 'Depositado',
+  finalizado: 'Finalizado',
   rechazada: 'Rechazada',
   cancelada: 'Cancelada',
 };
@@ -35,6 +36,7 @@ const ESTADO_STYLE: Record<string, { bg: string; color: string }> = {
   pendiente: { bg: '#fef3c7', color: '#92400e' },
   aprobada_departamento: { bg: '#e0f2fe', color: '#0369a1' },
   depositado: { bg: '#d1fae5', color: '#065f46' },
+  finalizado: { bg: '#ecfdf5', color: '#047857' },
   rechazada: { bg: '#fee2e2', color: '#991b1b' },
   cancelada: { bg: '#f3f4f6', color: '#6b7280' },
 };
@@ -113,7 +115,9 @@ const contarQuincenasCalendario = (fechaAprobacion: Date): number => {
 
 /** Calcula el saldo restante. Usa saldo_restante del API si viene; si no, lo calcula en el cliente. */
 const calcularSaldoRestante = (sol: SolicitudPrestamo): number | null => {
-  if ((sol.estado || '').toLowerCase() !== 'depositado') return null;
+  const est = (sol.estado || '').toLowerCase();
+  if (est === 'finalizado') return 0;
+  if (est !== 'depositado') return null;
   const monto = parseFloat(String(sol.monto));
   if (isNaN(monto) || monto <= 0) return null;
   const desdeServidor = sol.saldo_restante != null && sol.saldo_restante !== '';
@@ -271,8 +275,15 @@ export const MisPrestamosPage = () => {
     pendiente: '⏳',
     aprobada_departamento: '✅',
     depositado: '💰',
+    finalizado: '✔️',
     rechazada: '❌',
     cancelada: '🚫',
+  };
+
+  const prestamoLiquidado = (sol: SolicitudPrestamo) => {
+    if (sol.estado === 'finalizado') return true;
+    const saldo = calcularSaldoRestante(sol);
+    return sol.estado === 'depositado' && saldo !== null && saldo <= 0;
   };
 
   return (
@@ -294,7 +305,9 @@ export const MisPrestamosPage = () => {
               <div style={{ color: 'rgba(255,255,255,0.65)', fontSize: '0.82rem', marginTop: 4, marginBottom: 12 }}>
                 {prestamoActivo.plazo_meses} quincenas · {prestamoActivo.descuento_quincenal ? formatMonto(prestamoActivo.descuento_quincenal) + '/quincena' : ''}
               </div>
-              {saldoActivo !== null && pctActivo !== null && (
+              {prestamoActivo && prestamoLiquidado(prestamoActivo) ? (
+                <div style={{ marginBottom: 14, color: '#bbf7d0', fontWeight: 700, fontSize: '0.9rem' }}>Préstamo finalizado</div>
+              ) : saldoActivo !== null && pctActivo !== null ? (
                 <div style={{ marginBottom: 14 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
                     <span style={{ color: 'rgba(255,255,255,0.7)', fontSize: '0.75rem' }}>Saldo restante</span>
@@ -304,7 +317,7 @@ export const MisPrestamosPage = () => {
                     <div style={{ height: '100%', borderRadius: 6, width: `${pctActivo}%`, backgroundColor: pctActivo > 60 ? '#f87171' : pctActivo > 25 ? '#fbbf24' : '#4ade80', transition: 'width 0.4s' }} />
                   </div>
                 </div>
-              )}
+              ) : null}
               <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 20, padding: '5px 14px' }}>
                 <span>{ESTADO_ICON[prestamoActivo.estado] ?? '•'}</span>
                 <span style={{ color: 'white', fontSize: '0.82rem', fontWeight: 700 }}>{ESTADO_LABEL[prestamoActivo.estado] ?? prestamoActivo.estado}</span>
@@ -379,7 +392,8 @@ export const MisPrestamosPage = () => {
             const saldo = calcularSaldoRestante(sol);
             const pct = saldo !== null ? Math.round((saldo / parseFloat(String(sol.monto))) * 100) : null;
             const barColor = pct !== null ? (pct > 60 ? '#ef4444' : pct > 25 ? '#f59e0b' : '#22c55e') : null;
-            const esActivo = ['pendiente', 'aprobada_departamento', 'depositado'].includes(sol.estado);
+            const liquidado = prestamoLiquidado(sol);
+            const esActivo = ['pendiente', 'aprobada_departamento', 'depositado'].includes(sol.estado) && !liquidado;
             return (
               <div key={sol.id} style={{ backgroundColor: 'white', borderRadius: 16, border: `1.5px solid ${esActivo ? '#bae6fd' : '#e5e7eb'}`, padding: '16px', boxShadow: esActivo ? '0 2px 10px rgba(14,165,233,0.12)' : '0 1px 4px rgba(0,0,0,0.05)' }}>
                 {/* Header de la card */}
@@ -402,8 +416,10 @@ export const MisPrestamosPage = () => {
                   </div>
                 </div>
 
-                {/* Barra de progreso de saldo */}
-                {saldo !== null && pct !== null && (
+                {/* Saldo / liquidado */}
+                {liquidado ? (
+                  <div style={{ marginBottom: 12, fontSize: '0.82rem', fontWeight: 700, color: '#047857' }}>Finalizado — saldo pagado</div>
+                ) : saldo !== null && pct !== null ? (
                   <div style={{ marginBottom: 12 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
                       <span style={{ fontSize: '0.7rem', color: '#64748b' }}>Saldo restante</span>
@@ -413,7 +429,7 @@ export const MisPrestamosPage = () => {
                       <div style={{ height: '100%', borderRadius: 6, width: `${pct}%`, backgroundColor: barColor!, transition: 'width 0.4s' }} />
                     </div>
                   </div>
-                )}
+                ) : null}
 
                 {/* Info extra */}
                 {sol.motivo && <div style={{ fontSize: '0.82rem', color: '#475569', marginBottom: 8, fontStyle: 'italic' }}>"{sol.motivo}"</div>}

@@ -51,9 +51,7 @@ def listar(
         limit=limit,
     )
     return [
-        schemas.SolicitudPrestamoResponse.model_validate(s).model_copy(
-            update={"saldo_restante": service.calcular_saldo_restante(s)}
-        )
+        service.to_response(db, s)
         for s in sols
     ]
 
@@ -73,9 +71,7 @@ def crear(
             empleado_id=empleado_id,
             mensaje=f"Solicitud de préstamo creada id={sol.id} monto={sol.monto}",
         )
-        return schemas.SolicitudPrestamoResponse.model_validate(sol).model_copy(
-            update={"saldo_restante": service.calcular_saldo_restante(sol)}
-        )
+        return service.to_response(db, sol)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -106,9 +102,7 @@ def crear_rh(
             empleado_id=actor,
             mensaje=f"Solicitud de préstamo (RH) id={sol.id} para empleado_id={sol.empleado_id} monto={sol.monto}",
         )
-        return schemas.SolicitudPrestamoResponse.model_validate(sol).model_copy(
-            update={"saldo_restante": service.calcular_saldo_restante(sol)}
-        )
+        return service.to_response(db, sol)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -130,9 +124,7 @@ def pendientes_mi_departamento(
         jefe_id = int(current["user_id"])
         sols = service.listar_pendientes_departamento(db, jefe_id=jefe_id, skip=skip, limit=limit)
     return [
-        schemas.SolicitudPrestamoResponse.model_validate(s).model_copy(
-            update={"saldo_restante": service.calcular_saldo_restante(s)}
-        )
+        service.to_response(db, s)
         for s in sols
     ]
 
@@ -152,9 +144,7 @@ def pendientes_deposito(
         )
     sols = service.listar_pendientes_deposito(db, skip=skip, limit=limit)
     return [
-        schemas.SolicitudPrestamoResponse.model_validate(s).model_copy(
-            update={"saldo_restante": service.calcular_saldo_restante(s)}
-        )
+        service.to_response(db, s)
         for s in sols
     ]
 
@@ -175,9 +165,7 @@ def solicitudes_pendientes(
         jefe_id = int(current["user_id"])
         sols = service.listar_pendientes_departamento(db, jefe_id=jefe_id, skip=skip, limit=limit)
     return [
-        schemas.SolicitudPrestamoResponse.model_validate(s).model_copy(
-            update={"saldo_restante": service.calcular_saldo_restante(s)}
-        )
+        service.to_response(db, s)
         for s in sols
     ]
 
@@ -194,9 +182,7 @@ def solicitudes_pendientes_rh(
         raise HTTPException(status_code=403, detail="Solo RH o Director pueden acceder a este listado")
     sols = service.listar_pendientes_confirmacion_rh(db, skip=skip, limit=limit)
     return [
-        schemas.SolicitudPrestamoResponse.model_validate(s).model_copy(
-            update={"saldo_restante": service.calcular_saldo_restante(s)}
-        )
+        service.to_response(db, s)
         for s in sols
     ]
 
@@ -239,9 +225,7 @@ def solicitudes_mi_area(
             limit=limit,
         )
     return [
-        schemas.SolicitudPrestamoResponse.model_validate(s).model_copy(
-            update={"saldo_restante": service.calcular_saldo_restante(s)}
-        )
+        service.to_response(db, s)
         for s in sols
     ]
 
@@ -261,9 +245,7 @@ def obtener(
     estado_sol = getattr(sol.estado, "value", str(sol.estado)).lower()
     if estado_sol == "cancelada" and sol.empleado_id != user_id and not _puede_gestion_rh_prestamos(current):
         raise HTTPException(status_code=404, detail="Solicitud no encontrada")
-    return schemas.SolicitudPrestamoResponse.model_validate(sol).model_copy(
-        update={"saldo_restante": service.calcular_saldo_restante(sol)}
-    )
+    return service.to_response(db, sol)
 
 
 @router.put("/{solicitud_id}", response_model=schemas.SolicitudPrestamoResponse)
@@ -282,9 +264,7 @@ def actualizar(
     result = service.actualizar_solicitud(db, solicitud_id, data)
     if not result:
         raise HTTPException(status_code=400, detail="La solicitud no está pendiente o no se pudo actualizar")
-    return schemas.SolicitudPrestamoResponse.model_validate(result).model_copy(
-        update={"saldo_restante": service.calcular_saldo_restante(result)}
-    )
+    return service.to_response(db, result)
 
 
 @router.post("/{solicitud_id}/aprobar-departamento", response_model=schemas.SolicitudPrestamoResponse)
@@ -334,9 +314,7 @@ def aprobar_departamento(
         empleado_id=aprobador_id,
         mensaje=f"Préstamo id={solicitud_id} autorización departamento: {'aprobada' if data.aprobado else 'rechazada'}",
     )
-    return schemas.SolicitudPrestamoResponse.model_validate(result).model_copy(
-        update={"saldo_restante": service.calcular_saldo_restante(result)}
-    )
+    return service.to_response(db, result)
 
 
 @router.post("/{solicitud_id}/depositar", response_model=schemas.SolicitudPrestamoResponse)
@@ -373,9 +351,7 @@ def depositar(
         empleado_id=depositador_id,
         mensaje=f"Préstamo id={solicitud_id} depósito registrado ref={data.referencia_bancaria}",
     )
-    return schemas.SolicitudPrestamoResponse.model_validate(result).model_copy(
-        update={"saldo_restante": service.calcular_saldo_restante(result)}
-    )
+    return service.to_response(db, result)
 
 
 @router.post("/{solicitud_id}/aprobar", response_model=schemas.SolicitudPrestamoResponse)
@@ -414,9 +390,7 @@ def confirmar_rh(
         empleado_id=rh_uid,
         mensaje=f"Préstamo id={solicitud_id} confirmado en nómina por RH",
     )
-    return schemas.SolicitudPrestamoResponse.model_validate(result).model_copy(
-        update={"saldo_restante": service.calcular_saldo_restante(result)}
-    )
+    return service.to_response(db, result)
 
 
 @router.delete("/{solicitud_id}", status_code=status.HTTP_204_NO_CONTENT)
