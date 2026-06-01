@@ -23,11 +23,16 @@ from .schemas import (
     DetalleNominaCreate,
     DetalleNominaResponse,
     CalcularNominaResponse,
+    FiscalApiStatusResponse,
+    TimbrarPeriodoResponse,
+    TimbrarDetalleResponse,
 )
 from .service import NominaService
 from .calculo_prueba import calcular_periodo_prueba
 from .calculo_nomina import calcular_periodo_nomina
 from .export_nomina import generar_csv_periodo
+from .fiscalapi_client import fiscalapi_status_publico
+from .timbrado_service import timbrar_detalle_empleado, timbrar_periodo
 
 router = APIRouter(
     prefix=f"{settings.API_V1_PREFIX}/nomina",
@@ -172,6 +177,50 @@ def actualizar_periodo(
     if not periodo:
         raise HTTPException(status_code=404, detail="Periodo no encontrado.")
     return periodo
+
+
+@router.get("/fiscalapi/status", response_model=FiscalApiStatusResponse)
+def fiscalapi_status(
+    _ctx: dict = Depends(require_superuser),
+):
+    """
+    Estado de integración FiscalAPI (sandbox/producción).
+    No expone credenciales. Requiere NOMINA_FISCALAPI_ENABLED + API key en .env.
+    """
+    return fiscalapi_status_publico()
+
+
+@router.post("/periodos/{periodo_id}/timbrar-prueba", response_model=TimbrarPeriodoResponse)
+def timbrar_periodo_prueba_endpoint(
+    periodo_id: int,
+    _ctx: dict = Depends(require_superuser),
+    db: Session = Depends(get_db),
+):
+    """
+    Timbra todos los recibos del periodo vía FiscalAPI **sandbox** (pruebas).
+    Sin validez fiscal. Requiere periodo calculada y credenciales en .env.
+    """
+    try:
+        return timbrar_periodo(db, periodo_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post(
+    "/periodos/{periodo_id}/detalles/{empleado_id}/timbrar-prueba",
+    response_model=TimbrarDetalleResponse,
+)
+def timbrar_detalle_prueba_endpoint(
+    periodo_id: int,
+    empleado_id: int,
+    _ctx: dict = Depends(require_superuser),
+    db: Session = Depends(get_db),
+):
+    """Timbra un solo recibo (reintento o prueba unitaria)."""
+    try:
+        return timbrar_detalle_empleado(db, periodo_id, empleado_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @router.post("/periodos/{periodo_id}/calcular", response_model=CalcularNominaResponse)

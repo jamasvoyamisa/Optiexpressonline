@@ -1,6 +1,6 @@
 // Avisos: imágenes de la carpeta images/Avisos/
 const avisos = [
-    { imagen: 'images/Avisos/cumpleanos-mayo.jpg', titulo: 'Cumpleaños mayo' },
+    { imagen: 'images/Avisos/cumpleaños-junio.jpeg', titulo: 'Cumpleaños junio' },
     { imagen: 'images/Avisos/dias-feriados-oficiales.jpg', titulo: 'Días Feriados Oficiales' },
     { imagen: 'images/Avisos/dias-feriados-no-oficiales.jpg', titulo: 'Días Feriados No Oficiales' }
 ];

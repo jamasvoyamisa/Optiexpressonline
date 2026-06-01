@@ -54,9 +54,14 @@ function compartirWhatsApp(pdfUrl, titulo) {
     // Mensaje mejorado con emojis y formato claro
     const mensaje = `📄 *${titulo}*\n\nTe comparto el catálogo de Optiexpress.\n\n🔗 Descarga el PDF aquí:\n${urlCompleta}\n\n_Optiexpress - Distribuidora mayorista de artículos ópticos_`;
     
-    // Usar api.whatsapp.com que es más confiable para reconocer enlaces
-    const urlWhatsApp = `https://api.whatsapp.com/send?text=${encodeURIComponent(mensaje)}`;
-    window.open(urlWhatsApp, '_blank');
+    // Abrir la app de WhatsApp (no WhatsApp Web en el navegador)
+    const urlWhatsApp = `whatsapp://send?text=${encodeURIComponent(mensaje)}`;
+    const enlace = document.createElement('a');
+    enlace.href = urlWhatsApp;
+    enlace.rel = 'noopener noreferrer';
+    document.body.appendChild(enlace);
+    enlace.click();
+    document.body.removeChild(enlace);
 }
 
 // Función para renderizar catálogos

@@ -210,6 +210,35 @@ class CalcularNominaResponse(BaseModel):
     totales: dict
 
 
+class FiscalApiStatusResponse(BaseModel):
+    habilitado: bool
+    sandbox: bool
+    api_url: str
+    tiene_csd: bool
+    modo: str
+    mensaje: str
+
+
+class TimbrarDetalleResponse(BaseModel):
+    empleado_id: int
+    ok: bool
+    cfdi_uuid: Optional[str] = None
+    fiscalapi_invoice_id: Optional[str] = None
+    sandbox: bool = True
+    ya_timbrado: bool = False
+    mensaje: Optional[str] = None
+
+
+class TimbrarPeriodoResponse(BaseModel):
+    periodo_id: int
+    estado: str
+    timbrados: int
+    fallidos: int
+    exitos: List[dict]
+    fallos: List[dict]
+    sandbox: bool = True
+
+
 class CatalogosResponse(BaseModel):
     tipos_contrato: List[CatalogoItem]
     tipos_regimen: List[CatalogoItem]

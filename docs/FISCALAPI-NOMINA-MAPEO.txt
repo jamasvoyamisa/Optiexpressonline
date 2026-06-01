@@ -1,0 +1,260 @@
+================================================================================
+  OPTIEXPRESS — MAPEO FISCALAPI vs DATOS ACTUALES DE NÓMINA
+  Referencia: FiscalAPI SDK Python (ejemplos-facturas-de-nomina.py)
+  Generado: junio 2026
+================================================================================
+
+RESUMEN EJECUTIVO
+-----------------
+Integración timbrado con FiscalAPI: VIABLE para nómina ordinaria básica.
+
+  Cobertura de datos existentes ........ ~70 % (emisor, receptor, complemento base)
+  Cobertura de cálculo v1 .............. ~55 % (falta otros pagos / códigos SAT finos)
+  Código de integración PAC .......... 0 % (no hay cliente HTTP ni builder JSON)
+
+  Esfuerzo estimado (sandbox, nómina ordinaria, 1 empresa):
+    - Builder JSON + servicio timbrado ........ 1–1.5 semanas
+    - Endpoints + UI "Timbrar periodo" ........ 0.5–1 semana
+    - Config FiscalAPI (API key, CSD) ......... 0.5 semana
+    - Pruebas contador / revisión E 2026 ...... 1 semana
+    TOTAL ..................................... 3–4 semanas (sin ampliar motor de cálculo)
+
+
+================================================================================
+1. FLUJO PROPUESTO
+================================================================================
+
+  1. Periodo en estado "calculada" (calcular_periodo_nomina ya existe)
+  2. Por cada detalle_nomina_empleado → build_fiscalapi_invoice(...)
+  3. POST FiscalAPI client.invoices.create(invoice)
+  4. Guardar cfdi_uuid, URLs XML/PDF, o cfdi_error
+  5. Si todos OK → periodo.estado = "timbrada"
+
+
+================================================================================
+2. MAPEO CAMPO A CAMPO — CFDI / INVOICE
+================================================================================
+
+  Campo FiscalAPI              Origen Optiexpress                    Estado
+  ---------------------------------------------------------------------------
+  version_code "4.0"           constante                           OK
+  type_code "N"                constante                           OK
+  series                       config nueva o "NOM"                FALTA
+  date                         now() o periodo.fecha_fin           FALTA regla
+  payment_method_code "PUE"    constante                           OK
+  currency_code "MXN"          constante                           OK
+  export_code "01"             constante                           OK
+  expedition_zip_code          empresa_nomina_config.              PARCIAL
+                               codigo_postal_expedicion
+                               o empresa.codigo_postal             (UI no expone CP expedición)
+
+  --- EMISOR (issuer) ---
+  tin                          empresa.rfc                         OK si capturado
+  legal_name                   empresa.nombre                      OK
+  tax_regime_code              empresa.regimen_fiscal              PARCIAL
+                               o empresa_nomina_config.            (3 vs 4 chars SAT)
+                               regimen_fiscal_sat
+  employer_registration        empresa_nomina_config.              OK en Config
+                               registro_patronal
+  tax_credentials (CSD)        NO en BD                            FALTA
+                               → subir a FiscalAPI o enviar base64
+                                 por timbrado (modo valores)
+
+  --- RECEPTOR (recipient) ---
+  tin                          empleado.rfc                        OK si capturado
+  legal_name                   nombre + apellidos                  OK
+  zip_code                     empleado.cp                         PARCIAL
+                                                                 (validar catálogo SAT)
+  tax_regime_code "605"        constante sueldos                     FALTA en código
+  cfdi_use_code "CN01"         constante nómina                    FALTA en código
+
+  --- employee_data (receptor) ---
+  curp                         empleado.curp                       OK
+  social_security_number       empleado.nss                        OK
+  labor_relation_start_date    empleado.fecha_ingreso              OK
+  seniority                    calcular antigüedad (formato P…)    FALTA función
+  sat_contract_type_id         empleado_nomina.tipo_contrato       OK (default 01)
+  sat_tax_regime_type_id       empleado_nomina.regimen_tipo        OK (default 02)
+  employee_number              empleado.numero_empleado            OK
+  department                   departamento.nombre                 OK
+  position                     puesto.nombre                       OK
+  sat_job_risk_id              empleado_nomina.riesgo_puesto       OK
+  sat_payment_periodicity_id   periodo.periodicidad                OK
+  sat_bank_id                  empleado_nomina.banco_clave         OK si capturado
+  base_salary_for_contributions  SBC del periodo (calc interno)    PARCIAL
+                               (no se persiste en detalle; hay que recalcular o guardar)
+  integrated_daily_salary      empleado_nomina.                    OK
+                               salario_diario_integrado
+  sat_payroll_state_id         empleado_nomina.                    VERIFICAR
+                               entidad_federativa                  (catálogo 2 vs 3 letras)
+
+
+================================================================================
+3. MAPEO — COMPLEMENTO NÓMINA (PayrollComplement)
+================================================================================
+
+  Campo FiscalAPI              Origen Optiexpress                    Estado
+  ---------------------------------------------------------------------------
+  version "1.2"                constante                           OK
+  payroll_type_code            periodo.tipo (O/E)                  OK
+  payment_date                 NO en periodo                       FALTA
+                               (usar fecha_fin o campo nuevo)
+  initial_payment_date         periodo.fecha_inicio                OK
+  final_payment_date           periodo.fecha_fin                   OK
+  days_paid                    detalle.dias_pagados                OK
+
+  --- PERCEPCIONES (earnings) ---
+  earning_type_code            percepciones_json[].clave             OK (001, etc.)
+  code                         percepciones_json[].code            FALTA
+                               (FiscalAPI pide código interno por concepto)
+  concept                      percepciones_json[].concepto          OK
+  taxed_amount                 importe_gravado                     OK
+  exempt_amount                importe_exento                      OK (hoy siempre 0)
+
+  --- DEDUCCIONES (deductions) ---
+  deduction_type_code          deducciones_json[].clave            REVISAR
+                               Optiexpress usa 021 IMSS;           (ejemplo FiscalAPI usa 001)
+                               SAT c_TipoDeduccion 001 = Seguridad social
+  code                         deducciones_json[].code             FALTA
+  concept                      deducciones_json[].concepto         OK
+  amount                       importe                             OK
+
+  --- OTROS PAGOS (other_payments) — OBLIGATORIO para subsidio ---
+  other_payment_type_code "002"  constante subsidio al empleo        FALTA
+  subsidy_caused               detalle.subsidio_causado            OK en BD
+                               (no se envía hoy; hay que armar nodo)
+
+
+================================================================================
+4. JSON INTERNO ACTUAL (calculo_nomina.py) vs FISCALAPI
+================================================================================
+
+  Percepción ejemplo actual:
+    { "clave": "001", "tipo": "percepcion", "concepto": "...",
+      "importe_gravado": 8500.00, "importe_exento": 0 }
+
+  Deducción ejemplo actual:
+    { "clave": "002", "tipo": "deduccion", "concepto": "ISR (...)",
+      "importe": 450.00 }
+
+  Ajuste mínimo para timbrar:
+    - Renombrar / duplicar en builder: clave → earning_type_code / deduction_type_code
+    - Agregar "code" interno por línea (ej. secuencial "1001", "5001")
+    - Crear other_payments desde subsidio_causado cuando > 0
+    - Validar revisión E 2026: percepción 038 solo gravada; subsidio máx $628
+
+
+================================================================================
+5. CONFIGURACIÓN — CAMBIOS SUGERIDOS EN BD
+================================================================================
+
+  empresa_nomina_config (hoy pensado para Facturama):
+    facturama_user              → reemplazar/ampliar: fiscalapi_tenant, fiscalapi_api_key
+    facturama_password_encrypted   (o variables de entorno en servidor)
+    codigo_postal_expedicion    → exponer en UI Configuración (hoy no visible)
+    registro_patronal           → OK
+
+  detalle_nomina_empleado (timbrado):
+    cfdi_uuid, cfdi_xml_url, cfdi_pdf_url, cfdi_error  → ya existen, sin uso
+
+  Opcional:
+    fiscalapi_invoice_id        ID devuelto por FiscalAPI para cancelar/consultar
+    periodo.fecha_pago          para payment_date del complemento
+
+
+================================================================================
+6. MODOS FISCALAPI
+================================================================================
+
+  A) Facturación por VALORES (recomendado para arranque)
+     - Enviar RFC, nombres, CSD en cada request (como el ejemplo del SDK)
+     - No requiere sincronizar catálogo Person en FiscalAPI
+     - Más payload por request
+
+  B) Facturación por REFERENCIAS
+     - Crear emisor/receptor/empleado en FiscalAPI (UUIDs)
+     - Timbrar con issuer.id / recipient.id
+     - Requiere sync al alta/baja de empleados y empresas
+     - Mejor a largo plazo para volumen alto
+
+
+================================================================================
+7. BRECHAS DE CÁLCULO (afectan timbrado aunque exista el PAC)
+================================================================================
+
+  Estos temas NO los resuelve FiscalAPI; hay que completarlos en Optiexpress
+  antes de timbrar recibos reales:
+
+  [ ] Subsidio al empleo en other_payments (dato existe, no se emite)
+  [ ] Separar gravado/exento correctamente por tipo de percepción
+  [ ] IMSS: clave deducción SAT correcta + desglose por ramo (opcional)
+  [ ] INFONAVIT: factor vs monto fijo
+  [ ] Horas extra, faltas, incidencias → percepciones/deducciones
+  [ ] Nómina extraordinaria (aguinaldo, finiquito) — ejemplos 7–9 en SDK
+  [ ] Incapacidades — ejemplo 5 en SDK (CFDI distinto o nodo disability)
+  [ ] Validar totales: Comprobante.Total = suma percepciones - deducciones + otros pagos
+
+
+================================================================================
+8. CHECKLIST IMPLEMENTACIÓN (orden sugerido)
+================================================================================
+
+  Fase A — Infra PAC
+  [ ] Cuenta FiscalAPI sandbox + API key + tenant
+  [ ] CSD de prueba cargado (o certificados del ejemplo)
+  [ ] Variables: FISCALAPI_API_URL, FISCALAPI_API_KEY, FISCALAPI_TENANT
+  [ ] Migración: campos fiscalapi_* en empresa_nomina_config (opcional)
+
+  Fase B — Builder
+  [ ] app/modules/nomina/fiscalapi_client.py (httpx o fiscalapi-python)
+  [ ] app/modules/nomina/cfdi_builder.py → Invoice desde DetalleNominaEmpleado
+  [ ] Función antigüedad SAT (seniority)
+  [ ] Validaciones pre-timbrado (RFC, CP, NSS, salario, registro patronal)
+
+  Fase C — API
+  [ ] POST /nomina/periodos/{id}/timbrar
+  [ ] POST /nomina/periodos/{id}/detalles/{emp_id}/timbrar (reintento)
+  [ ] GET  /nomina/periodos/{id}/detalles/{emp_id}/recibo (PDF/XML)
+
+  Fase D — UI
+  [ ] Botón "Timbrar" en NominaPage (periodo calculada)
+  [ ] Estado timbrado por empleado + errores
+  [ ] Config: CP expedición + credenciales FiscalAPI
+
+  Fase E — Empleado
+  [ ] Mis nóminas / descarga recibo (portal)
+
+
+================================================================================
+9. COMPARACIÓN CON FACTURAMA (decisión PAC)
+================================================================================
+
+  Optiexpress hoy modela facturama_user/password en empresa_nomina_config.
+  FiscalAPI usa API key + tenant (modelo distinto, mismo rol: PAC).
+
+  El builder de JSON/complemento es 90 % igual entre PACs; solo cambia:
+    - URL base y autenticación
+    - Formato exacto del JSON (FiscalAPI Invoice vs Facturama cfdi JSON)
+    - IDs de respuesta y descarga de archivos
+
+  Recomendación: abstraer capa "PacNominaProvider" con implementación FiscalAPI
+  primero; Facturama como alternativa si ya tienen contrato.
+
+
+================================================================================
+10. CONCLUSIÓN
+================================================================================
+
+  Los modelos empleado_nomina + detalle_nomina_empleado + personal/empresa
+  cubren la mayoría de campos del ejemplo "Nómina ordinaria" de FiscalAPI.
+
+  Lo que falta NO es tanto schema de BD como:
+    1) Servicio de timbrado + mapper JSON
+    2) Otros pagos (subsidio) y códigos internos por concepto
+    3) Config PAC y CSD
+    4) Completar validaciones y reglas de cálculo para producción
+
+  Distancia hasta timbrado de PRUEBA en sandbox: ~3 semanas dev.
+  Distancia hasta nómina de PRODUCCIÓN confiable: + cálculos + contador (+2–3 meses).
+
+================================================================================

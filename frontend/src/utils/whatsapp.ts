@@ -1,9 +1,13 @@
 /**
- * Enlaces wa.me para abrir WhatsApp (app o Web) con mensaje prellenado.
- * El envío lo confirma el usuario en WhatsApp.
+ * Enlaces whatsapp:// para abrir la aplicación de WhatsApp (escritorio o móvil)
+ * con mensaje prellenado. El envío lo confirma el usuario en WhatsApp.
  */
 
-/** Dígitos internacionales sin + (ej. 5215512345678) para https://wa.me/… */
+function truncarTextoWhatsApp(texto: string): string {
+  return texto.length > 3500 ? `${texto.slice(0, 3497)}...` : texto;
+}
+
+/** Dígitos internacionales sin + (ej. 5215512345678) para whatsapp://send?phone=… */
 export function normalizarTelefonoWhatsAppMexico(telefono: string | null | undefined): string | null {
   if (!telefono || !String(telefono).trim()) return null;
   const d = String(telefono).replace(/\D/g, '');
@@ -16,8 +20,17 @@ export function normalizarTelefonoWhatsAppMexico(telefono: string | null | undef
 }
 
 export function construirUrlWhatsApp(numeroInternacionalSinMas: string, texto: string): string {
-  const t = texto.length > 3500 ? `${texto.slice(0, 3497)}...` : texto;
-  return `https://wa.me/${numeroInternacionalSinMas}?text=${encodeURIComponent(t)}`;
+  const t = truncarTextoWhatsApp(texto);
+  return `whatsapp://send?phone=${numeroInternacionalSinMas}&text=${encodeURIComponent(t)}`;
+}
+
+function abrirEnlaceWhatsApp(url: string): void {
+  const a = document.createElement('a');
+  a.href = url;
+  a.rel = 'noopener noreferrer';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 }
 
 export function mensajeTicketSoporteWhatsapp(opts: {
@@ -54,6 +67,5 @@ export function mensajeTicketSoporteWhatsapp(opts: {
 }
 
 export function abrirWhatsAppConMensaje(numeroInternacionalSinMas: string, texto: string): void {
-  const url = construirUrlWhatsApp(numeroInternacionalSinMas, texto);
-  window.open(url, '_blank', 'noopener,noreferrer');
+  abrirEnlaceWhatsApp(construirUrlWhatsApp(numeroInternacionalSinMas, texto));
 }

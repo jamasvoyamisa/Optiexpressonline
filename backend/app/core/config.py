@@ -25,6 +25,20 @@ class Settings(BaseSettings):
     # Cálculo fiscal de prueba (POST .../periodos/{id}/calcular-prueba). Solo activar en local;
     # en producción debe ser false (valores ISR/IMSS ilustrativos).
     NOMINA_CALCULO_PRUEBAS: bool = False
+
+    # ── FiscalAPI (timbrado nómina — sandbox por defecto) ─────────────────
+    # Activar solo cuando tengas cuenta en https://test.fiscalapi.com
+    NOMINA_FISCALAPI_ENABLED: bool = False
+    FISCALAPI_API_URL: str = "https://test.fiscalapi.com"
+    FISCALAPI_API_KEY: str = ""
+    FISCALAPI_TENANT: str = ""
+    # Certificados CSD de prueba (base64) — opcional si el emisor ya está en FiscalAPI
+    FISCALAPI_CSD_CER_BASE64: str = ""
+    FISCALAPI_CSD_KEY_BASE64: str = ""
+    FISCALAPI_CSD_PASSWORD: str = ""
+    FISCALAPI_ORIGIN_EMPLOYER_TIN: str = ""
+    # Bloquea timbrado contra live.fiscalapi.com salvo opt-in explícito
+    FISCALAPI_ALLOW_LIVE: bool = False
     # Si true, restringe login/refresh a Administrador, Gerente o Supervisor (bloqueo temporal).
     LOGIN_MAINTENANCE_RESTRICTED: bool = False
 

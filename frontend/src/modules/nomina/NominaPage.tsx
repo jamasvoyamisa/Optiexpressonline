@@ -38,6 +38,17 @@ interface DetalleNomina {
   subsidio_causado?: string;
   percepciones_json?: string;
   deducciones_json?: string;
+  cfdi_uuid?: string;
+  cfdi_error?: string;
+}
+
+interface FiscalApiStatus {
+  habilitado: boolean;
+  sandbox: boolean;
+  api_url: string;
+  tiene_csd: boolean;
+  modo: string;
+  mensaje: string;
 }
 
 interface ConceptoLinea {
@@ -117,6 +128,8 @@ export const NominaPage = () => {
   });
   const [creandoPeriodo, setCreandoPeriodo] = useState(false);
   const [calculandoId, setCalculandoId] = useState<number | null>(null);
+  const [timbrandoId, setTimbrandoId] = useState<number | null>(null);
+  const [fiscalApi, setFiscalApi] = useState<FiscalApiStatus | null>(null);
 
   const [detallePeriodoId, setDetallePeriodoId] = useState<number | null>(null);
   const [detalles, setDetalles] = useState<DetalleNomina[]>([]);
@@ -127,12 +140,14 @@ export const NominaPage = () => {
     const init = async () => {
       setLoading(true);
       try {
-        const [catRes, empRes] = await Promise.all([
+        const [catRes, empRes, faRes] = await Promise.all([
           api.get('/nomina/catalogos'),
           api.get('/personal/empresas?limit=100'),
+          api.get<FiscalApiStatus>('/nomina/fiscalapi/status').catch(() => ({ data: null })),
         ]);
         setPeriodicidadCat(catRes.data?.periodicidad_pago ?? []);
         setEmpresas(empRes.data?.items ?? empRes.data ?? []);
+        setFiscalApi(faRes.data ?? null);
       } catch {
         setMsg({ tipo: 'err', texto: 'Error al cargar catálogos.' });
       } finally {
@@ -241,6 +256,39 @@ export const NominaPage = () => {
     }
   };
 
+  const timbrarPeriodoPrueba = async (id: number) => {
+    if (!confirm(
+      'Timbrar recibos en FiscalAPI SANDBOX (pruebas, sin validez fiscal). ¿Continuar?'
+    )) return;
+    setTimbrandoId(id);
+    setMsg(null);
+    try {
+      const r = await api.post<{
+        timbrados: number;
+        fallidos: number;
+        fallos: { empleado_id: number; error: string }[];
+        estado: string;
+      }>(`/nomina/periodos/${id}/timbrar-prueba`);
+      const errTxt = r.data.fallos?.length
+        ? ` Errores: ${r.data.fallos.slice(0, 2).map(f => `#${f.empleado_id}: ${f.error}`).join('; ')}`
+        : '';
+      setMsg({
+        tipo: r.data.fallidos > 0 && r.data.timbrados === 0 ? 'err' : 'ok',
+        texto: `Timbrado sandbox: ${r.data.timbrados} OK, ${r.data.fallidos} fallidos. Estado: ${r.data.estado}.${errTxt}`,
+      });
+      cargarPeriodos();
+    } catch (err: unknown) {
+      let texto = 'No se pudo timbrar.';
+      if (axios.isAxiosError(err)) {
+        const d = err.response?.data as { detail?: string };
+        if (typeof d?.detail === 'string') texto = d.detail;
+      }
+      setMsg({ tipo: 'err', texto });
+    } finally {
+      setTimbrandoId(null);
+    }
+  };
+
   const exportarCsv = async (id: number) => {
     try {
       const r = await api.get(`/nomina/periodos/${id}/export`, { responseType: 'blob' });
@@ -276,6 +324,24 @@ export const NominaPage = () => {
         Cálculo v1: días por checadas (o calendario si no hay asistencia), ISR con subsidio, IMSS por ramos.
         Los datos fiscales de empresa y empleado se configuran en Configuración y Personal.
       </p>
+
+      {fiscalApi && (
+        <div style={{
+          padding: '10px 14px', marginBottom: 16, borderRadius: 8, fontSize: '0.85rem',
+          background: fiscalApi.habilitado ? '#eff6ff' : '#fefce8',
+          border: `1px solid ${fiscalApi.habilitado ? '#93c5fd' : '#fde047'}`,
+          color: fiscalApi.habilitado ? '#1e40af' : '#854d0e',
+        }}>
+          <strong>FiscalAPI ({fiscalApi.modo})</strong>
+          {' — '}{fiscalApi.mensaje}
+          {!fiscalApi.habilitado && (
+            <span> Activa <code>NOMINA_FISCALAPI_ENABLED=true</code> y credenciales en backend/.env (cuenta en test.fiscalapi.com).</span>
+          )}
+          {fiscalApi.habilitado && !fiscalApi.tiene_csd && (
+            <span> Opcional: agrega CSD de prueba en .env o registra el emisor en FiscalAPI.</span>
+          )}
+        </div>
+      )}
 
       {msg && (
         <div style={{
@@ -421,6 +487,35 @@ export const NominaPage = () => {
                               >
                                 Exportar CSV
                               </button>
+                              {fiscalApi?.habilitado && (
+                                <button
+                                  type="button"
+                                  style={{ ...btn('#7c3aed'), padding: '4px 12px', fontSize: '0.8rem' }}
+                                  disabled={timbrandoId === p.id}
+                                  onClick={() => timbrarPeriodoPrueba(p.id)}
+                                  title="Timbrar en FiscalAPI sandbox (pruebas)"
+                                >
+                                  {timbrandoId === p.id ? 'Timbrando…' : 'Timbrar prueba'}
+                                </button>
+                              )}
+                            </>
+                          )}
+                          {p.estado === 'timbrada' && (
+                            <>
+                              <button
+                                type="button"
+                                style={{ ...btn('#2563eb'), padding: '4px 12px', fontSize: '0.8rem' }}
+                                onClick={() => abrirDetallePeriodo(p.id)}
+                              >
+                                Ver detalle
+                              </button>
+                              <button
+                                type="button"
+                                style={{ ...btn('#6b7280'), padding: '4px 12px', fontSize: '0.8rem' }}
+                                onClick={() => exportarCsv(p.id)}
+                              >
+                                Exportar CSV
+                              </button>
                             </>
                           )}
                           {p.estado === 'borrador' && (
@@ -474,7 +569,7 @@ export const NominaPage = () => {
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
                   <thead>
                     <tr style={{ background: '#f9fafb' }}>
-                      {['Empleado', 'Días lab.', 'Días pag.', 'Fuente', 'Percepciones', 'Deducciones', 'Neto', ''].map(h => (
+                      {['Empleado', 'Días lab.', 'Días pag.', 'Fuente', 'Percepciones', 'Deducciones', 'Neto', 'UUID', ''].map(h => (
                         <th key={h} style={{ padding: '8px', textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>{h}</th>
                       ))}
                     </tr>
@@ -489,6 +584,9 @@ export const NominaPage = () => {
                         <td style={{ padding: '8px' }}>{money(d.total_percepciones)}</td>
                         <td style={{ padding: '8px' }}>{money(d.total_deducciones)}</td>
                         <td style={{ padding: '8px' }}>{money(d.total_neto)}</td>
+                        <td style={{ padding: '8px', fontSize: '0.72rem', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          {d.cfdi_uuid || (d.cfdi_error ? '⚠ error' : '—')}
+                        </td>
                         <td style={{ padding: '8px' }}>
                           <button
                             type="button"
