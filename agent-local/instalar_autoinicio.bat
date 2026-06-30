@@ -76,7 +76,7 @@ echo     ^<StartWhenAvailable^>true^</StartWhenAvailable^>
 echo     ^<RunOnlyIfNetworkAvailable^>false^</RunOnlyIfNetworkAvailable^>
 echo     ^<AllowStartOnDemand^>true^</AllowStartOnDemand^>
 echo     ^<Enabled^>true^</Enabled^>
-    echo     ^<Hidden^>true^</Hidden^>
+echo     ^<Hidden^>true^</Hidden^>
 echo     ^<RestartOnFailure^>
 echo       ^<Interval^>PT1M^</Interval^>
 echo       ^<Count^>5^</Count^>

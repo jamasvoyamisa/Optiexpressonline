@@ -117,19 +117,23 @@ def get_metricas(
     por_categoria = {r.categoria: r.n for r in totales_cat}
 
     # ── Eventos por día (últimos `dias`) ──────────────────────────────────────
-    nivel_clause = f"AND nivel = '{nivel}'" if nivel else ""
-    cat_clause = f"AND categoria = '{categoria}'" if categoria else "AND categoria != 'request'"
-    eventos_dia_raw = db.execute(text(f"""
-        SELECT DATE(created_at) AS dia,
-               nivel,
-               COUNT(*) AS n
-        FROM actividad_log
-        WHERE created_at >= :desde
-          {nivel_clause}
-          {cat_clause}
-        GROUP BY DATE(created_at), nivel
-        ORDER BY dia ASC
-    """), {"desde": desde.strftime("%Y-%m-%d %H:%M:%S")}).fetchall()
+    eventos_dia_q = db.query(
+        func.date(ActividadLog.created_at).label("dia"),
+        ActividadLog.nivel,
+        func.count().label("n"),
+    ).filter(ActividadLog.created_at >= desde)
+    if nivel:
+        eventos_dia_q = eventos_dia_q.filter(ActividadLog.nivel == nivel)
+    if categoria:
+        eventos_dia_q = eventos_dia_q.filter(ActividadLog.categoria == categoria)
+    else:
+        eventos_dia_q = eventos_dia_q.filter(ActividadLog.categoria != "request")
+    eventos_dia_raw = (
+        eventos_dia_q
+        .group_by(func.date(ActividadLog.created_at), ActividadLog.nivel)
+        .order_by(func.date(ActividadLog.created_at).asc())
+        .all()
+    )
 
     dias_map: dict = {}
     for row in eventos_dia_raw:
