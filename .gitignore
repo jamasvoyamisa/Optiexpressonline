@@ -46,6 +46,8 @@ agent-local/dist/
 agent-local/build/
 agent-local/venv/
 agent-local/*.exe
+!agent-local/releases/
+!agent-local/releases/*.exe
 
 # OS
 .DS_Store
