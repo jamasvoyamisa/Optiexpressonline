@@ -19,7 +19,13 @@ class ZKTecoClient:
         self.ip = ip
         self.port = port
         self.timeout = timeout
-        self.zk = ZK(ip, port=port, timeout=timeout)
+        # ommit_ping=True evita que pyzk ejecute el comando 'ping' del sistema en cada
+        # connect(); en el .exe sin consola eso abría una ventana CMD en cada sync.
+        try:
+            self.zk = ZK(ip, port=port, timeout=timeout, ommit_ping=True)
+        except TypeError:
+            # Compatibilidad con versiones de pyzk sin el parámetro ommit_ping
+            self.zk = ZK(ip, port=port, timeout=timeout)
 
     def get_attendance_logs(self, start_time: Optional[str] = None, end_time: Optional[str] = None) -> List[Dict]:
         """

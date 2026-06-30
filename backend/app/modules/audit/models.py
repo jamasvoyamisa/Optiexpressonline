@@ -10,7 +10,7 @@ class ActividadLog(Base):
     id = Column(Integer, primary_key=True, index=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False, index=True)
     nivel = Column(String(20), nullable=False, index=True)  # info, warning, error
-    categoria = Column(String(40), nullable=False, index=True)  # auth, sistema, negocio
+    categoria = Column(String(40), nullable=False, index=True)  # auth, sistema, negocio, checador
     mensaje = Column(Text, nullable=False)
     contexto = Column(Text, nullable=True)  # JSON opcional
     empleado_id = Column(Integer, ForeignKey("empleados.id", ondelete="SET NULL"), nullable=True, index=True)

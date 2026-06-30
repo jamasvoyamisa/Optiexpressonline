@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import api from '../../services/api';
+import { useIsMobile } from '../../hooks/useIsMobile';
+import {
+  rhMobileBtnPrimary,
+  rhMobileCard,
+  rhMobileCardRow,
+  rhMobileCardSub,
+  rhMobileCardTitle,
+} from '../rh/rhMobileStyles';
 import type {
   VacacionGeneralCreate,
   VacacionGeneralResponse,
@@ -36,6 +44,7 @@ export interface VacacionesGeneralesPageProps {
 }
 
 export const VacacionesGeneralesPage = ({ embedded = false }: VacacionesGeneralesPageProps) => {
+  const isMobile = useIsMobile();
   const [items, setItems] = useState<VacacionGeneralResponse[]>([]);
   const [empresas, setEmpresas] = useState<EmpresaResponse[]>([]);
   const [departamentos, setDepartamentos] = useState<DepartamentoResponse[]>([]);
@@ -212,7 +221,7 @@ export const VacacionesGeneralesPage = ({ embedded = false }: VacacionesGenerale
           border: '1px solid #e5e7eb',
           display: 'grid',
           gap: 12,
-          gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+          gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fill, minmax(200px, 1fr))',
           alignItems: 'end',
         }}
       >
@@ -369,6 +378,33 @@ export const VacacionesGeneralesPage = ({ embedded = false }: VacacionesGenerale
 
       {loading ? (
         <p style={{ color: '#64748b' }}>Cargando…</p>
+      ) : isMobile ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {items.map((row) => (
+            <div key={row.id} style={rhMobileCard}>
+              <div style={rhMobileCardTitle}>{row.nombre}</div>
+              <div style={rhMobileCardSub}>{fmtDate(row.fecha_inicio)} → {fmtDate(row.fecha_fin)}</div>
+              <div style={rhMobileCardRow}>
+                <span>Alcance</span>
+                <span style={{ textAlign: 'right', maxWidth: '58%' }}>
+                  {row.alcance === 'global' && 'Global'}
+                  {row.alcance === 'empresa' && empresaNombre(row.empresa_id)}
+                  {row.alcance === 'departamento' && deptoNombre(row.departamento_id)}
+                </span>
+              </div>
+              <div style={rhMobileCardRow}><span>LFT / Regalo</span><span>{row.dias_cuenta_ley} / {row.dias_regalo_empresa}</span></div>
+              <div style={rhMobileCardRow}><span>Estado</span><span>{row.activo ? 'Activo' : 'Inactivo'}</span></div>
+              <button
+                type="button"
+                disabled={!row.activo || aplicandoId !== null}
+                onClick={() => void aplicar(row.id)}
+                style={{ ...rhMobileBtnPrimary, marginTop: 10, backgroundColor: row.activo ? '#059669' : '#9ca3af' }}
+              >
+                {aplicandoId === row.id ? 'Aplicando…' : 'Aplicar a empleados'}
+              </button>
+            </div>
+          ))}
+        </div>
       ) : (
         <div style={{ overflowX: 'auto', background: '#fff', borderRadius: 10, border: '1px solid #e5e7eb' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>

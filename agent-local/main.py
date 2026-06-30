@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Agente Local Multi-Dispositivo para sincronizar checadores ZKTeco con el sistema en la nube.
-Soporta 1 o mas dispositivos configurados en config.yaml.
+Agente Optiexpress - Motor de sincronización multi-dispositivo.
 """
 import yaml
 import time
@@ -10,19 +9,27 @@ import sys
 from pathlib import Path
 from datetime import datetime
 
+from win_utils import init_frozen_windows, should_use_console_logging, remove_console_log_handlers
+
+init_frozen_windows()
+
 from zkteco_client import ZKTecoClient
 from cloud_sync import CloudSync
 from local_buffer import LocalBuffer
 from single_instance import SingleInstanceLock
+from log_setup import setup_agent_logging, DEFAULT_RETENTION_DAYS
 
 _handlers = []
-if getattr(sys, 'stdout', None):
+if should_use_console_logging():
     _handlers.append(logging.StreamHandler(sys.stdout))
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=_handlers if _handlers else [logging.NullHandler()]
+    handlers=_handlers if _handlers else [logging.NullHandler()],
+    force=True,
 )
+if not should_use_console_logging():
+    remove_console_log_handlers()
 logger = logging.getLogger(__name__)
 
 
@@ -211,8 +218,11 @@ class DeviceHandler:
                 pin = str(u.get("user_id", "")).strip()
                 if not pin:
                     continue
-                # El dispositivo guarda user_id=pin (1,2,3); necesitamos numero_empleado (124) para el backend
-                numero = pin_to_numero.get(pin, pin)
+                # El dispositivo guarda user_id=pin (1,2,3); necesitamos numero_empleado (124) para el backend.
+                # Si el pin no está mapeado, no usar el pin como número (genera 404 en upload-template).
+                if pin not in pin_to_numero:
+                    continue
+                numero = pin_to_numero[pin]
                 if self.cloud.get_employee_templates(numero, pin_checador=pin):
                     continue
                 templates = self.zkteco.get_user_templates(user_id=pin)
@@ -305,27 +315,81 @@ class DeviceHandler:
             by_numero = defaultdict(list)
             for tpl in pending:
                 by_numero[(tpl.get("numero_empleado") or "").strip()].append(tpl)
+
+            # Usuarios actualmente en el dispositivo (para crear los que falten)
+            device_users = self.zkteco.get_users()
+            existing_uids = {str(u.get("user_id", "")).strip() for u in device_users}
+
             for numero, templates in by_numero.items():
                 if not numero:
                     continue
-                user_id = (templates[0].get("user_id") or templates[0].get("numero_empleado") or numero)
+                user_id = str(templates[0].get("user_id") or templates[0].get("numero_empleado") or numero).strip()
                 nombre = (templates[0].get("nombre") or user_id)[:24]
-                create_user_first = templates[0].get("create_user_first", False)
-                if create_user_first:
-                    if not self.zkteco.set_user(user_id=str(user_id), name=nombre):
+
+                # Crear el usuario en el dispositivo si no existe: sin usuario no se puede subir huella.
+                if user_id not in existing_uids:
+                    if not self.zkteco.set_user(user_id=user_id, name=nombre):
                         logger.warning(f"[{self.name}] No se pudo crear usuario {user_id} antes de subir huella")
                         continue
-                    logger.info(f"[{self.name}] Usuario creado: {user_id}")
+                    logger.info(f"[{self.name}] Usuario creado en dispositivo: {user_id}")
+                    existing_uids.add(user_id)
+                    fingers_en_dispositivo = set()
+                else:
+                    # Dedos que ya tiene el dispositivo: evita re-subir en cada ciclo (bucle infinito).
+                    fingers_en_dispositivo = {
+                        t.get("finger_index")
+                        for t in self.zkteco.get_user_templates(user_id=user_id)
+                    }
+
                 for tpl in templates:
-                    uid = tpl.get("user_id") or tpl.get("numero_empleado")
                     finger = tpl["finger_index"]
-                    ok = self.zkteco.upload_template(str(uid), finger, tpl["template_data"])
+                    if finger in fingers_en_dispositivo:
+                        continue  # La huella ya está en el dispositivo, no re-subir.
+                    ok = self.zkteco.upload_template(user_id, finger, tpl["template_data"])
                     if ok:
-                        logger.info(f"[{self.name}] Huella subida: {uid} dedo={finger}")
+                        logger.info(f"[{self.name}] Huella subida: {user_id} dedo={finger}")
+                        fingers_en_dispositivo.add(finger)
                     else:
-                        logger.warning(f"[{self.name}] Fallo subir huella: {uid}")
+                        logger.warning(f"[{self.name}] Fallo subir huella: {user_id}")
         except Exception as e:
             logger.error(f"[{self.name}] Error sync_pending_templates: {e}")
+
+    def sync_device_users_to_backend(self):
+        """
+        Lee todos los usuarios del reloj y los reporta al backend.
+        El servidor los registra en Actividad (categoría checador) y en agent.log (logger checador).
+        Se ejecuta una vez al iniciar y luego cada ~6 horas.
+        """
+        checador_log = logging.getLogger("checador")
+        try:
+            raw_users = self.zkteco.get_users()
+            payload = [
+                {"pin": u.get("user_id", ""), "nombre": u.get("name", "") or None}
+                for u in (raw_users or [])
+                if u.get("user_id")
+            ]
+            if not payload:
+                checador_log.warning(
+                    f"[{self.name}] No se leyeron usuarios del reloj; se reporta lista vacía al backend"
+                )
+            else:
+                checador_log.info(f"[{self.name}] Reportando {len(payload)} usuario(s) del reloj al backend...")
+            result = self.cloud.report_device_users(payload)
+            if result.get("sin_mapeo", 0) > 0:
+                desconocidos = result.get("desconocidos", [])
+                checador_log.warning(
+                    f"[{self.name}] {result['sin_mapeo']} usuario(s) del reloj sin empleado mapeado: "
+                    + ", ".join(
+                        f"PIN={d.get('pin')}({d.get('nombre') or '?'})" for d in desconocidos
+                    )
+                )
+            elif result:
+                checador_log.info(
+                    f"[{self.name}] Sincronización de usuarios OK "
+                    f"({result.get('reconocidos', 0)}/{result.get('total_en_reloj', 0)} reconocidos)"
+                )
+        except Exception as e:
+            checador_log.error(f"[{self.name}] Error al sincronizar usuarios del reloj: {e}")
 
 
 class Agent:
@@ -337,6 +401,8 @@ class Agent:
         self.running = True
         self.handlers = []
         self._init_devices()
+        from cloud_sync import AGENT_VERSION
+        logger.info(f"Optiexpress Agent v{AGENT_VERSION}")
 
     def _load_config(self, config_path: str) -> dict:
         try:
@@ -354,21 +420,16 @@ class Agent:
 
     def _setup_logging(self):
         log_config = self.config.get("logging", {})
-        level = log_config.get("level", "INFO")
+        level_name = log_config.get("level", "INFO")
         log_file = log_config.get("file", "agent.log")
-        root = logging.getLogger()
-        root.setLevel(getattr(logging, level, logging.INFO))
-        if log_file:
-            abs_log = str(Path(log_file).resolve())
-            # Evitar agregar un FileHandler duplicado si ya existe uno para el mismo archivo
-            already_has_handler = any(
-                isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", None) == abs_log
-                for h in root.handlers
-            )
-            if not already_has_handler:
-                fh = logging.FileHandler(log_file, encoding="utf-8")
-                fh.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-                root.addHandler(fh)
+        retention = int(log_config.get("retention_days", DEFAULT_RETENTION_DAYS))
+        level = getattr(logging, level_name, logging.INFO)
+        setup_agent_logging(
+            log_file,
+            retention_days=retention,
+            level=level,
+            console=should_use_console_logging(),
+        )
 
     def _init_devices(self):
         api_url = self.config.get("api_url", "").strip()
@@ -462,11 +523,17 @@ class Agent:
             if h.cloud.test_connection():
                 logger.info(f"[{h.name}] Sincronizacion inicial de huellas...")
                 h.sync_device_templates_to_backend()
+                logger.info(f"[{h.name}] Reporte inicial de usuarios del reloj...")
+                h.sync_device_users_to_backend()
 
         interval = self.config.get("sync", {}).get("interval_seconds", 30)
         logger.info(f"Ciclo de sincronizacion: cada {interval} segundos")
         template_sync_counter = 0
         template_sync_every = max(1, 300 // interval)
+        # Reporte de usuarios del reloj cada 6 horas
+        USER_SYNC_SECONDS = 6 * 3600
+        user_sync_counter = 0
+        user_sync_every = max(1, USER_SYNC_SECONDS // interval)
 
         try:
             while self.running:
@@ -497,6 +564,16 @@ class Agent:
                         except Exception as e:
                             logger.error(f"[{h.name}] Error sync templates: {e}")
                     template_sync_counter = 0
+
+                user_sync_counter += 1
+                if user_sync_counter >= user_sync_every:
+                    for h in active_handlers:
+                        try:
+                            if h.cloud.test_connection():
+                                h.sync_device_users_to_backend()
+                        except Exception as e:
+                            logger.error(f"[{h.name}] Error sync usuarios reloj: {e}")
+                    user_sync_counter = 0
 
                 time.sleep(interval)
 

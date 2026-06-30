@@ -1,12 +1,12 @@
 @echo off
-:: Instala el agente ZKTeco como tarea programada de Windows
+:: Autoinicio del agente en modo Python (desarrollo / sin OptiexpressAgent.exe)
+:: En sucursales usar el instalador Setup + "Iniciar con Windows" en la bandeja.
 :: Ejecutar como Administrador
 
 cd /d "%~dp0"
 
 echo ============================================
-echo  Instalador de Inicio Automatico
-echo  Agente ZKTeco
+echo  Inicio automatico — Agente Optiexpress
 echo ============================================
 echo.
 
@@ -36,7 +36,7 @@ if not exist "main.py" (
 :: Obtener ruta completa
 set "AGENT_DIR=%cd%"
 set "PYTHON=%AGENT_DIR%\venv\Scripts\pythonw.exe"
-set "TASK_NAME=AgenteZKTeco"
+set "TASK_NAME=OptiexpressAgentSync"
 
 echo Carpeta del agente: %AGENT_DIR%
 echo Python: %PYTHON%
@@ -76,7 +76,7 @@ echo     ^<StartWhenAvailable^>true^</StartWhenAvailable^>
 echo     ^<RunOnlyIfNetworkAvailable^>false^</RunOnlyIfNetworkAvailable^>
 echo     ^<AllowStartOnDemand^>true^</AllowStartOnDemand^>
 echo     ^<Enabled^>true^</Enabled^>
-echo     ^<Hidden^>false^</Hidden^>
+    echo     ^<Hidden^>true^</Hidden^>
 echo     ^<RestartOnFailure^>
 echo       ^<Interval^>PT1M^</Interval^>
 echo       ^<Count^>5^</Count^>

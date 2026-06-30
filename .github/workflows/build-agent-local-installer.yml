@@ -1,0 +1,77 @@
+name: Build Agent Windows Installer
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "agent-local/**"
+      - ".github/workflows/build-agent-local-installer.yml"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: cmd
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install agent dependencies
+        run: |
+          cd agent-local
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller==6.10.0
+
+      - name: Build tray EXE
+        run: |
+          cd agent-local
+          python create_icon.py
+          pyinstaller --clean --noconfirm --onefile --windowed ^
+            --runtime-hook runtime_hook.py ^
+            --name "OptiexpressAgent" ^
+            --icon "icon.ico" ^
+            --hidden-import main ^
+            --hidden-import cloud_sync ^
+            --hidden-import zkteco_client ^
+            --hidden-import local_buffer ^
+            --hidden-import zk ^
+            --hidden-import yaml ^
+            --hidden-import requests ^
+            --hidden-import pystray ^
+            --hidden-import pystray._win32 ^
+            --hidden-import PIL ^
+            --hidden-import config_guard ^
+            --hidden-import agent_gui ^
+            --hidden-import log_setup ^
+            --hidden-import win_utils ^
+            --hidden-import single_instance ^
+            agent_tray.py
+          copy /y agent_gui.py dist\agent_gui.py
+          copy /y config_guard.py dist\config_guard.py
+          copy /y log_setup.py dist\log_setup.py
+          copy /y win_utils.py dist\win_utils.py
+          copy /y config.yaml.example dist\config.yaml.example
+
+      - name: Install Inno Setup
+        run: |
+          choco install innosetup -y --no-progress
+
+      - name: Build installer
+        run: |
+          cd agent-local
+          "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\setup.iss
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: optiexpress-agent-setup
+          path: agent-local/dist/OptiexpressAgent-Setup-*.exe
+          if-no-files-found: error

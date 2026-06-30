@@ -98,6 +98,25 @@ class QueueDeleteRequest(BaseModel):
     numero_empleado: Optional[str] = None
 
 
+class DeviceUserItem(BaseModel):
+    """Un usuario tal como vive en el reloj (user_id = PIN del aparato, nombre del reloj)."""
+    pin: str
+    nombre: Optional[str] = None
+
+
+class SyncDeviceUsersRequest(BaseModel):
+    """Lista de usuarios leídos del reloj por el agente."""
+    usuarios: List[DeviceUserItem]
+
+
+class SyncDeviceUsersResponse(BaseModel):
+    """Resultado de la reconciliación reloj <-> sistema."""
+    total_en_reloj: int
+    reconocidos: int
+    sin_mapeo: int
+    desconocidos: List[DeviceUserItem]
+
+
 class EmpleadoDispositivoEstado(BaseModel):
     """Estado de un empleado en cada dispositivo activo (para ficha del empleado)."""
     dispositivo_id: int
@@ -274,6 +293,24 @@ class AsistenciaResponse(AsistenciaBase):
 
     class Config:
         from_attributes = True
+
+
+class ResumenAsistenciaEmpleadoResponse(BaseModel):
+    """Resumen de asistencia/puntualidad de un empleado en un periodo (portal o RH)."""
+    empleado_id: int
+    total_dias_periodo: int
+    dias_periodo_evaluados: int
+    periodo_en_curso: bool
+    dias_asistio: int
+    dias_completos: int
+    faltas: int
+    faltas_justificadas: int
+    incompletas: int = 0
+    retardos: int
+    salidas_anticipadas: int
+    dias_incapacidad: int
+    dias_vacaciones: int
+    puntualidad_pct: float
 
 
 class DiaContextoLaboralResponse(BaseModel):

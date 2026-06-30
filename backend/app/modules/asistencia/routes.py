@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, UploadFile, File, Form, Request
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
 from datetime import datetime, timezone, timedelta, date
@@ -570,12 +570,21 @@ def queue_delete_user(
 
 # ========== ENDPOINTS PARA AGENTE (X-API-Key) ==========
 
-def _get_device_from_api_key(x_api_key: str = Header(..., alias="X-API-Key"), db: Session = Depends(get_db)):
+def _get_device_from_api_key(
+    request: Request,
+    x_api_key: str = Header(..., alias="X-API-Key"),
+    db: Session = Depends(get_db),
+):
     from .biometric.agent_auth import verify_api_key
     dispositivo = verify_api_key(db, x_api_key)
     if not dispositivo:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="API Key inválida o dispositivo inactivo")
     dispositivo.ultima_sync_agente = datetime.now(timezone.utc)
+    ip = (request.headers.get("X-Real-IP") or request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+    if not ip and request.client:
+        ip = request.client.host or ""
+    if ip:
+        dispositivo.ultima_ip_conexion = ip[:50]
     db.commit()
     return dispositivo
 
@@ -957,6 +966,109 @@ def agent_mark_delete_done(
     pd.procesado_at = datetime.now(timezone.utc)
     db.commit()
     return {"ok": True}
+
+
+@router.post("/agent/sync-device-users", response_model=schemas.SyncDeviceUsersResponse)
+def agent_sync_device_users(
+    data: schemas.SyncDeviceUsersRequest,
+    dispositivo: models.Dispositivo = Depends(_get_device_from_api_key),
+    db: Session = Depends(get_db),
+):
+    """
+    El agente reporta la lista completa de usuarios del reloj (PIN + nombre).
+    El servidor compara con su mapa PIN→empleado y devuelve:
+      - cuántos están reconocidos
+      - cuáles PINs no tienen empleado mapeado (sin_mapeo)
+    Útil para detectar gente enrolada directo en el reloj sin pasar por el sistema.
+    """
+    from app.modules.personal import models as pm
+
+    # Mapa completo PIN → empleado
+    empleados_por_pin = {
+        str(e.pin_checador).strip(): e
+        for e in db.query(pm.Empleado).filter(
+            pm.Empleado.pin_checador.isnot(None),
+            pm.Empleado.pin_checador != "",
+        ).all()
+        if e.pin_checador
+    }
+    # Incluir pendientes de este dispositivo como mapeo adicional
+    pendientes_pin = {
+        str(p.pin_checador).strip()
+        for p in db.query(models.UsuarioPendienteDispositivo).filter(
+            models.UsuarioPendienteDispositivo.dispositivo_id == dispositivo.id,
+            models.UsuarioPendienteDispositivo.pin_checador.isnot(None),
+        ).all()
+        if p.pin_checador
+    }
+
+    desconocidos = []
+    reconocidos = 0
+    for u in data.usuarios:
+        pin = str(u.pin).strip()
+        if pin in empleados_por_pin or pin in pendientes_pin:
+            reconocidos += 1
+        else:
+            desconocidos.append(u)
+
+    total = len(data.usuarios)
+    sin_mapeo = len(desconocidos)
+    ctx_base = {
+        "dispositivo_id": dispositivo.id,
+        "dispositivo_nombre": dispositivo.nombre,
+        "total_en_reloj": total,
+        "reconocidos": reconocidos,
+        "sin_mapeo": sin_mapeo,
+    }
+    if total == 0:
+        ActividadService.registrar(
+            db,
+            nivel="warning",
+            categoria="checador",
+            mensaje=f"Reloj «{dispositivo.nombre}»: el agente no leyó usuarios del dispositivo (lista vacía)",
+            contexto=ctx_base,
+            metodo_http="POST",
+            ruta="/asistencia/agent/sync-device-users",
+            codigo_http=200,
+        )
+    elif sin_mapeo:
+        ctx_base["desconocidos"] = [
+            {"pin": u.pin, "nombre": u.nombre} for u in desconocidos
+        ]
+        ActividadService.registrar(
+            db,
+            nivel="warning",
+            categoria="checador",
+            mensaje=(
+                f"Reloj «{dispositivo.nombre}»: {sin_mapeo} PIN(s) sin empleado en el sistema "
+                f"({reconocidos}/{total} reconocidos)"
+            ),
+            contexto=ctx_base,
+            metodo_http="POST",
+            ruta="/asistencia/agent/sync-device-users",
+            codigo_http=200,
+        )
+    else:
+        ActividadService.registrar(
+            db,
+            nivel="info",
+            categoria="checador",
+            mensaje=(
+                f"Reloj «{dispositivo.nombre}»: sincronización de usuarios OK "
+                f"({reconocidos}/{total} reconocidos)"
+            ),
+            contexto=ctx_base,
+            metodo_http="POST",
+            ruta="/asistencia/agent/sync-device-users",
+            codigo_http=200,
+        )
+
+    return schemas.SyncDeviceUsersResponse(
+        total_en_reloj=total,
+        reconocidos=reconocidos,
+        sin_mapeo=sin_mapeo,
+        desconocidos=desconocidos,
+    )
 
 
 # ========== DASHBOARD ==========
@@ -1946,13 +2058,10 @@ def reporte_resumen_asistencia(
 ):
     """
     Reporte de asistencia resumido por empleado.
-    Devuelve para cada empleado: días laborables en el período, asistencias,
-    faltas, retardos, salidas anticipadas e incapacidades.
+    Devuelve para cada empleado: días del periodo (naturales, incl. descansos),
+    asistencias, faltas, retardos, salidas anticipadas e incapacidades.
     """
-    from datetime import date, timedelta, datetime as dt
-    from app.modules.personal import models as pm
-    from app.modules.incapacidades import service as inc_svc
-    from sqlalchemy import func as sqlfunc
+    from datetime import date
 
     try:
         fi = date.fromisoformat(fecha_inicio)
@@ -1963,191 +2072,79 @@ def reporte_resumen_asistencia(
     if (ff - fi).days > 366:
         raise HTTPException(status_code=400, detail="El rango máximo es 1 año")
 
-    # ── Obtener empleados del scope (excluir cuentas de sistema y usuarios exentos de incidencias) ──
-    q = db.query(pm.Empleado).filter(
-        pm.Empleado.estado == pm.EstadoEmpleado.ACTIVO,
-        pm.Empleado.empresa_id.isnot(None),
-        pm.Empleado.exento_incidencias == False,
+    return service.AsistenciaService.build_reporte_resumen(
+        db, fi, ff,
+        empleado_id=empleado_id,
+        departamento_id=departamento_id,
+        empresa_id=empresa_id,
     )
-    if empleado_id:
-        q = q.filter(pm.Empleado.id == empleado_id)
-    elif departamento_id:
-        q = q.filter(pm.Empleado.departamento_id == departamento_id)
-    elif empresa_id:
-        q = q.filter(pm.Empleado.empresa_id == empresa_id)
 
-    empleados = q.order_by(pm.Empleado.apellido_paterno, pm.Empleado.nombre).all()
-    if not empleados:
-        return []
 
-    emp_ids = [e.id for e in empleados]
+@router.get("/mi-resumen-asistencia", response_model=schemas.ResumenAsistenciaEmpleadoResponse)
+def mi_resumen_asistencia(
+    fecha_inicio: str = Query(..., description="YYYY-MM-DD"),
+    fecha_fin: str = Query(..., description="YYYY-MM-DD"),
+    db: Session = Depends(get_db),
+    current: dict = Depends(get_current_user),
+):
+    """Resumen de asistencia y puntualidad del empleado autenticado (Mis asistencias)."""
+    from datetime import date
+    from app.modules.personal import models as pm
 
-    # ── Festivos activos en el período ──
-    festivos_bd = db.query(models.DiaFestivo).filter(
-        models.DiaFestivo.activo == True,
-        models.DiaFestivo.fecha >= fi,
-        models.DiaFestivo.fecha <= ff,
-    ).all()
-    festivos_set = {f.fecha for f in festivos_bd}
+    try:
+        fi = date.fromisoformat(fecha_inicio)
+        ff = date.fromisoformat(fecha_fin)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Formato de fecha inválido (use YYYY-MM-DD)")
 
-    # ── Días laborables del período (lun–sáb, sin domingos ni festivos) ──
-    def dias_laborables(inicio: date, fin: date) -> int:
-        count = 0
-        d = inicio
-        while d <= fin:
-            if d.weekday() != 6 and d not in festivos_set:  # 6=domingo
-                count += 1
-            d += timedelta(days=1)
-        return count
+    if ff < fi:
+        raise HTTPException(status_code=400, detail="fecha_fin debe ser >= fecha_inicio")
+    if (ff - fi).days > 95:
+        raise HTTPException(status_code=400, detail="El rango máximo es 96 días")
 
-    total_dias = dias_laborables(fi, ff)
+    empleado_id = int(current["user_id"])
+    emp = db.query(pm.Empleado).filter(pm.Empleado.id == empleado_id).first()
+    if not emp or emp.exento_incidencias:
+        raise HTTPException(status_code=403, detail="No disponible para este usuario")
 
-    # ── Checadas en el período (rango UTC para días en México) ──
-    from app.core.timezone_utils import mexico_date_to_utc_range
-    dt_inicio_utc, _ = mexico_date_to_utc_range(fi)
-    _, dt_fin_utc = mexico_date_to_utc_range(ff + timedelta(days=1))
-
-    checadas_rows = db.query(
-        models.Asistencia.empleado_id,
-        models.Asistencia.timestamp,
-    ).filter(
-        models.Asistencia.empleado_id.in_(emp_ids),
-        models.Asistencia.timestamp >= dt_inicio_utc,
-        models.Asistencia.timestamp < dt_fin_utc,
-    ).all()
-
-    # Agrupar por empleado y día (en hora México)
-    from app.core.timezone_utils import to_mexico
-    dias_con_checada: dict[int, set] = {e.id: set() for e in empleados}
-    dias_completos: dict[int, int] = {e.id: 0 for e in empleados}  # ≥4 checadas
-    checadas_por_emp_dia: dict[tuple[int, str], int] = {}
-    for row in checadas_rows:
-        ts_mex = to_mexico(row.timestamp) or row.timestamp
-        dia_str = ts_mex.strftime("%Y-%m-%d") if hasattr(ts_mex, "strftime") else str(row.timestamp.date())
-        dias_con_checada[row.empleado_id].add(dia_str)
-        key = (row.empleado_id, dia_str)
-        checadas_por_emp_dia[key] = checadas_por_emp_dia.get(key, 0) + 1
-    for (emp_id, dia_str), n in checadas_por_emp_dia.items():
-        if n >= 4:
-            dias_completos[emp_id] += 1
-
-    # ── Incidencias en el período ──
-    incidencias_rows = db.query(models.Incidencia).filter(
-        models.Incidencia.empleado_id.in_(emp_ids),
-        models.Incidencia.fecha >= dt_inicio_utc,
-        models.Incidencia.fecha < dt_fin_utc,
-    ).all()
-
-    faltas: dict[int, int] = {e.id: 0 for e in empleados}
-    faltas_justificadas: dict[int, int] = {e.id: 0 for e in empleados}
-    incompletas: dict[int, int] = {e.id: 0 for e in empleados}
-    retardos: dict[int, int] = {e.id: 0 for e in empleados}
-    salidas_anticipadas: dict[int, int] = {e.id: 0 for e in empleados}
-
-    for inc in incidencias_rows:
-        eid = inc.empleado_id
-        if inc.tipo == models.TipoIncidencia.FALTA:
-            if inc.justificada:
-                faltas_justificadas[eid] = faltas_justificadas.get(eid, 0) + 1
-            else:
-                faltas[eid] = faltas.get(eid, 0) + 1
-        elif inc.tipo == models.TipoIncidencia.INCOMPLETA:
-            incompletas[eid] = incompletas.get(eid, 0) + 1
-        elif inc.tipo == models.TipoIncidencia.RETARDO:
-            retardos[eid] = retardos.get(eid, 0) + 1
-        elif inc.tipo == models.TipoIncidencia.SALIDA_ANTICIPADA:
-            salidas_anticipadas[eid] = salidas_anticipadas.get(eid, 0) + 1
-
-    # ── Incapacidades en el período ──
-    from app.modules.incapacidades import models as inc_models
-    incapacidades_rows = db.query(inc_models.Incapacidad).filter(
-        inc_models.Incapacidad.empleado_id.in_(emp_ids),
-        inc_models.Incapacidad.estado != inc_models.EstadoIncapacidad.CANCELADA,
-        inc_models.Incapacidad.fecha_inicio <= ff,
-        inc_models.Incapacidad.fecha_fin >= fi,
-    ).all()
-
-    dias_incapacidad: dict[int, int] = {e.id: 0 for e in empleados}
-    for inc in incapacidades_rows:
-        inicio_real = max(inc.fecha_inicio, fi)
-        fin_real = min(inc.fecha_fin, ff)
-        dias_incapacidad[inc.empleado_id] = (
-            dias_incapacidad.get(inc.empleado_id, 0)
-            + dias_laborables(inicio_real, fin_real)
-        )
-
-    # ── Vacaciones aprobadas en el período ──
-    from app.modules.vacaciones import models as vac_models
-    vacaciones_rows = db.query(vac_models.SolicitudVacaciones).filter(
-        vac_models.SolicitudVacaciones.empleado_id.in_(emp_ids),
-        vac_models.SolicitudVacaciones.estado.in_(
-            (vac_models.EstadoSolicitud.APROBADA, vac_models.EstadoSolicitud.APROBADA_JEFE)
-        ),
-        vac_models.SolicitudVacaciones.fecha_inicio <= dt(ff.year, ff.month, ff.day, 23, 59, 59),
-        vac_models.SolicitudVacaciones.fecha_fin >= dt(fi.year, fi.month, fi.day),
-    ).all()
-
-    dias_vacaciones: dict[int, int] = {e.id: 0 for e in empleados}
-    for vac in vacaciones_rows:
-        vac_fi = vac.fecha_inicio.date() if hasattr(vac.fecha_inicio, "date") else vac.fecha_inicio
-        vac_ff = vac.fecha_fin.date() if hasattr(vac.fecha_fin, "date") else vac.fecha_fin
-        inicio_real = max(vac_fi, fi)
-        fin_real = min(vac_ff, ff)
-        dias_vacaciones[vac.empleado_id] = (
-            dias_vacaciones.get(vac.empleado_id, 0)
-            + dias_laborables(inicio_real, fin_real)
-        )
-
-    # ── Armar departamentos y empresas para los empleados ──
-    dep_ids = {e.departamento_id for e in empleados if e.departamento_id}
-    emp_empresa_ids = {e.empresa_id for e in empleados if e.empresa_id}
-    deptos_map = {
-        d.id: d.nombre
-        for d in db.query(pm.Departamento).filter(pm.Departamento.id.in_(dep_ids)).all()
-    } if dep_ids else {}
-    empresas_map = {
-        em.id: em.nombre
-        for em in db.query(pm.Empresa).filter(pm.Empresa.id.in_(emp_empresa_ids)).all()
-    } if emp_empresa_ids else {}
-
-    # ── Construir resultado ──
-    resultado = []
-    for emp in empleados:
-        dias_asistio = len(dias_con_checada.get(emp.id, set()))
-        f = faltas.get(emp.id, 0)
-        fj = faltas_justificadas.get(emp.id, 0)
-        inc = incompletas.get(emp.id, 0)
-        r = retardos.get(emp.id, 0)
-        sa = salidas_anticipadas.get(emp.id, 0)
-        di = dias_incapacidad.get(emp.id, 0)
-        dv = dias_vacaciones.get(emp.id, 0)
-        dc = dias_completos.get(emp.id, 0)
-
-        denominador = total_dias - di - dv - f - fj
-        resultado.append({
-            "empleado_id": emp.id,
-            "numero_empleado": emp.numero_empleado,
-            "nombre": emp.nombre,
-            "apellido_paterno": emp.apellido_paterno or "",
-            "apellido_materno": emp.apellido_materno or "",
-            "empresa": empresas_map.get(emp.empresa_id, "") if emp.empresa_id else "",
-            "departamento": deptos_map.get(emp.departamento_id, "") if emp.departamento_id else "",
-            "total_dias_laborables": total_dias,
-            "dias_asistio": dias_asistio,
-            "dias_completos": dc,
-            "faltas": f,
-            "faltas_justificadas": fj,
-            "incompletas": inc,
-            "retardos": r,
-            "salidas_anticipadas": sa,
-            "dias_incapacidad": di,
-            "dias_vacaciones": dv,
-            "puntualidad_pct": round(
-                (dc / max(1, denominador)) * 100, 1
-            ) if denominador > 0 else 0,
-        })
-
-    return resultado
+    rows = service.AsistenciaService.build_reporte_resumen(db, fi, ff, empleado_id=empleado_id)
+    if not rows:
+        total = service.AsistenciaService.dias_periodo_rango(fi, ff)
+        ff_eval, en_curso = service.AsistenciaService.rango_evaluado_reporte(fi, ff)
+        evaluados = service.AsistenciaService.dias_periodo_rango(fi, ff_eval)
+        return {
+            "empleado_id": empleado_id,
+            "total_dias_periodo": total,
+            "dias_periodo_evaluados": evaluados,
+            "periodo_en_curso": en_curso,
+            "dias_asistio": 0,
+            "dias_completos": 0,
+            "faltas": 0,
+            "faltas_justificadas": 0,
+            "incompletas": 0,
+            "retardos": 0,
+            "salidas_anticipadas": 0,
+            "dias_incapacidad": 0,
+            "dias_vacaciones": 0,
+            "puntualidad_pct": 0,
+        }
+    row = rows[0]
+    return {
+        "empleado_id": row["empleado_id"],
+        "total_dias_periodo": row["total_dias_periodo"],
+        "dias_periodo_evaluados": row["dias_periodo_evaluados"],
+        "periodo_en_curso": row["periodo_en_curso"],
+        "dias_asistio": row["dias_asistio"],
+        "dias_completos": row["dias_completos"],
+        "faltas": row["faltas"],
+        "faltas_justificadas": row["faltas_justificadas"],
+        "incompletas": row.get("incompletas", 0),
+        "retardos": row["retardos"],
+        "salidas_anticipadas": row["salidas_anticipadas"],
+        "dias_incapacidad": row["dias_incapacidad"],
+        "dias_vacaciones": row["dias_vacaciones"],
+        "puntualidad_pct": row["puntualidad_pct"],
+    }
 
 
 @router.get("/reporte-detalle/{empleado_id}")
@@ -2473,6 +2470,7 @@ def reporte_export_xlsx(
     from app.modules.personal import models as pm
     from app.modules.incapacidades import models as inc_models
     from app.core.timezone_utils import to_mexico, mexico_date_to_utc_range
+    from sqlalchemy.orm import joinedload
 
     try:
         fi = date.fromisoformat(fecha_inicio)
@@ -2493,11 +2491,12 @@ def reporte_export_xlsx(
         q = q.filter(pm.Empleado.departamento_id == departamento_id)
     elif empresa_id:
         q = q.filter(pm.Empleado.empresa_id == empresa_id)
-    empleados = q.order_by(pm.Empleado.apellido_paterno, pm.Empleado.nombre).all()
+    empleados = q.options(joinedload(pm.Empleado.empresa)).order_by(pm.Empleado.apellido_paterno, pm.Empleado.nombre).all()
     if not empleados:
         raise HTTPException(status_code=404, detail="No hay empleados")
 
     emp_ids = [e.id for e in empleados]
+    empleados_by_id = {e.id: e for e in empleados}
     dep_ids = {e.departamento_id for e in empleados if e.departamento_id}
     emp_empresa_ids = {e.empresa_id for e in empleados if e.empresa_id}
     deptos_map = {d.id: d.nombre for d in db.query(pm.Departamento).filter(pm.Departamento.id.in_(dep_ids)).all()} if dep_ids else {}
@@ -2547,16 +2546,12 @@ def reporte_export_xlsx(
     festivos_set = {f.fecha for f in festivos_bd}
     festivos_map_local = {f.fecha: f.nombre for f in festivos_bd}
 
-    def dias_laborables(inicio: date, fin: date) -> int:
-        count = 0
-        d = inicio
-        while d <= fin:
-            if d.weekday() != 6 and d not in festivos_set:
-                count += 1
-            d += timedelta(days=1)
-        return count
-
-    total_dias_lab = dias_laborables(fi, ff)
+    ff_eval, periodo_en_curso = service.AsistenciaService.rango_evaluado_reporte(fi, ff)
+    dias_lab_fn = service.AsistenciaService.dias_laborables_rango
+    dias_periodo_fn = service.AsistenciaService.dias_periodo_rango
+    total_dias_periodo = dias_periodo_fn(fi, ff)
+    total_dias_evaluados = dias_periodo_fn(fi, ff_eval)
+    dias_lab_evaluados = dias_lab_fn(fi, ff_eval, festivos_set)
 
     # Indexar checadas
     checadas_idx: dict = {eid: {} for eid in emp_ids}
@@ -2573,10 +2568,9 @@ def reporte_export_xlsx(
         key = (c.empleado_id, dia)
         checadas_por_emp_dia[key] = checadas_por_emp_dia.get(key, 0) + 1
 
-    dias_completos: dict = {eid: 0 for eid in emp_ids}
-    for (eid, _), n in checadas_por_emp_dia.items():
-        if n >= 4:
-            dias_completos[eid] += 1
+    dias_completos = service.AsistenciaService.contar_dias_completos_reporte(
+        db, empleados_by_id, checadas_por_emp_dia, ff_eval
+    )
 
     # Indexar incidencias
     incidencias_idx: dict = {eid: {} for eid in emp_ids}
@@ -2612,8 +2606,9 @@ def reporte_export_xlsx(
     for ic in incapacidades_all:
         incap_idx.setdefault(ic.empleado_id, []).append((ic.fecha_inicio, ic.fecha_fin))
         inicio_real = max(ic.fecha_inicio, fi)
-        fin_real = min(ic.fecha_fin, ff)
-        dias_incap[ic.empleado_id] = dias_incap.get(ic.empleado_id, 0) + dias_laborables(inicio_real, fin_real)
+        fin_real = min(ic.fecha_fin, ff_eval)
+        if fin_real >= inicio_real:
+            dias_incap[ic.empleado_id] = dias_incap.get(ic.empleado_id, 0) + dias_lab_fn(inicio_real, fin_real, festivos_set)
 
     # Indexar vacaciones
     vac_idx: dict = {}
@@ -2623,8 +2618,9 @@ def reporte_export_xlsx(
         v_ff = v.fecha_fin.date() if hasattr(v.fecha_fin, "date") else v.fecha_fin
         vac_idx.setdefault(v.empleado_id, []).append((v_fi, v_ff))
         inicio_real = max(v_fi, fi)
-        fin_real = min(v_ff, ff)
-        dias_vac[v.empleado_id] = dias_vac.get(v.empleado_id, 0) + dias_laborables(inicio_real, fin_real)
+        fin_real = min(v_ff, ff_eval)
+        if fin_real >= inicio_real:
+            dias_vac[v.empleado_id] = dias_vac.get(v.empleado_id, 0) + dias_lab_fn(inicio_real, fin_real, festivos_set)
 
     all_dias = []
     dd = fi
@@ -2637,6 +2633,11 @@ def reporte_export_xlsx(
     DIAS_SEM = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"]
     MESES_ES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"]
     periodo_txt = f"{fi.day} de {MESES_ES[fi.month-1]} al {ff.day} de {MESES_ES[ff.month-1]} de {ff.year}"
+    dias_periodo_txt = (
+        f"{total_dias_evaluados} de {total_dias_periodo} días del periodo (quincena en curso)"
+        if periodo_en_curso
+        else f"{total_dias_periodo} días del periodo (incluye domingos de descanso)"
+    )
 
     # Agrupar empleados en hojas según el filtro solicitado:
     #  - Filtro por departamento  → una sola hoja con ese departamento
@@ -2795,7 +2796,7 @@ def reporte_export_xlsx(
 
     row = 2
     ws_res.merge_cells(start_row=row, start_column=1, end_row=row, end_column=RES_COLS)
-    ws_res.cell(row=row, column=1, value=f"Período: {periodo_txt}   |   Días laborables: {total_dias_lab}").font = font_periodo
+    ws_res.cell(row=row, column=1, value=f"Período: {periodo_txt}   |   {dias_periodo_txt}").font = font_periodo
     ws_res.cell(row=row, column=1).alignment = align_c
 
     row = 4
@@ -2816,7 +2817,7 @@ def reporte_export_xlsx(
         di_val = dias_incap.get(emp.id, 0)
         dv_val = dias_vac.get(emp.id, 0)
         dc_val = dias_completos.get(emp.id, 0)
-        denominador = total_dias_lab - di_val - dv_val - f_val - fj_val
+        denominador = dias_lab_evaluados - di_val - dv_val - f_val - fj_val
         pct = round((dc_val / max(1, denominador)) * 100, 1) if denominador > 0 else 0
 
         vals = [

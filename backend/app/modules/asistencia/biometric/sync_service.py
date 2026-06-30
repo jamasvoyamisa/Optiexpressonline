@@ -437,7 +437,25 @@ class SyncService:
             db.rollback()
             if "uq_asistencias_empleado_timestamp" in str(exc) or "Duplicate entry" in str(exc):
                 logger.info(f"Checada duplicada (IntegrityError) ignorada: emp={empleado.id} ts={timestamp}")
-                return None
+                dup = db.query(models.Asistencia).filter(
+                    models.Asistencia.empleado_id == empleado.id,
+                    models.Asistencia.timestamp == timestamp,
+                ).first()
+                if not dup:
+                    ventana = timestamp - timedelta(seconds=60)
+                    dup = (
+                        db.query(models.Asistencia)
+                        .filter(
+                            models.Asistencia.empleado_id == empleado.id,
+                            models.Asistencia.timestamp >= ventana,
+                            models.Asistencia.timestamp <= timestamp,
+                        )
+                        .order_by(models.Asistencia.timestamp.desc())
+                        .first()
+                    )
+                if dup:
+                    return dup
+                raise ValueError("Checada duplicada")
             raise
         db.refresh(asistencia)
 

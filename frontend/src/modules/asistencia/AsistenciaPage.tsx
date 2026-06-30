@@ -3,6 +3,20 @@ import api from '../../services/api';
 import { Asistencia, Dispositivo, Empleado } from '../../types';
 import { parseTimestampForMexico, toMexicoDateString } from '../../utils/date';
 import { fmtNombreEmpleado } from '../../utils/format';
+import { useIsMobile } from '../../hooks/useIsMobile';
+import { ChecadaMiniGrid } from '../../components/asistencia/ChecadaMiniGrid';
+import {
+  rhMobileBadge,
+  rhMobileBtnPrimary,
+  rhMobileBtnSecondary,
+  rhMobileCard,
+  rhMobileCardRow,
+  rhMobileCardSub,
+  rhMobileCardTitle,
+  rhMobileFilterStack,
+  rhMobileInput,
+  rhMobileSelect,
+} from '../rh/rhMobileStyles';
 
 interface AsistenciaConEmpleado extends Asistencia {
   empleado?: Empleado;
@@ -12,6 +26,7 @@ interface AsistenciaConEmpleado extends Asistencia {
 const FILAS_POR_PAGINA = 25;
 
 export const AsistenciaPage = () => {
+  const isMobile = useIsMobile();
   const [checadas, setChecadas] = useState<AsistenciaConEmpleado[]>([]);
   const [dispositivos, setDispositivos] = useState<Dispositivo[]>([]);
   const [empleados, setEmpleados] = useState<Empleado[]>([]);
@@ -172,121 +187,151 @@ export const AsistenciaPage = () => {
     setPagina(p => Math.min(p, totalPaginas));
   }, [totalPaginas]);
 
-  if (loading && checadas.length === 0) return <div style={{ padding: '20px' }}>Cargando...</div>;
+  if (loading && checadas.length === 0) return <div style={{ padding: isMobile ? '14px' : '20px' }}>Cargando...</div>;
+
+  const paginationBar = dayRowsFiltrados.length > FILAS_POR_PAGINA && (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', marginBottom: '12px', padding: '0 4px' }}>
+      <span style={{ color: '#555', fontSize: '0.85rem' }}>
+        {inicio + 1}–{Math.min(inicio + FILAS_POR_PAGINA, dayRowsFiltrados.length)} de {dayRowsFiltrados.length}
+      </span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <button
+          type="button"
+          disabled={paginaSegura <= 1}
+          onClick={() => setPagina(p => Math.max(1, p - 1))}
+          style={isMobile ? { ...rhMobileBtnSecondary, minHeight: 36 } : { padding: '6px 14px', border: '1px solid #ccc', borderRadius: '6px', background: paginaSegura <= 1 ? '#f5f5f5' : 'white', cursor: paginaSegura <= 1 ? 'not-allowed' : 'pointer' }}
+        >
+          Anterior
+        </button>
+        <span style={{ color: '#333', fontSize: '0.85rem' }}>{paginaSegura}/{totalPaginas}</span>
+        <button
+          type="button"
+          disabled={paginaSegura >= totalPaginas}
+          onClick={() => setPagina(p => Math.min(totalPaginas, p + 1))}
+          style={isMobile ? { ...rhMobileBtnSecondary, minHeight: 36 } : { padding: '6px 14px', border: '1px solid #ccc', borderRadius: '6px', background: paginaSegura >= totalPaginas ? '#f5f5f5' : 'white', cursor: paginaSegura >= totalPaginas ? 'not-allowed' : 'pointer' }}
+        >
+          Siguiente
+        </button>
+      </div>
+    </div>
+  );
 
   return (
-    <div style={{ padding: '20px' }}>
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-        <h1 style={{ margin: 0 }}>Asistencia</h1>
+    <div style={{ padding: isMobile ? '14px 14px 30px' : '20px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', gap: 10 }}>
+        <h1 style={{ margin: 0, fontSize: isMobile ? '1.2rem' : '1.6rem' }}>Asistencia</h1>
         <button
+          type="button"
           onClick={() => { setLoading(true); loadData(); }}
           disabled={loading}
-          style={{ padding: '8px 18px', backgroundColor: '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.6 : 1 }}
+          style={isMobile
+            ? { ...rhMobileBtnSecondary, minHeight: 40, opacity: loading ? 0.6 : 1 }
+            : { padding: '8px 18px', backgroundColor: '#28a745', color: 'white', border: 'none', borderRadius: '5px', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.6 : 1 }}
         >
           {loading ? 'Actualizando...' : 'Actualizar'}
         </button>
       </div>
 
-      {/* Estadisticas */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr 1fr' : 'repeat(auto-fit, minmax(180px, 1fr))', gap: isMobile ? 8 : '16px', marginBottom: '20px' }}>
         {[
           { label: 'Total Checadas', value: estadisticas.totalChecadas, color: '#333' },
           { label: 'Empleados Hoy', value: estadisticas.empleadosHoy, color: '#28a745' },
           { label: 'Dispositivos', value: estadisticas.dispositivosActivos, color: '#0ea5e9' },
         ].map((s) => (
-          <div key={s.label} style={{ padding: '18px', backgroundColor: 'white', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
-            <div style={{ color: '#888', fontSize: '0.85rem', marginBottom: '4px' }}>{s.label}</div>
-            <div style={{ fontSize: '1.8rem', fontWeight: 'bold', color: s.color }}>{s.value}</div>
+          <div key={s.label} style={{ padding: isMobile ? '12px' : '18px', backgroundColor: 'white', borderRadius: isMobile ? 12 : '8px', border: '1px solid #e5e7eb' }}>
+            <div style={{ color: '#888', fontSize: '0.75rem', marginBottom: '2px' }}>{s.label}</div>
+            <div style={{ fontSize: isMobile ? '1.35rem' : '1.8rem', fontWeight: 'bold', color: s.color }}>{s.value}</div>
           </div>
         ))}
       </div>
 
-      {/* Filtros */}
-      <div style={{ padding: '18px', backgroundColor: 'white', borderRadius: '8px', border: '1px solid #e5e7eb', marginBottom: '24px' }}>
-        <h3 style={{ margin: '0 0 12px 0' }}>Filtros</h3>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center' }}>
-          <input
-            type="search"
-            value={busquedaNombre}
-            onChange={(e) => setBusquedaNombre(e.target.value)}
-            placeholder="Buscar por nombre o no. empleado"
-            style={{ flex: '1 1 200px', minWidth: '180px', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-          />
-          <select
-            value={filtros.dispositivo_id}
-            onChange={(e) => setFiltros({ ...filtros, dispositivo_id: e.target.value })}
-            style={{ flex: '1 1 180px', minWidth: '160px', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-          >
-            <option value="">Todos los dispositivos</option>
-            {dispositivos.map(dev => (
-              <option key={dev.id} value={dev.id}>{dev.nombre}</option>
-            ))}
-          </select>
-          <input
-            type="date"
-            value={filtros.fecha_inicio}
-            onChange={(e) => setFiltros({ ...filtros, fecha_inicio: e.target.value })}
-            style={{ flex: '1 1 150px', minWidth: '140px', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-          />
-          <input
-            type="date"
-            value={filtros.fecha_fin}
-            onChange={(e) => setFiltros({ ...filtros, fecha_fin: e.target.value })}
-            style={{ flex: '1 1 150px', minWidth: '140px', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
-          />
-          <button
-            type="button"
-            onClick={handleFiltros}
-            style={{
-              flex: '0 0 auto',
-              padding: '8px 20px',
-              backgroundColor: '#0ea5e9',
-              color: 'white',
-              border: 'none',
-              borderRadius: '5px',
-              cursor: 'pointer',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            Aplicar Filtros
-          </button>
-        </div>
+      <div style={{ padding: isMobile ? '12px' : '18px', backgroundColor: 'white', borderRadius: isMobile ? 12 : '8px', border: '1px solid #e5e7eb', marginBottom: '20px' }}>
+        {!isMobile && <h3 style={{ margin: '0 0 12px 0' }}>Filtros</h3>}
+        {isMobile ? (
+          <div style={rhMobileFilterStack}>
+            <input
+              type="search"
+              value={busquedaNombre}
+              onChange={(e) => setBusquedaNombre(e.target.value)}
+              placeholder="Buscar nombre o no. empleado"
+              style={rhMobileInput}
+            />
+            <select
+              value={filtros.dispositivo_id}
+              onChange={(e) => setFiltros({ ...filtros, dispositivo_id: e.target.value })}
+              style={rhMobileSelect}
+            >
+              <option value="">Todos los dispositivos</option>
+              {dispositivos.map(dev => (
+                <option key={dev.id} value={dev.id}>{dev.nombre}</option>
+              ))}
+            </select>
+            <input type="date" value={filtros.fecha_inicio} onChange={(e) => setFiltros({ ...filtros, fecha_inicio: e.target.value })} style={rhMobileInput} />
+            <input type="date" value={filtros.fecha_fin} onChange={(e) => setFiltros({ ...filtros, fecha_fin: e.target.value })} style={rhMobileInput} />
+            <button type="button" onClick={handleFiltros} style={{ ...rhMobileBtnPrimary, backgroundColor: '#0ea5e9' }}>Aplicar filtros</button>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center' }}>
+            <input
+              type="search"
+              value={busquedaNombre}
+              onChange={(e) => setBusquedaNombre(e.target.value)}
+              placeholder="Buscar por nombre o no. empleado"
+              style={{ flex: '1 1 200px', minWidth: '180px', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
+            />
+            <select
+              value={filtros.dispositivo_id}
+              onChange={(e) => setFiltros({ ...filtros, dispositivo_id: e.target.value })}
+              style={{ flex: '1 1 180px', minWidth: '160px', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }}
+            >
+              <option value="">Todos los dispositivos</option>
+              {dispositivos.map(dev => (
+                <option key={dev.id} value={dev.id}>{dev.nombre}</option>
+              ))}
+            </select>
+            <input type="date" value={filtros.fecha_inicio} onChange={(e) => setFiltros({ ...filtros, fecha_inicio: e.target.value })} style={{ flex: '1 1 150px', minWidth: '140px', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
+            <input type="date" value={filtros.fecha_fin} onChange={(e) => setFiltros({ ...filtros, fecha_fin: e.target.value })} style={{ flex: '1 1 150px', minWidth: '140px', padding: '8px', border: '1px solid #ddd', borderRadius: '4px' }} />
+            <button type="button" onClick={handleFiltros} style={{ flex: '0 0 auto', padding: '8px 20px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', whiteSpace: 'nowrap' }}>
+              Aplicar Filtros
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Tabla de Asistencia agrupada */}
       {dayRowsFiltrados.length === 0 ? (
-        <p style={{ color: '#666', textAlign: 'center', padding: '40px 0' }}>
+        <p style={{ color: '#666', textAlign: 'center', padding: '32px 0' }}>
           {dayRows.length === 0 ? 'No hay checadas registradas.' : 'Ningún empleado coincide con la búsqueda.'}
         </p>
+      ) : isMobile ? (
+        <>
+          {paginationBar}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {dayRowsPagina.map(row => (
+              <div key={row.key} style={{ ...rhMobileCard, backgroundColor: row.esTiempoExtra ? '#fff8e1' : '#fff' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginBottom: 8 }}>
+                  <div>
+                    <div style={rhMobileCardTitle}>{row.empleadoNombre}</div>
+                    <div style={rhMobileCardSub}>#{row.numeroEmpleado} · {row.departamento}</div>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+                    {row.esTiempoExtra && <span style={rhMobileBadge('#ff9800', '#fff')}>T.EXTRA</span>}
+                    <span style={{ fontWeight: 800, color: '#0ea5e9', fontSize: '0.95rem' }}>{row.totalHoras}</span>
+                  </div>
+                </div>
+                <div style={{ ...rhMobileCardRow, marginTop: 0 }}>
+                  <span>{row.fecha}</span>
+                  <span style={{ fontSize: '0.75rem', color: '#64748b' }}>{row.empresa}</span>
+                </div>
+                <div style={{ marginTop: 10 }}>
+                  <ChecadaMiniGrid entrada={row.entrada} salida_comer={row.salida_comer} regreso_comer={row.regreso_comer} salida={row.salida} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
       ) : (
         <div style={{ overflowX: 'auto' }}>
-          {dayRowsFiltrados.length > FILAS_POR_PAGINA && (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', marginBottom: '12px', padding: '0 4px' }}>
-              <span style={{ color: '#555', fontSize: '0.9rem' }}>
-                Mostrando {inicio + 1}–{Math.min(inicio + FILAS_POR_PAGINA, dayRowsFiltrados.length)} de {dayRowsFiltrados.length} registros
-              </span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <button
-                  type="button"
-                  disabled={paginaSegura <= 1}
-                  onClick={() => setPagina(p => Math.max(1, p - 1))}
-                  style={{ padding: '6px 14px', border: '1px solid #ccc', borderRadius: '6px', background: paginaSegura <= 1 ? '#f5f5f5' : 'white', cursor: paginaSegura <= 1 ? 'not-allowed' : 'pointer' }}
-                >
-                  Anterior
-                </button>
-                <span style={{ color: '#333', fontSize: '0.9rem' }}>Página {paginaSegura} de {totalPaginas}</span>
-                <button
-                  type="button"
-                  disabled={paginaSegura >= totalPaginas}
-                  onClick={() => setPagina(p => Math.min(totalPaginas, p + 1))}
-                  style={{ padding: '6px 14px', border: '1px solid #ccc', borderRadius: '6px', background: paginaSegura >= totalPaginas ? '#f5f5f5' : 'white', cursor: paginaSegura >= totalPaginas ? 'not-allowed' : 'pointer' }}
-                >
-                  Siguiente
-                </button>
-              </div>
-            </div>
-          )}
+          {paginationBar}
           <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
             <thead>
               <tr style={{ backgroundColor: '#f8f9fa' }}>

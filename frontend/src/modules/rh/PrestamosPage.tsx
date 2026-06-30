@@ -2,7 +2,18 @@ import { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
 import { fmtNombreEmpleado } from '../../utils/format';
 import { useAuth } from '../../hooks/useAuth';
+import { useIsMobile } from '../../hooks/useIsMobile';
 import { generarDocumentoPrestamo } from '../prestamos/documentoPrestamo';
+import {
+  rhMobileBadge,
+  rhMobileBtnPrimary,
+  rhMobileCard,
+  rhMobileCardRow,
+  rhMobileCardSub,
+  rhMobileCardTitle,
+  rhMobileFilterStack,
+  rhMobileInput,
+} from './rhMobileStyles';
 
 interface Empleado {
   id: number;
@@ -154,7 +165,9 @@ function NumeroSolicitudCelda({ numero }: { numero: string }) {
   );
 }
 
-export const PrestamosPage = () => {
+export const PrestamosPage = ({ embeddedRh = false }: { embeddedRh?: boolean } = {}) => {
+  const isMobile = useIsMobile();
+  const compactRh = embeddedRh && isMobile;
   const { authMe } = useAuth();
   /** Vista completa del módulo (listados, alta RH): admin, RH o Director */
   const isRH = authMe?.is_superuser === true || authMe?.is_rh === true || authMe?.is_director === true;
@@ -418,19 +431,44 @@ export const PrestamosPage = () => {
   });
 
   return (
-    <div style={{ padding: '24px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
-        <h1 style={{ margin: 0, fontSize: '1.4rem' }}>Solicitudes de préstamos</h1>
-        {isRH && (
-          <button
-            onClick={abrirNueva}
-            style={{ padding: '9px 20px', backgroundColor: '#28a745', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', whiteSpace: 'nowrap' }}
-          >
-            + Registrar solicitud (RH)
-          </button>
-        )}
-      </div>
+    <div style={{ padding: compactRh ? 0 : isMobile ? '12px' : '24px' }}>
+      {!compactRh && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+          <h1 style={{ margin: 0, fontSize: isMobile ? '1.2rem' : '1.4rem' }}>Solicitudes de préstamos</h1>
+          {isRH && !isMobile && (
+            <button
+              onClick={abrirNueva}
+              style={{ padding: '9px 20px', backgroundColor: '#28a745', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', whiteSpace: 'nowrap' }}
+            >
+              + Registrar solicitud (RH)
+            </button>
+          )}
+        </div>
+      )}
 
+      {isRH && isMobile && (
+        <button type="button" onClick={abrirNueva} style={{ ...rhMobileBtnPrimary, marginBottom: 12, backgroundColor: '#28a745' }}>
+          + Registrar solicitud (RH)
+        </button>
+      )}
+
+      {isMobile ? (
+        <div style={rhMobileFilterStack}>
+          <input type="text" placeholder="Buscar empleado o No..." value={busqueda} onChange={e => setBusqueda(e.target.value)} style={rhMobileInput} />
+          <select value={filtroEstado} onChange={e => setFiltroEstado(e.target.value)} style={rhMobileInput}>
+            <option value="">Todos los estados</option>
+            {Object.entries(ESTADO_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+          <select value={filtroEmpresa} onChange={e => setFiltroEmpresa(e.target.value)} style={rhMobileInput}>
+            <option value="">Empresa</option>
+            {empresas.map(e => <option key={e.id} value={String(e.id)}>{e.nombre}</option>)}
+          </select>
+          <select value={filtroDepto} onChange={e => setFiltroDepto(e.target.value)} disabled={!filtroEmpresa} style={rhMobileInput}>
+            <option value="">Departamento</option>
+            {deptosFiltro.map(d => <option key={d.id} value={String(d.id)}>{d.nombre}</option>)}
+          </select>
+        </div>
+      ) : (
       <div style={{ backgroundColor: 'white', borderRadius: '10px', border: '1px solid #e5e7eb', padding: '12px 16px', marginBottom: '20px', display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
         <input
           type="text"
@@ -468,6 +506,7 @@ export const PrestamosPage = () => {
           </button>
         )}
       </div>
+      )}
 
       {loadError && (
         <div style={{ padding: '12px 16px', backgroundColor: '#fee2e2', border: '1px solid #fecaca', borderRadius: '8px', color: '#991b1b', fontSize: '0.88rem', marginBottom: '16px' }}>
@@ -482,6 +521,33 @@ export const PrestamosPage = () => {
           {solicitudes.length === 0
             ? 'No hay solicitudes de préstamo registradas.'
             : 'No se encontraron solicitudes con los filtros aplicados.'}
+        </div>
+      ) : isMobile ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {filtradas.map(sol => {
+            const estadoStyle = ESTADO_STYLE[sol.estado] ?? ESTADO_STYLE.pendiente;
+            const empMeta = sol.empleado ?? empleadosMetaMap[sol.empleado_id];
+            return (
+              <div key={sol.id} style={rhMobileCard}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+                  <div>
+                    <div style={rhMobileCardTitle}>{nombreEmpleado(sol.empleado)}</div>
+                    <div style={rhMobileCardSub}>No. {sol.empleado?.numero_empleado ?? '—'}</div>
+                  </div>
+                  <span style={rhMobileBadge(estadoStyle.bg, estadoStyle.color)}>{ESTADO_LABEL[sol.estado] ?? sol.estado}</span>
+                </div>
+                <div style={{ ...rhMobileCardRow, fontWeight: 700, color: '#0f172a', marginTop: 10 }}>
+                  <span>{formatMonto(sol.monto)}</span>
+                  <span>{sol.plazo_meses} quincenas</span>
+                </div>
+                <div style={rhMobileCardRow}>
+                  <span>Desc./q: {sol.descuento_quincenal ? formatMonto(sol.descuento_quincenal) : '—'}</span>
+                  <span>Saldo: {formatSaldoPrestamo(sol)}</span>
+                </div>
+                <div style={{ ...rhMobileCardSub, marginTop: 6 }}>{empMeta?.departamento?.nombre || '—'}</div>
+              </div>
+            );
+          })}
         </div>
       ) : (
         <div style={{ overflowX: 'auto', backgroundColor: 'white', borderRadius: '10px', border: '1px solid #e5e7eb', boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>

@@ -2,7 +2,22 @@ import React, { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
 import { fmtNombreEmpleado } from '../../utils/format';
 import { useAuth } from '../../hooks/useAuth';
+import { useIsMobile } from '../../hooks/useIsMobile';
 import type { SolicitudVacaciones } from '../../types';
+import {
+  rhMobileBadge,
+  rhMobileBtnPrimary,
+  rhMobileBtnSecondary,
+  rhMobileCard,
+  rhMobileCardRow,
+  rhMobileCardSub,
+  rhMobileCardTitle,
+  rhMobileSheetContainer,
+  rhMobileSheetHandle,
+  rhMobileSheetOverlay,
+  rhMobileTabPill,
+  rhMobileTabScroll,
+} from '../rh/rhMobileStyles';
 
 interface SolicitudPrestamo {
   id: number;
@@ -49,8 +64,10 @@ const td: React.CSSProperties = {
 
 type TabTipo = 'vacaciones' | 'prestamos';
 
-export const SolicitudesVacacionesAprobarPage = () => {
+export const SolicitudesVacacionesAprobarPage = ({ embeddedRh = false }: { embeddedRh?: boolean } = {}) => {
   const { authMe } = useAuth();
+  const isMobile = useIsMobile();
+  const compactRh = embeddedRh && isMobile;
   const [activeTab, setActiveTab] = useState<TabTipo>('vacaciones');
   const [solicitudes, setSolicitudes] = useState<SolicitudVacaciones[]>([]);
   /** Pendientes de autorización por gerente de departamento */
@@ -219,7 +236,7 @@ export const SolicitudesVacacionesAprobarPage = () => {
 
   if (loading) {
     return (
-      <div style={{ padding: 32, textAlign: 'center', color: '#6b7280' }}>
+      <div style={{ padding: compactRh ? 0 : 32, textAlign: 'center', color: '#6b7280' }}>
         Cargando solicitudes pendientes...
       </div>
     );
@@ -227,7 +244,7 @@ export const SolicitudesVacacionesAprobarPage = () => {
 
   if (error) {
     return (
-      <div style={{ padding: 32, color: '#dc2626' }}>
+      <div style={{ padding: compactRh ? 0 : 32, color: '#dc2626' }}>
         {error}
         <button onClick={cargarDatos} style={{ marginLeft: 12, padding: '4px 12px', cursor: 'pointer' }}>
           Reintentar
@@ -240,53 +257,194 @@ export const SolicitudesVacacionesAprobarPage = () => {
     solicitudesPrestamosDepto.length + solicitudesPrestamosDeposito.length;
   const totalPendientes = activeTab === 'vacaciones' ? solicitudes.length : totalPendientesPrestamos;
 
+  const tabBtnStyle = (active: boolean): React.CSSProperties => ({
+    padding: '10px 20px',
+    border: 'none',
+    borderRadius: 8,
+    cursor: 'pointer',
+    fontWeight: active ? 700 : 400,
+    backgroundColor: active ? '#0ea5e9' : '#e5e7eb',
+    color: active ? 'white' : '#374151',
+  });
+
+  const emptyState = (msg: string) => (
+    <div style={{
+      padding: isMobile ? 28 : 48,
+      textAlign: 'center',
+      backgroundColor: '#f9fafb',
+      borderRadius: 12,
+      border: '1px solid #e5e7eb',
+      color: '#6b7280',
+      fontSize: isMobile ? '0.92rem' : '1rem',
+    }}>
+      {msg}
+    </div>
+  );
+
+  const renderVacacionesMobile = () => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {solicitudes.map(s => {
+        const emp = empleadosMap.get(s.empleado_id);
+        return (
+          <div key={s.id} style={rhMobileCard}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+              <div>
+                <div style={rhMobileCardTitle}>
+                  {nombreEmp(emp)}
+                  {emp?.numero_empleado && (
+                    <span style={{ marginLeft: 6, color: '#94a3b8', fontWeight: 500, fontSize: '0.78rem' }}>
+                      #{emp.numero_empleado}
+                    </span>
+                  )}
+                </div>
+                <div style={rhMobileCardSub}>
+                  {[emp?.departamento?.nombre, emp?.puesto?.nombre].filter(Boolean).join(' · ') || '—'}
+                </div>
+              </div>
+              <span style={rhMobileBadge('#dbeafe', '#1d4ed8')}>{s.dias_solicitados} días</span>
+            </div>
+            <div style={rhMobileCardRow}>
+              <span>Inicio</span>
+              <span>{new Date(s.fecha_inicio).toLocaleDateString('es-MX', { dateStyle: 'short' })}</span>
+            </div>
+            <div style={rhMobileCardRow}>
+              <span>Fin</span>
+              <span>{new Date(s.fecha_fin).toLocaleDateString('es-MX', { dateStyle: 'short' })}</span>
+            </div>
+            {s.motivo && (
+              <div style={{ ...rhMobileCardRow, alignItems: 'flex-start' }}>
+                <span>Motivo</span>
+                <span style={{ textAlign: 'right', maxWidth: '60%' }}>{s.motivo}</span>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => { setModalAprobar(s); setAprobacionComentarios(''); }}
+              style={{ ...rhMobileBtnPrimary, marginTop: 12, backgroundColor: '#0d9488' }}
+            >
+              Aprobar / Rechazar
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  const renderPrestamoMobile = (
+    items: SolicitudPrestamo[],
+    action: 'autorizar' | 'depositar',
+  ) => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {items.map(s => {
+        const emp = empleadosMap.get(s.empleado_id);
+        return (
+          <div key={s.id} style={rhMobileCard}>
+            <div style={rhMobileCardTitle}>
+              {nombreEmp(emp)}
+              {emp?.numero_empleado && (
+                <span style={{ marginLeft: 6, color: '#94a3b8', fontWeight: 500, fontSize: '0.78rem' }}>
+                  #{emp.numero_empleado}
+                </span>
+              )}
+            </div>
+            <div style={rhMobileCardSub}>{emp?.departamento?.nombre ?? '—'}</div>
+            <div style={rhMobileCardRow}>
+              <span>Monto</span>
+              <span style={{ fontWeight: 700 }}>{formatMonto(s.monto)}</span>
+            </div>
+            <div style={rhMobileCardRow}>
+              <span>Plazo</span>
+              <span>{s.plazo_meses} quincenas</span>
+            </div>
+            {s.motivo && (
+              <div style={{ ...rhMobileCardRow, alignItems: 'flex-start' }}>
+                <span>Motivo</span>
+                <span style={{ textAlign: 'right', maxWidth: '60%' }}>{s.motivo}</span>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                if (action === 'autorizar') {
+                  setModalAprobarPrestamo(s);
+                  setAprobacionComentarios('');
+                } else {
+                  setModalDepositarPrestamo(s);
+                  setReferenciaBancaria('');
+                  setAprobacionComentarios('');
+                }
+              }}
+              style={{
+                ...rhMobileBtnPrimary,
+                marginTop: 12,
+                backgroundColor: action === 'depositar' ? '#2563eb' : '#0d9488',
+              }}
+            >
+              {action === 'depositar' ? 'Registrar depósito' : 'Autorizar / Rechazar'}
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+
   return (
-    <div style={{ padding: '24px' }}>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
+    <div style={{ padding: compactRh ? 0 : isMobile ? '12px' : '24px' }}>
+      <div style={isMobile ? rhMobileTabScroll : { display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
         <button
+          type="button"
           onClick={() => setActiveTab('vacaciones')}
-          style={{
-            padding: '10px 20px',
-            border: 'none',
-            borderRadius: 8,
-            cursor: 'pointer',
-            fontWeight: activeTab === 'vacaciones' ? 700 : 400,
-            backgroundColor: activeTab === 'vacaciones' ? '#0ea5e9' : '#e5e7eb',
-            color: activeTab === 'vacaciones' ? 'white' : '#374151',
-          }}
+          style={isMobile ? rhMobileTabPill(activeTab === 'vacaciones') : tabBtnStyle(activeTab === 'vacaciones')}
         >
-          Vacaciones
+          Vacaciones{solicitudes.length > 0 ? ` (${solicitudes.length})` : ''}
         </button>
         <button
+          type="button"
           onClick={() => setActiveTab('prestamos')}
-          style={{
-            padding: '10px 20px',
-            border: 'none',
-            borderRadius: 8,
-            cursor: 'pointer',
-            fontWeight: activeTab === 'prestamos' ? 700 : 400,
-            backgroundColor: activeTab === 'prestamos' ? '#0ea5e9' : '#e5e7eb',
-            color: activeTab === 'prestamos' ? 'white' : '#374151',
-          }}
+          style={isMobile ? rhMobileTabPill(activeTab === 'prestamos') : tabBtnStyle(activeTab === 'prestamos')}
         >
-          Préstamos
+          Préstamos{totalPendientesPrestamos > 0 ? ` (${totalPendientesPrestamos})` : ''}
         </button>
       </div>
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 700, color: '#111827' }}>
-            Solicitudes a confirmar
-          </h1>
-          <p style={{ margin: '6px 0 0', fontSize: '0.9rem', color: '#6b7280' }}>
-            {activeTab === 'vacaciones' ? 'Vacaciones' : 'Préstamos'} pendientes de tu confirmación · {rolLabel()}
-          </p>
+      {!compactRh && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
+          <div>
+            <h1 style={{ margin: 0, fontSize: isMobile ? '1.25rem' : '1.5rem', fontWeight: 700, color: '#111827' }}>
+              Solicitudes a confirmar
+            </h1>
+            <p style={{ margin: '6px 0 0', fontSize: '0.9rem', color: '#6b7280' }}>
+              {activeTab === 'vacaciones' ? 'Vacaciones' : 'Préstamos'} pendientes de tu confirmación · {rolLabel()}
+            </p>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{
+              padding: '6px 14px',
+              borderRadius: 8,
+              fontSize: '0.9rem',
+              fontWeight: 700,
+              backgroundColor: totalPendientes > 0 ? '#fef3c7' : '#e5e7eb',
+              color: totalPendientes > 0 ? '#92400e' : '#6b7280',
+            }}>
+              {totalPendientes} pendiente{totalPendientes !== 1 ? 's' : ''}
+            </span>
+            <button
+              type="button"
+              onClick={cargarDatos}
+              style={{ padding: '8px 16px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }}
+            >
+              Actualizar
+            </button>
+          </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      )}
+
+      {compactRh && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, gap: 8 }}>
           <span style={{
-            padding: '6px 14px',
+            padding: '5px 12px',
             borderRadius: 8,
-            fontSize: '0.9rem',
+            fontSize: '0.82rem',
             fontWeight: 700,
             backgroundColor: totalPendientes > 0 ? '#fef3c7' : '#e5e7eb',
             color: totalPendientes > 0 ? '#92400e' : '#6b7280',
@@ -294,38 +452,21 @@ export const SolicitudesVacacionesAprobarPage = () => {
             {totalPendientes} pendiente{totalPendientes !== 1 ? 's' : ''}
           </span>
           <button
+            type="button"
             onClick={cargarDatos}
-            style={{ padding: '8px 16px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }}
+            style={{ ...rhMobileBtnSecondary, minHeight: 36 }}
           >
             Actualizar
           </button>
         </div>
-      </div>
+      )}
 
       {activeTab === 'vacaciones' && solicitudes.length === 0 ? (
-        <div style={{
-          padding: 48,
-          textAlign: 'center',
-          backgroundColor: '#f9fafb',
-          borderRadius: 12,
-          border: '1px solid #e5e7eb',
-          color: '#6b7280',
-          fontSize: '1rem',
-        }}>
-          No hay solicitudes de vacaciones pendientes de tu confirmación.
-        </div>
+        emptyState('No hay solicitudes de vacaciones pendientes de tu confirmación.')
       ) : activeTab === 'prestamos' && totalPendientesPrestamos === 0 ? (
-        <div style={{
-          padding: 48,
-          textAlign: 'center',
-          backgroundColor: '#f9fafb',
-          borderRadius: 12,
-          border: '1px solid #e5e7eb',
-          color: '#6b7280',
-          fontSize: '1rem',
-        }}>
-          No hay solicitudes de préstamos pendientes de tu confirmación.
-        </div>
+        emptyState('No hay solicitudes de préstamos pendientes de tu confirmación.')
+      ) : activeTab === 'vacaciones' && isMobile ? (
+        renderVacacionesMobile()
       ) : activeTab === 'vacaciones' ? (
         <div style={{ overflowX: 'auto', backgroundColor: 'white', borderRadius: 12, boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -386,6 +527,25 @@ export const SolicitudesVacacionesAprobarPage = () => {
               })}
             </tbody>
           </table>
+        </div>
+      ) : activeTab === 'prestamos' && isMobile ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {solicitudesPrestamosDepto.length > 0 && (
+            <div>
+              <h2 style={{ fontSize: '0.95rem', margin: '0 0 10px', color: '#0f172a', fontWeight: 700 }}>
+                Pendientes en mi departamento
+              </h2>
+              {renderPrestamoMobile(solicitudesPrestamosDepto, 'autorizar')}
+            </div>
+          )}
+          {solicitudesPrestamosDeposito.length > 0 && (
+            <div>
+              <h2 style={{ fontSize: '0.95rem', margin: '0 0 10px', color: '#0f172a', fontWeight: 700 }}>
+                Pendientes de depósito
+              </h2>
+              {renderPrestamoMobile(solicitudesPrestamosDeposito, 'depositar')}
+            </div>
+          )}
         </div>
       ) : activeTab === 'prestamos' ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
@@ -527,31 +687,17 @@ export const SolicitudesVacacionesAprobarPage = () => {
       {/* Modal Aprobar/Rechazar Vacaciones */}
       {modalAprobar && (
         <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 100,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: 'rgba(0,0,0,0.4)',
-          }}
+          style={rhMobileSheetOverlay(isMobile)}
           onClick={() => setModalAprobar(null)}
           role="presentation"
         >
           <div
-            style={{
-              backgroundColor: 'white',
-              padding: 24,
-              borderRadius: 12,
-              maxWidth: 440,
-              width: '90%',
-              boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
-            }}
+            style={rhMobileSheetContainer(isMobile)}
             onClick={e => e.stopPropagation()}
             role="dialog"
           >
-            <h2 style={{ marginTop: 0, marginBottom: 12 }}>Aprobar o rechazar vacaciones</h2>
+            {isMobile && <div style={rhMobileSheetHandle} />}
+            <h2 style={{ marginTop: 0, marginBottom: 12, fontSize: isMobile ? '1.05rem' : undefined }}>Aprobar o rechazar vacaciones</h2>
             <p style={{ color: '#555', marginBottom: 6, fontWeight: 600 }}>
               {nombreEmp(empleadosMap.get(modalAprobar.empleado_id))}
             </p>
@@ -567,27 +713,32 @@ export const SolicitudesVacacionesAprobarPage = () => {
                 style={{ width: '100%', padding: 10, border: '1px solid #ddd', borderRadius: 6, resize: 'vertical', fontSize: '0.9rem' }}
               />
             </div>
-            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+            <div style={{ display: 'flex', gap: 10, justifyContent: isMobile ? 'stretch' : 'flex-end', flexDirection: isMobile ? 'column-reverse' : 'row' }}>
               <button
+                type="button"
                 onClick={() => setModalAprobar(null)}
-                style={{ padding: '9px 18px', backgroundColor: '#e5e7eb', color: '#374151', border: 'none', borderRadius: 6, cursor: 'pointer' }}
+                style={isMobile ? { ...rhMobileBtnSecondary, minHeight: 44, width: '100%' } : { padding: '9px 18px', backgroundColor: '#e5e7eb', color: '#374151', border: 'none', borderRadius: 6, cursor: 'pointer' }}
               >
                 Cancelar
               </button>
-              <button
-                onClick={() => handleAprobarRechazar(false)}
-                disabled={aprobando}
-                style={{ padding: '9px 18px', backgroundColor: '#dc2626', color: 'white', border: 'none', borderRadius: 6, cursor: aprobando ? 'not-allowed' : 'pointer' }}
-              >
-                {aprobando ? '...' : 'Rechazar'}
-              </button>
-              <button
-                onClick={() => handleAprobarRechazar(true)}
-                disabled={aprobando}
-                style={{ padding: '9px 18px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: 6, cursor: aprobando ? 'not-allowed' : 'pointer' }}
-              >
-                {aprobando ? '...' : 'Aprobar'}
-              </button>
+              <div style={{ display: 'flex', gap: 10, flexDirection: isMobile ? 'column' : 'row' }}>
+                <button
+                  type="button"
+                  onClick={() => handleAprobarRechazar(false)}
+                  disabled={aprobando}
+                  style={isMobile ? { ...rhMobileBtnPrimary, backgroundColor: '#dc2626' } : { padding: '9px 18px', backgroundColor: '#dc2626', color: 'white', border: 'none', borderRadius: 6, cursor: aprobando ? 'not-allowed' : 'pointer' }}
+                >
+                  {aprobando ? '...' : 'Rechazar'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleAprobarRechazar(true)}
+                  disabled={aprobando}
+                  style={isMobile ? { ...rhMobileBtnPrimary, backgroundColor: '#16a34a' } : { padding: '9px 18px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: 6, cursor: aprobando ? 'not-allowed' : 'pointer' }}
+                >
+                  {aprobando ? '...' : 'Aprobar'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -596,31 +747,17 @@ export const SolicitudesVacacionesAprobarPage = () => {
       {/* Modal Aprobar/Rechazar Préstamo */}
       {modalAprobarPrestamo && (
         <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 100,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: 'rgba(0,0,0,0.4)',
-          }}
+          style={rhMobileSheetOverlay(isMobile)}
           onClick={() => setModalAprobarPrestamo(null)}
           role="presentation"
         >
           <div
-            style={{
-              backgroundColor: 'white',
-              padding: 24,
-              borderRadius: 12,
-              maxWidth: 440,
-              width: '90%',
-              boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
-            }}
+            style={rhMobileSheetContainer(isMobile)}
             onClick={e => e.stopPropagation()}
             role="dialog"
           >
-            <h2 style={{ marginTop: 0, marginBottom: 12 }}>Autorizar préstamo (gerente de departamento)</h2>
+            {isMobile && <div style={rhMobileSheetHandle} />}
+            <h2 style={{ marginTop: 0, marginBottom: 12, fontSize: isMobile ? '1.05rem' : undefined }}>Autorizar préstamo (gerente de departamento)</h2>
             <p style={{ color: '#555', marginBottom: 6, fontWeight: 600 }}>
               {nombreEmp(empleadosMap.get(modalAprobarPrestamo.empleado_id))}
             </p>
@@ -636,27 +773,32 @@ export const SolicitudesVacacionesAprobarPage = () => {
                 style={{ width: '100%', padding: 10, border: '1px solid #ddd', borderRadius: 6, resize: 'vertical', fontSize: '0.9rem' }}
               />
             </div>
-            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+            <div style={{ display: 'flex', gap: 10, justifyContent: isMobile ? 'stretch' : 'flex-end', flexDirection: isMobile ? 'column-reverse' : 'row' }}>
               <button
+                type="button"
                 onClick={() => setModalAprobarPrestamo(null)}
-                style={{ padding: '9px 18px', backgroundColor: '#e5e7eb', color: '#374151', border: 'none', borderRadius: 6, cursor: 'pointer' }}
+                style={isMobile ? { ...rhMobileBtnSecondary, minHeight: 44, width: '100%' } : { padding: '9px 18px', backgroundColor: '#e5e7eb', color: '#374151', border: 'none', borderRadius: 6, cursor: 'pointer' }}
               >
                 Cancelar
               </button>
-              <button
-                onClick={() => handleAprobarRechazarPrestamo(false)}
-                disabled={aprobando}
-                style={{ padding: '9px 18px', backgroundColor: '#dc2626', color: 'white', border: 'none', borderRadius: 6, cursor: aprobando ? 'not-allowed' : 'pointer' }}
-              >
-                {aprobando ? '...' : 'Rechazar'}
-              </button>
-              <button
-                onClick={() => handleAprobarRechazarPrestamo(true)}
-                disabled={aprobando}
-                style={{ padding: '9px 18px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: 6, cursor: aprobando ? 'not-allowed' : 'pointer' }}
-              >
-                {aprobando ? '...' : 'Autorizar'}
-              </button>
+              <div style={{ display: 'flex', gap: 10, flexDirection: isMobile ? 'column' : 'row' }}>
+                <button
+                  type="button"
+                  onClick={() => handleAprobarRechazarPrestamo(false)}
+                  disabled={aprobando}
+                  style={isMobile ? { ...rhMobileBtnPrimary, backgroundColor: '#dc2626' } : { padding: '9px 18px', backgroundColor: '#dc2626', color: 'white', border: 'none', borderRadius: 6, cursor: aprobando ? 'not-allowed' : 'pointer' }}
+                >
+                  {aprobando ? '...' : 'Rechazar'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleAprobarRechazarPrestamo(true)}
+                  disabled={aprobando}
+                  style={isMobile ? { ...rhMobileBtnPrimary, backgroundColor: '#16a34a' } : { padding: '9px 18px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: 6, cursor: aprobando ? 'not-allowed' : 'pointer' }}
+                >
+                  {aprobando ? '...' : 'Autorizar'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -665,31 +807,17 @@ export const SolicitudesVacacionesAprobarPage = () => {
       {/* Modal registrar depósito (Gerente General) */}
       {modalDepositarPrestamo && (
         <div
-          style={{
-            position: 'fixed',
-            inset: 0,
-            zIndex: 100,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: 'rgba(0,0,0,0.4)',
-          }}
+          style={rhMobileSheetOverlay(isMobile)}
           onClick={() => setModalDepositarPrestamo(null)}
           role="presentation"
         >
           <div
-            style={{
-              backgroundColor: 'white',
-              padding: 24,
-              borderRadius: 12,
-              maxWidth: 440,
-              width: '90%',
-              boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
-            }}
+            style={rhMobileSheetContainer(isMobile)}
             onClick={e => e.stopPropagation()}
             role="dialog"
           >
-            <h2 style={{ marginTop: 0, marginBottom: 12 }}>Registrar depósito</h2>
+            {isMobile && <div style={rhMobileSheetHandle} />}
+            <h2 style={{ marginTop: 0, marginBottom: 12, fontSize: isMobile ? '1.05rem' : undefined }}>Registrar depósito</h2>
             <p style={{ color: '#555', marginBottom: 6, fontWeight: 600 }}>
               {nombreEmp(empleadosMap.get(modalDepositarPrestamo.empleado_id))}
             </p>
@@ -717,11 +845,11 @@ export const SolicitudesVacacionesAprobarPage = () => {
                 style={{ width: '100%', padding: 10, border: '1px solid #ddd', borderRadius: 6, resize: 'vertical', fontSize: '0.9rem' }}
               />
             </div>
-            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+            <div style={{ display: 'flex', gap: 10, justifyContent: isMobile ? 'stretch' : 'flex-end', flexDirection: isMobile ? 'column-reverse' : 'row' }}>
               <button
                 type="button"
                 onClick={() => setModalDepositarPrestamo(null)}
-                style={{ padding: '9px 18px', backgroundColor: '#e5e7eb', color: '#374151', border: 'none', borderRadius: 6, cursor: 'pointer' }}
+                style={isMobile ? { ...rhMobileBtnSecondary, minHeight: 44, width: '100%' } : { padding: '9px 18px', backgroundColor: '#e5e7eb', color: '#374151', border: 'none', borderRadius: 6, cursor: 'pointer' }}
               >
                 Cancelar
               </button>
@@ -729,7 +857,7 @@ export const SolicitudesVacacionesAprobarPage = () => {
                 type="button"
                 onClick={handleDepositarPrestamo}
                 disabled={aprobando}
-                style={{ padding: '9px 18px', backgroundColor: '#2563eb', color: 'white', border: 'none', borderRadius: 6, cursor: aprobando ? 'not-allowed' : 'pointer' }}
+                style={isMobile ? { ...rhMobileBtnPrimary, backgroundColor: '#2563eb' } : { padding: '9px 18px', backgroundColor: '#2563eb', color: 'white', border: 'none', borderRadius: 6, cursor: aprobando ? 'not-allowed' : 'pointer' }}
               >
                 {aprobando ? '...' : 'Confirmar depósito'}
               </button>

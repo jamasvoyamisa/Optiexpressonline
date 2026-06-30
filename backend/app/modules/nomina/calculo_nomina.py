@@ -2,6 +2,7 @@
 Motor de cálculo de nómina v1.
 
 - Días pagados desde asistencia (checadas) o calendario de la empresa; override manual en detalle.
+- Sueldo del periodo: salario mensual × (días pagados / días base mes), p. ej. 30.4.
 - ISR quincenal + subsidio al empleo (tablas por ejercicio).
 - IMSS cuota obrera por ramos (parametrizable).
 - INFONAVIT/INFONACOT y préstamos depositados.
@@ -48,13 +49,13 @@ def _periodicidad_clave(per: str) -> str:
     return "quincenal"
 
 
-def _factor_dias_nomina(periodicidad: str) -> Decimal:
-    k = _periodicidad_clave(periodicidad)
-    if k == "mensual":
-        return Decimal("30.4")
-    if k == "semanal":
-        return Decimal("7")
-    return Decimal("15")
+def _sueldo_periodo(
+    salario_mensual: Decimal, dias_pagados: Decimal, dias_base_mes: Decimal
+) -> Decimal:
+    """Prorrateo mensual → periodo: salario_mensual × (días pagados / días del mes)."""
+    if dias_base_mes <= 0:
+        return Decimal("0")
+    return _q2(salario_mensual * (dias_pagados / dias_base_mes))
 
 
 def _isr_tabla(
@@ -158,7 +159,6 @@ def calcular_periodo_nomina(db: Session, periodo_id: int) -> dict:
     params = get_parametros_fiscales(db, ejercicio)
     per_sat = (periodo.periodicidad or "04").strip()
     periodicidad = _periodicidad_clave(per_sat)
-    factor_dias = _factor_dias_nomina(per_sat)
 
     empleados = (
         db.query(personal_models.Empleado)
@@ -210,7 +210,7 @@ def calcular_periodo_nomina(db: Session, periodo_id: int) -> dict:
 
         salario_mensual = Decimal(str(nom.salario_base))
         salario_diario_nom = _q2(salario_mensual / params.dias_base_mes)
-        sueldo = _q2(salario_mensual * (dias_pagados / factor_dias))
+        sueldo = _sueldo_periodo(salario_mensual, dias_pagados, params.dias_base_mes)
 
         percepciones: List[dict] = [
             {

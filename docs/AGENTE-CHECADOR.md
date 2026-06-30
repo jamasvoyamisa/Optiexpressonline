@@ -33,7 +33,7 @@ Documento de referencia sobre el funcionamiento del agente local de checadas, la
 └─────────────────────────────────────┘
 ```
 
-El agente también existe en variantes para Linux (`agent-linux/`), Windows (`agent-windows/`) y uso local de desarrollo (`agent-local/`). Todos comparten la misma lógica.
+El agente vive en **`agent-local/`** (Windows con bandeja + instalador, Linux/Mac/servidor con scripts o systemd).
 
 ---
 

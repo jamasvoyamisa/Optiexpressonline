@@ -1,6 +1,7 @@
 """Lógica de negocio para el módulo de Nómina (Fase 1)."""
 from typing import List, Optional, Tuple
 from sqlalchemy.orm import Session
+from sqlalchemy import extract
 
 from sqlalchemy.exc import IntegrityError
 
@@ -14,6 +15,7 @@ from .models import (
     PeriodoEstado,
     PeriodoTipo,
 )
+from .numero_periodo import fechas_son_quincena_calendario, numero_periodo_nomina, quincena_es_pasada
 from .catalogs import (
     TIPOS_CONTRATO, TIPOS_REGIMEN, TIPOS_PERCEPCION,
     TIPOS_DEDUCCION, BANCOS, ENTIDADES_FEDERATIVAS,
@@ -122,6 +124,34 @@ class NominaService:
         if per is not None and len(per) > 2:
             per = per[:2]
 
+        fi = data["fecha_inicio"]
+        ff = data["fecha_fin"]
+        if per == "04" and not fechas_son_quincena_calendario(fi, ff):
+            raise ValueError(
+                "Para nómina quincenal las fechas deben ser 1–15 o 16–fin de mes del mismo mes."
+            )
+        if per == "04" and quincena_es_pasada(ff):
+            raise ValueError(
+                "No se puede crear un periodo para una quincena que ya pasó."
+            )
+        if per == "04":
+            num = numero_periodo_nomina("04", ff)
+            ejercicio = ff.year if hasattr(ff, "year") else int(str(ff)[:4])
+            existentes = (
+                db.query(PeriodoNomina)
+                .filter(
+                    PeriodoNomina.empresa_id == empresa_id,
+                    extract("year", PeriodoNomina.fecha_fin) == ejercicio,
+                    PeriodoNomina.periodicidad == "04",
+                )
+                .all()
+            )
+            for ep in existentes:
+                if numero_periodo_nomina("04", ep.fecha_fin) == num:
+                    raise ValueError(
+                        f"Ya existe un periodo para la Quincena {num} del ejercicio {ejercicio}."
+                    )
+
         periodo = PeriodoNomina(
             empresa_id=empresa_id,
             fecha_inicio=data["fecha_inicio"],
@@ -146,12 +176,17 @@ class NominaService:
         empresa_id: Optional[int] = None,
         skip: int = 0,
         limit: int = 50,
+        activos: bool = False,
     ) -> Tuple[List[PeriodoNomina], int]:
         q = db.query(PeriodoNomina)
         if empresa_id is not None:
             q = q.filter(PeriodoNomina.empresa_id == empresa_id)
+        if activos:
+            q = q.filter(
+                PeriodoNomina.estado.in_([PeriodoEstado.BORRADOR, PeriodoEstado.CALCULADA])
+            )
         total = q.count()
-        items = q.order_by(PeriodoNomina.fecha_inicio.desc()).offset(skip).limit(limit).all()
+        items = q.order_by(PeriodoNomina.fecha_fin.desc()).offset(skip).limit(limit).all()
         return items, total
 
     @staticmethod

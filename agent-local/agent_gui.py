@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
 """
-Interfaz grafica para el Agente Local Multi-Dispositivo ZKTeco.
-Permite configurar multiples checadores, iniciar/detener el agente y ver logs.
+Interfaz gráfica del agente local multi-dispositivo (Grupo Cristal).
+Permite configurar checadores, iniciar/detener el agente y ver logs.
 """
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
 import yaml
 import threading
-import subprocess
+import logging
 import sys
 import os
 import requests
+
+from win_utils import init_frozen_windows, should_use_console_logging, remove_console_log_handlers
+
+init_frozen_windows()
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
 CONFIG_EXAMPLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml.example")
 
 BG = "#f0f0f0"
+APP_DISPLAY_NAME = "Grupo Cristal"
 
 
 class DeviceRow:
@@ -31,15 +36,17 @@ class DeviceRow:
 
 
 class AgentGUI:
-    def __init__(self, root):
+    def __init__(self, root, tray_controller=None):
         self.root = root
-        self.root.title("Agente Local Multi-Dispositivo - ZKTeco")
+        self.tray = tray_controller
+        self.root.title(f"Agente Local - {APP_DISPLAY_NAME}")
         self.root.geometry("880x720")
         self.root.minsize(800, 650)
         self.root.configure(bg=BG)
 
-        self.agent_process = None
-        self.log_thread = None
+        self.agent = None
+        self.agent_thread = None
+        self.log_handler = None
         self.running = False
         self.device_rows = []
 
@@ -53,6 +60,11 @@ class AgentGUI:
         self._build_ui()
         self._load_config()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._sync_running_state()
+        if self.tray:
+            if self.tray.running:
+                self._attach_log_handler()
+            self._poll_tray_state()
 
     # ─── UI ───────────────────────────────────────────────────
 
@@ -60,7 +72,7 @@ class AgentGUI:
         main = ttk.Frame(self.root, padding=10)
         main.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(main, text="Agente Local Multi-Dispositivo", style="Title.TLabel").pack(anchor="w", pady=(0, 8))
+        ttk.Label(main, text=APP_DISPLAY_NAME, style="Title.TLabel").pack(anchor="w", pady=(0, 8))
 
         # --- API URL ---
         url_frame = ttk.Frame(main)
@@ -94,6 +106,7 @@ class AgentGUI:
 
         ttk.Button(btn_frame, text="Guardar Config", command=self._save_config).pack(side=tk.LEFT, padx=(0, 4))
         ttk.Button(btn_frame, text="Cargar Config", command=self._load_config).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(btn_frame, text="Cambiar contraseña", command=self._change_password).pack(side=tk.LEFT, padx=(0, 4))
         ttk.Separator(btn_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8)
         ttk.Button(btn_frame, text="Probar Conexiones", command=self._test_connections).pack(side=tk.LEFT, padx=(0, 4))
         ttk.Separator(btn_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=8)
@@ -223,6 +236,15 @@ class AgentGUI:
                 "api_key": row.var_api_key.get().strip(),
             })
 
+        existing = {}
+        if os.path.exists(CONFIG_PATH):
+            try:
+                with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                    existing = yaml.safe_load(f) or {}
+            except Exception:
+                existing = {}
+
+        existing_log = dict(existing.get("logging") or {})
         cfg = {
             "api_url": self.var_api_url.get().strip(),
             "devices": devices,
@@ -230,15 +252,71 @@ class AgentGUI:
                 "interval_seconds": int(self.var_interval.get() or 30),
             },
             "buffer": {"enabled": True},
-            "logging": {"level": "INFO", "file": "agent.log"},
+            "logging": {
+                "level": existing_log.get("level", "INFO"),
+                "file": existing_log.get("file", "agent.log"),
+                "retention_days": int(existing_log.get("retention_days", 30)),
+            },
         }
+        if existing.get("security"):
+            cfg["security"] = existing["security"]
         try:
-            with open(CONFIG_PATH, "w") as f:
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                 yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
             self._append_log(f"Config guardada: {len(devices)} dispositivo(s)")
         except Exception as e:
             self._append_log(f"Error al guardar: {e}")
             messagebox.showerror("Error", str(e))
+
+    def _change_password(self):
+        from tkinter import simpledialog
+        from config_guard import get_stored_hash, set_password, verify_password, remove_password
+
+        has_password = get_stored_hash() is not None
+
+        if has_password:
+            current = simpledialog.askstring(
+                "Contraseña actual",
+                "Introduce la contraseña actual:",
+                show="*",
+                parent=self.root,
+            )
+            if current is None:
+                return
+            if not verify_password(current):
+                messagebox.showerror("Error", "Contraseña actual incorrecta")
+                return
+
+        new_pwd = simpledialog.askstring(
+            "Nueva contraseña" if has_password else "Establecer contraseña",
+            "Introduce la contraseña (vacío = quitar protección):" if has_password
+            else "Introduce una contraseña para proteger la configuración\n(vacío = cancelar):",
+            show="*",
+            parent=self.root,
+        )
+        if new_pwd is None:
+            return
+        if not new_pwd.strip():
+            if has_password and messagebox.askyesno(
+                "Confirmar", "¿Quitar la contraseña de acceso a la configuración?"
+            ):
+                remove_password()
+                messagebox.showinfo("Listo", "Protección por contraseña desactivada")
+            return
+        confirm = simpledialog.askstring(
+            "Confirmar",
+            "Repite la contraseña:",
+            show="*",
+            parent=self.root,
+        )
+        if new_pwd != confirm:
+            messagebox.showerror("Error", "Las contraseñas no coinciden")
+            return
+        if len(new_pwd.strip()) < 4:
+            messagebox.showerror("Error", "La contraseña debe tener al menos 4 caracteres")
+            return
+        set_password(new_pwd.strip())
+        messagebox.showinfo("Listo", "Contraseña de acceso actualizada")
 
     # ─── Test ─────────────────────────────────────────────────
 
@@ -289,103 +367,137 @@ class AgentGUI:
 
     # ─── Agent control ────────────────────────────────────────
 
-    def _start_agent(self):
-        if self.running:
-            return
+    def _is_agent_running(self) -> bool:
+        if self.tray:
+            return bool(self.tray.running)
+        return self.running
 
-        self._save_config()
-
-        agent_dir = os.path.dirname(os.path.abspath(__file__))
-        main_py = os.path.join(agent_dir, "main.py")
-
-        is_win = sys.platform == "win32"
-        candidates = (
-            [os.path.join(agent_dir, "venv", "Scripts", "python.exe")]
-            if is_win else
-            [os.path.join(agent_dir, "venv", "bin", "python3"),
-             os.path.join(agent_dir, "venv", "bin", "python")]
-        )
-        candidates.append(sys.executable)
-
-        python_exe = next((c for c in candidates if os.path.isfile(c)), None)
-        if not python_exe:
-            self._append_log("ERROR: No se encontro python. Ejecuta install.bat primero.")
-            return
-
-        if is_win and "bin" in python_exe and "Scripts" not in python_exe:
-            self._append_log("ERROR: El venv es de Mac/Linux. Elimina 'venv' y ejecuta install.bat")
-            return
-
-        self._append_log(f"Usando: {python_exe}")
-        try:
-            self.agent_process = subprocess.Popen(
-                [python_exe, main_py],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                cwd=agent_dir, bufsize=1, universal_newlines=True,
-                encoding="utf-8", errors="replace",
-            )
-            self.running = True
+    def _sync_running_state(self):
+        if self.tray:
+            self.running = bool(self.tray.running)
+        running = self._is_agent_running()
+        if running:
             self.btn_start.configure(state=tk.DISABLED)
             self.btn_stop.configure(state=tk.NORMAL)
             self.var_status.set("Ejecutando")
             self._draw_indicator("#2ecc40")
-            self._append_log("=== Agente iniciado ===")
+        elif self.tray and self.tray.error:
+            self.btn_start.configure(state=tk.NORMAL)
+            self.btn_stop.configure(state=tk.DISABLED)
+            self.var_status.set(f"Error: {self.tray.error[:40]}")
+            self._draw_indicator("#e74c3c")
+        else:
+            self.btn_start.configure(state=tk.NORMAL)
+            self.btn_stop.configure(state=tk.DISABLED)
+            self.var_status.set("Detenido")
+            self._draw_indicator("gray")
 
-            self.log_thread = threading.Thread(target=self._read_output, daemon=True)
-            self.log_thread.start()
-            self._monitor_process()
-        except Exception as e:
-            self._append_log(f"Error al iniciar agente: {e}")
-            self.running = False
-
-    def _stop_agent(self):
-        if not self.running or not self.agent_process:
+    def _poll_tray_state(self):
+        if not self.tray:
             return
-        self._append_log("Deteniendo agente...")
-        try:
-            self.agent_process.terminate()
-            try:
-                self.agent_process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.agent_process.kill()
-        except Exception as e:
-            self._append_log(f"Error al detener: {e}")
+        was_running = self.running
+        self.running = bool(self.tray.running)
+        self._sync_running_state()
+        if self.tray.running and not self.log_handler:
+            self._attach_log_handler()
+        if was_running and not self.tray.running:
+            self._detach_log_handler()
+            self._append_log("=== Agente detenido (desde bandeja) ===")
+        self.root.after(1000, self._poll_tray_state)
 
+    def _start_agent(self):
+        if self._is_agent_running():
+            return
+
+        self._save_config()
+
+        if self.tray:
+            self._append_log("Iniciando agente desde configuración...")
+            self.tray._start_agent()
+            self.running = self.tray.running
+            if self.running:
+                self._attach_log_handler()
+                self._append_log("=== Agente iniciado ===")
+            self._sync_running_state()
+            return
+
+        self._append_log("Iniciando agente en segundo plano (sin consola)...")
+        try:
+            from main import Agent
+            self.agent = Agent()
+        except SystemExit:
+            self._append_log("ERROR: Configuracion invalida. Revisa config.yaml.")
+            return
+        except Exception as e:
+            self._append_log(f"ERROR al iniciar agente: {e}")
+            return
+
+        self._attach_log_handler()
+        self.running = True
+        self.btn_start.configure(state=tk.DISABLED)
+        self.btn_stop.configure(state=tk.NORMAL)
+        self.var_status.set("Ejecutando")
+        self._draw_indicator("#2ecc40")
+        self._append_log("=== Agente iniciado ===")
+
+        self.agent_thread = threading.Thread(target=self._agent_loop, daemon=True)
+        self.agent_thread.start()
+
+    def _attach_log_handler(self):
+        if self.log_handler:
+            return
+
+        gui = self
+
+        class _GuiLogHandler(logging.Handler):
+            def emit(self, record):
+                try:
+                    msg = self.format(record)
+                    gui.root.after(0, gui._append_log, msg)
+                except Exception:
+                    pass
+
+        self.log_handler = _GuiLogHandler()
+        self.log_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+        logging.getLogger().addHandler(self.log_handler)
+
+    def _detach_log_handler(self):
+        if self.log_handler:
+            logging.getLogger().removeHandler(self.log_handler)
+            self.log_handler = None
+
+    def _agent_loop(self):
+        try:
+            self.agent.run()
+        except Exception as e:
+            self.root.after(0, self._append_log, f"Error en agente: {e}")
+        finally:
+            self.root.after(0, self._on_agent_stopped)
+
+    def _on_agent_stopped(self):
         self.running = False
-        self.agent_process = None
+        self.agent = None
+        self._detach_log_handler()
         self.btn_start.configure(state=tk.NORMAL)
         self.btn_stop.configure(state=tk.DISABLED)
         self.var_status.set("Detenido")
         self._draw_indicator("gray")
         self._append_log("=== Agente detenido ===")
 
-    def _read_output(self):
-        try:
-            proc = self.agent_process
-            if not proc or not proc.stdout:
-                return
-            for line in iter(proc.stdout.readline, ""):
-                if not self.running:
-                    break
-                line = line.rstrip("\n\r")
-                if line:
-                    self.root.after(0, self._append_log, line)
-        except Exception:
-            pass
-
-    def _monitor_process(self):
-        if self.agent_process and self.agent_process.poll() is not None:
-            exit_code = self.agent_process.returncode
-            self.running = False
-            self.agent_process = None
-            self.btn_start.configure(state=tk.NORMAL)
-            self.btn_stop.configure(state=tk.DISABLED)
-            self.var_status.set(f"Finalizado (codigo {exit_code})")
-            self._draw_indicator("#e74c3c" if exit_code != 0 else "gray")
-            self._append_log(f"=== Agente finalizo con codigo {exit_code} ===")
+    def _stop_agent(self):
+        if not self._is_agent_running():
             return
-        if self.running:
-            self.root.after(1000, self._monitor_process)
+        self._append_log("Deteniendo agente...")
+        if self.tray:
+            self.tray._stop_agent()
+            self.running = False
+            self._detach_log_handler()
+            self._sync_running_state()
+            self._append_log("=== Agente detenido ===")
+            return
+        if self.agent:
+            self.agent.running = False
+        self.running = False
 
     # ─── Log ──────────────────────────────────────────────────
 
@@ -401,6 +513,10 @@ class AgentGUI:
         self.log_text.configure(state=tk.DISABLED)
 
     def _on_close(self):
+        if self.tray:
+            self._detach_log_handler()
+            self.root.destroy()
+            return
         if self.running:
             if not messagebox.askyesno("Confirmar", "El agente esta corriendo. Detener y salir?"):
                 return
@@ -409,6 +525,9 @@ class AgentGUI:
 
 
 def main():
+    from config_guard import require_config_access
+    if not require_config_access("Configuración del agente"):
+        return
     root = tk.Tk()
     AgentGUI(root)
     root.mainloop()

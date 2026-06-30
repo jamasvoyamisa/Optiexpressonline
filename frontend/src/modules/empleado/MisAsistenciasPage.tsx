@@ -1,10 +1,11 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, type CSSProperties } from 'react';
 import { Navigate } from 'react-router-dom';
 import { parseTimestampForMexico, toMexicoDateString } from '../../utils/date';
 import api from '../../services/api';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { useAuth } from '../../hooks/useAuth';
-import type { AsistenciaResponse, DiaContextoLaboral } from '../../types/api';
+import type { AsistenciaResponse, DiaContextoLaboral, ResumenAsistenciaEmpleado } from '../../types/api';
+import { estiloPuntualidad } from '../../utils/puntualidad';
 
 /** Quincena actual: 1–15 = quincena 1, 16–fin = quincena 2 */
 function getQuincenaActual(): { year: number; month: number; num: 1 | 2 } {
@@ -130,6 +131,111 @@ function calcTotal(row: DayRow): string {
   return m === 0 ? `${h}h` : `${h}h ${m}m`;
 }
 
+function ProgresoQuincena({ resumen, isMobile }: { resumen: ResumenAsistenciaEmpleado; isMobile: boolean }) {
+  const total = resumen.total_dias_periodo;
+  const evaluados = resumen.dias_periodo_evaluados;
+  const pctPeriodo = total > 0 ? Math.min(100, Math.round((evaluados / total) * 100)) : 0;
+  const pct = resumen.puntualidad_pct;
+  const punt = estiloPuntualidad(pct);
+  const progLabel = resumen.periodo_en_curso ? 'Progreso del periodo' : 'Periodo';
+  const puntLabel = resumen.periodo_en_curso ? 'Puntualidad (progreso)' : 'Puntualidad';
+
+  const barTrack: CSSProperties = {
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: '#e5e7eb',
+    overflow: 'hidden',
+    marginTop: 6,
+  };
+  const barFill = (color: string, width: number): CSSProperties => ({
+    height: '100%',
+    width: `${width}%`,
+    backgroundColor: color,
+    borderRadius: 999,
+    transition: 'width 0.3s ease',
+  });
+
+  return (
+    <div style={{
+      backgroundColor: 'white',
+      borderRadius: isMobile ? 14 : 10,
+      border: '1px solid #e5e7eb',
+      padding: isMobile ? '14px 16px' : '16px 20px',
+      marginBottom: 16,
+      boxShadow: '0 1px 4px rgba(0,0,0,0.05)',
+    }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: isMobile ? 16 : 24 }}>
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+            <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+              {progLabel}
+            </span>
+            <span style={{ fontSize: '0.95rem', fontWeight: 800, color: '#0369a1' }}>
+              {evaluados}/{total} días
+            </span>
+          </div>
+          <div style={barTrack}>
+            <div style={barFill('#0ea5e9', pctPeriodo)} />
+          </div>
+          <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: 4 }}>
+            Días completos: <strong style={{ color: '#334155' }}>{resumen.dias_completos}</strong>
+            {' · '}Asistió: <strong style={{ color: '#334155' }}>{resumen.dias_asistio}</strong>
+          </div>
+        </div>
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+            <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+              {puntLabel}
+            </span>
+            <span style={{
+              fontSize: '0.95rem',
+              fontWeight: 800,
+              color: punt.text,
+              backgroundColor: punt.bg,
+              borderRadius: 6,
+              padding: '2px 10px',
+            }}>
+              {pct}%
+            </span>
+          </div>
+          <div style={barTrack}>
+            <div style={barFill(punt.bar, Math.min(100, pct))} />
+          </div>
+          <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: 4 }}>
+            {punt.tier} · sobre días laborables evaluados
+          </div>
+        </div>
+      </div>
+      <div style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: isMobile ? 8 : 12,
+        marginTop: 14,
+        paddingTop: 12,
+        borderTop: '1px solid #f1f5f9',
+      }}>
+        {[
+          { l: 'Faltas', v: resumen.faltas, c: '#991b1b', show: true },
+          { l: 'F. just.', v: resumen.faltas_justificadas, c: '#7c3aed', show: resumen.faltas_justificadas > 0 },
+          { l: 'Incompl.', v: resumen.incompletas ?? 0, c: '#854d0e', show: (resumen.incompletas ?? 0) > 0 },
+          { l: 'Retardos', v: resumen.retardos, c: '#92400e', show: true },
+          { l: 'Incapac.', v: resumen.dias_incapacidad, c: '#0369a1', show: resumen.dias_incapacidad > 0 },
+          { l: 'Vacac.', v: resumen.dias_vacaciones, c: '#166534', show: resumen.dias_vacaciones > 0 },
+        ].filter(x => x.show).map(x => (
+          <div key={x.l} style={{ fontSize: '0.78rem', color: '#64748b' }}>
+            {x.l}: <strong style={{ color: x.c }}>{x.v}</strong>
+          </div>
+        ))}
+      </div>
+      {resumen.periodo_en_curso && (
+        <div style={{ fontSize: '0.72rem', color: '#0369a1', marginTop: 10, fontWeight: 600 }}>
+          Quincena en curso — los porcentajes se actualizan conforme avanzan los días
+        </div>
+      )}
+    </div>
+  );
+}
+
 export const MisAsistenciasPage = () => {
   const { authMe } = useAuth();
   const isMobile = useIsMobile();
@@ -138,6 +244,7 @@ export const MisAsistenciasPage = () => {
   }
   const [checadas, setChecadas] = useState<AsistenciaResponse[]>([]);
   const [contextoDias, setContextoDias] = useState<DiaContextoLaboral[]>([]);
+  const [resumen, setResumen] = useState<ResumenAsistenciaEmpleado | null>(null);
   const [loading, setLoading] = useState(true);
   const [quincena, setQuincena] = useState<{ year: number; month: number; num: 1 | 2 }>(() => getQuincenaActual());
 
@@ -154,14 +261,17 @@ export const MisAsistenciasPage = () => {
     Promise.all([
       api.get<AsistenciaResponse[]>(`/asistencia/mis-checadas?${params}`),
       api.get<DiaContextoLaboral[]>(`/asistencia/mis-contexto-dias?${pCtx}`),
+      api.get<ResumenAsistenciaEmpleado>(`/asistencia/mi-resumen-asistencia?${pCtx}`),
     ])
-      .then(([checRes, ctxRes]) => {
+      .then(([checRes, ctxRes, resRes]) => {
         setChecadas(Array.isArray(checRes.data) ? checRes.data : []);
         setContextoDias(Array.isArray(ctxRes.data) ? ctxRes.data : []);
+        setResumen(resRes.data ?? null);
       })
       .catch(() => {
         setChecadas([]);
         setContextoDias([]);
+        setResumen(null);
       })
       .finally(() => setLoading(false));
   };
@@ -242,6 +352,10 @@ export const MisAsistenciasPage = () => {
           </button>
         </div>
       </div>
+
+      {!loading && resumen && (
+        <ProgresoQuincena resumen={resumen} isMobile={isMobile} />
+      )}
 
       {loading ? (
         <p style={{ color: '#666' }}>Cargando asistencias...</p>

@@ -13,3 +13,11 @@ export function parseTimestampForMexico(ts: string | Date): Date {
 export function toMexicoDateString(d: Date): string {
   return d.toLocaleDateString('en-CA', { timeZone: 'America/Mexico_City' });
 }
+
+/** Muestra YYYY/MM/DD a partir de ISO o datetime (solo presentación). */
+export function formatFechaSlash(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const s = String(iso).slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s.replace(/-/g, '/');
+  return s;
+}

@@ -8,7 +8,6 @@ import sys
 import os
 import threading
 import logging
-import subprocess
 import time
 from pathlib import Path
 
@@ -20,22 +19,26 @@ else:
 os.chdir(AGENT_DIR)
 sys.path.insert(0, str(AGENT_DIR))
 
+from win_utils import init_frozen_windows, should_use_console_logging, remove_console_log_handlers, subprocess_kwargs
+
+init_frozen_windows()
+
 import pystray
 from PIL import Image, ImageDraw, ImageFont
 from single_instance import SingleInstanceLock
+from log_setup import setup_agent_logging, DEFAULT_RETENTION_DAYS
 
-VERSION = "1.0.0"
-APP_NAME = "Optiexpress Agent"
+VERSION = "1.2.9"
+APP_NAME = "Grupo Cristal"
 REG_KEY_NAME = "OptiexpressAgent"
 
-_log_handlers = [logging.FileHandler(str(AGENT_DIR / "agent.log"), encoding="utf-8")]
-if getattr(sys, "stdout", None) and not getattr(sys, "frozen", False):
-    _log_handlers.append(logging.StreamHandler(sys.stdout))
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=_log_handlers,
+setup_agent_logging(
+    "agent.log",
+    retention_days=DEFAULT_RETENTION_DAYS,
+    console=should_use_console_logging(),
 )
+if not should_use_console_logging():
+    remove_console_log_handlers()
 logger = logging.getLogger("tray")
 
 
@@ -128,17 +131,21 @@ class AgentTray:
     def _on_open_config(self, icon, item):
         if self._gui_open:
             return
-        self._gui_open = True
         self._gui_thread = threading.Thread(target=self._run_gui, daemon=True)
         self._gui_thread.start()
 
     def _run_gui(self):
         try:
+            from config_guard import migrate_legacy_password_lock, require_config_access
+            migrate_legacy_password_lock()
+            if not require_config_access("Configuración del agente"):
+                return
             import tkinter as tk
             from agent_gui import AgentGUI
+            self._gui_open = True
             root = tk.Tk()
             root.protocol("WM_DELETE_WINDOW", lambda: self._close_gui(root))
-            AgentGUI(root)
+            AgentGUI(root, tray_controller=self)
             root.mainloop()
         except Exception as e:
             logger.error(f"Error al abrir GUI: {e}")
@@ -159,7 +166,9 @@ class AgentTray:
         self._open_path(log_path)
 
     def _on_open_folder(self, icon, item):
-        self._open_path(AGENT_DIR)
+        from config_guard import require_config_access
+        if require_config_access("Abrir carpeta del agente"):
+            self._open_path(AGENT_DIR)
 
     def _on_quit(self, icon, item):
         logger.info("Saliendo del agente...")
@@ -283,16 +292,60 @@ class AgentTray:
             if sys.platform == "win32":
                 os.startfile(str(path))
             elif sys.platform == "darwin":
-                subprocess.Popen(["open", str(path)])
+                import subprocess
+                subprocess.Popen(["open", str(path)], **subprocess_kwargs())
             else:
-                subprocess.Popen(["xdg-open", str(path)])
+                import subprocess
+                subprocess.Popen(["xdg-open", str(path)], **subprocess_kwargs())
         except Exception as e:
             logger.error(f"Error al abrir {path}: {e}")
 
     # ── Entry point ───────────────────────────────────────
 
+    def _remove_legacy_scheduled_task(self):
+        """Quita tarea OptiexpressAgentSync (instalar_autoinicio.bat) que duplica el agente."""
+        if sys.platform != "win32" or not getattr(sys, "frozen", False):
+            return
+        try:
+            import subprocess
+            subprocess.run(
+                ["schtasks", "/Delete", "/TN", "OptiexpressAgentSync", "/F"],
+                capture_output=True,
+                **subprocess_kwargs(),
+            )
+        except Exception:
+            pass
+
+    def _fix_autostart_if_needed(self):
+        """Corrige autoinicio viejo que apuntaba a python.exe/main.py (abría CMD)."""
+        if sys.platform != "win32" or not getattr(sys, "frozen", False):
+            return
+        if not self._is_autostart_enabled():
+            return
+        import winreg
+        key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+        try:
+            key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ)
+            value, _ = winreg.QueryValueEx(key, REG_KEY_NAME)
+            winreg.CloseKey(key)
+            low = str(value).lower()
+            if "python.exe" in low or "main.py" in low or "cmd.exe" in low:
+                exe_path = f'"{sys.executable}"'
+                key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_WRITE)
+                winreg.SetValueEx(key, REG_KEY_NAME, 0, winreg.REG_SZ, exe_path)
+                winreg.CloseKey(key)
+                logger.warning("Autoinicio corregido: ya no usa python.exe/main.py")
+        except Exception as e:
+            logger.debug(f"No se pudo revisar autoinicio: {e}")
+
     def run(self):
         logger.info(f"{APP_NAME} v{VERSION} iniciando...")
+        from config_guard import migrate_legacy_password_lock
+        migrate_legacy_password_lock()
+        self._remove_legacy_scheduled_task()
+        self._fix_autostart_if_needed()
+        from cloud_sync import AGENT_VERSION
+        logger.info(f"Motor de sync v{AGENT_VERSION}")
         self.icon = pystray.Icon(
             REG_KEY_NAME,
             create_tray_icon(self.COLOR_IDLE),
@@ -322,13 +375,13 @@ def _show_already_running_dialog():
             import ctypes
             ctypes.windll.user32.MessageBoxW(
                 0,
-                "El Agente Optiexpress ya está en ejecución.\n\n"
+                "El agente de Grupo Cristal ya está en ejecución.\n\n"
                 "Revisa el icono en la bandeja del sistema (junto al reloj). "
                 "Si no lo ves, abre el Administrador de tareas y cierra el "
-                "proceso 'Optiexpress Agent' antes de volver a iniciarlo.\n\n"
+                "proceso 'OptiexpressAgent' antes de volver a iniciarlo.\n\n"
                 "Iniciar dos agentes a la vez duplica las checadas enviadas "
                 "al servidor.",
-                "Optiexpress Agent — Ya está en ejecución",
+                "Grupo Cristal — Agente ya en ejecución",
                 0x00000010 | 0x00040000,  # MB_ICONERROR | MB_TOPMOST
             )
         else:

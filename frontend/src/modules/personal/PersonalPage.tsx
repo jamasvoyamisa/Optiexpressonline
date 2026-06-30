@@ -11,8 +11,20 @@ import {
 } from '../../utils/quincena';
 import { fmtNombreEmpleado, cmpNombreEmpleado } from '../../utils/format';
 import { useAuth } from '../../hooks/useAuth';
+import { useIsMobile } from '../../hooks/useIsMobile';
+import { ChecadaMiniGrid } from '../../components/asistencia/ChecadaMiniGrid';
 import { canAccessNomina } from '../../config/features';
 import { Empleado, EmpleadoCreate, Dispositivo, Asistencia, EmpresaResponse, DepartamentoResponse, PuestoResponse, SolicitudVacaciones } from '../../types';
+import {
+  rhMobileCard,
+  rhMobileCardRow,
+  rhMobileCardSub,
+  rhMobileCardTitle,
+  rhMobileFilterStack,
+  rhMobileInput,
+  rhMobileTabPill,
+  rhMobileTabScroll,
+} from '../rh/rhMobileStyles';
 
 interface FormData extends Omit<EmpleadoCreate, 'registrar_en_checador' | 'dispositivo_ids'> {
   registrar_en_checador: boolean;
@@ -417,9 +429,13 @@ function PermisosEspecialesPanel({ emp, onUpdated }: { emp: Empleado; onUpdated:
 type PersonalPageProps = {
   /** Oculta importación XLSX (p. ej. vista Recursos Humanos). */
   hideImport?: boolean;
+  /** Embebido en pestaña RH móvil: sin título duplicado y layout compacto. */
+  embeddedRh?: boolean;
 };
 
-export const PersonalPage = ({ hideImport = false }: PersonalPageProps) => {
+export const PersonalPage = ({ hideImport = false, embeddedRh = false }: PersonalPageProps) => {
+  const isMobile = useIsMobile();
+  const compactRh = embeddedRh && isMobile;
   const { authMe } = useAuth();
   const isAdmin = authMe?.is_superuser === true;
   const isRH = authMe?.is_rh === true;
@@ -428,6 +444,8 @@ export const PersonalPage = ({ hideImport = false }: PersonalPageProps) => {
   const canEditNomina = canAccessNomina(isAdmin);
   const [mainTab, setMainTab] = useState<'empleados' | 'departamentos' | 'puestos'>('empleados');
   const [empleados, setEmpleados] = useState<Empleado[]>([]);
+  /** Todos los estados (sin filtro estado) para contadores Total/Activos/Inactivos/Bajas. */
+  const [empleadosParaStats, setEmpleadosParaStats] = useState<Empleado[]>([]);
   /** Incluye usuarios especiales (p. ej. directores) para asignar gerente de departamento. */
   const [empleadosCandidatosGerente, setEmpleadosCandidatosGerente] = useState<Empleado[]>([]);
   const [empresas, setEmpresas] = useState<EmpresaResponse[]>([]);
@@ -550,12 +568,17 @@ export const PersonalPage = ({ hideImport = false }: PersonalPageProps) => {
       params.append('limit', '500');
       // Incluir exento_incidencias: si no, al marcar la casilla el API deja de devolver al empleado y “desaparece” del listado.
       params.append('incluir_exentos', 'true');
+      const statsParams = new URLSearchParams();
+      if (search) statsParams.append('search', search);
+      statsParams.append('limit', '5000');
+      statsParams.append('incluir_exentos', 'true');
       const candidatosParams = new URLSearchParams();
       candidatosParams.append('limit', '2000');
       candidatosParams.append('estado', 'activo');
       candidatosParams.append('incluir_exentos', 'true');
-      const [empRes, empGerRes, devRes, emprsRes, deptosRes, puestosRes, horRes, catRes] = await Promise.all([
+      const [empRes, empStatsRes, empGerRes, devRes, emprsRes, deptosRes, puestosRes, horRes, catRes] = await Promise.all([
         api.get(`/personal/empleados?${params.toString()}`),
+        api.get(`/personal/empleados?${statsParams.toString()}`),
         api.get(`/personal/empleados?${candidatosParams.toString()}`),
         api.get('/asistencia/devices'),
         api.get('/personal/empresas?limit=500'),
@@ -565,6 +588,7 @@ export const PersonalPage = ({ hideImport = false }: PersonalPageProps) => {
         (canEditNomina ? api.get('/nomina/catalogos') : Promise.resolve({ data: null })).catch(() => ({ data: null })),
       ]);
       setEmpleados(empRes.data);
+      setEmpleadosParaStats(Array.isArray(empStatsRes.data) ? empStatsRes.data : []);
       setEmpleadosCandidatosGerente(Array.isArray(empGerRes.data) ? empGerRes.data : []);
       setDispositivos(devRes.data);
       setEmpresas(emprsRes.data);
@@ -1046,13 +1070,15 @@ export const PersonalPage = ({ hideImport = false }: PersonalPageProps) => {
     return [...dirs, ...rest];
   };
 
-  const filteredEmpleados = empleados
-    .filter(e => {
+  const filtrarPorEmpresaDepto = (lista: Empleado[]) =>
+    lista.filter(e => {
       if (filtroEmpresa && String(e.empresa_id) !== filtroEmpresa) return false;
       if (filtroDepto && String(e.departamento_id) !== filtroDepto) return false;
       return true;
-    })
-    .sort(cmpNombreEmpleado);
+    });
+
+  const filteredEmpleados = filtrarPorEmpresaDepto(empleados).sort(cmpNombreEmpleado);
+  const empleadosStatsFiltrados = filtrarPorEmpresaDepto(empleadosParaStats);
 
   const loadChecadas = async (
     empleadoId: number,
@@ -1315,10 +1341,10 @@ export const PersonalPage = ({ hideImport = false }: PersonalPageProps) => {
   if (loading && empleados.length === 0) return <div style={{ padding: '20px' }}>Cargando...</div>;
 
   const stats = {
-    total: filteredEmpleados.length,
-    activos: filteredEmpleados.filter(e => e.estado === 'activo').length,
-    inactivos: filteredEmpleados.filter(e => e.estado === 'inactivo').length,
-    bajas: filteredEmpleados.filter(e => e.estado === 'baja').length,
+    total: empleadosStatsFiltrados.length,
+    activos: empleadosStatsFiltrados.filter(e => e.estado === 'activo').length,
+    inactivos: empleadosStatsFiltrados.filter(e => e.estado === 'inactivo').length,
+    bajas: empleadosStatsFiltrados.filter(e => e.estado === 'baja').length,
   };
 
   const activeDevices = dispositivos.filter(d => d.activo);
@@ -1358,18 +1384,35 @@ export const PersonalPage = ({ hideImport = false }: PersonalPageProps) => {
   });
 
   return (
-    <div style={{ padding: '20px' }}>
+    <div style={{ padding: compactRh ? 0 : isMobile ? '12px' : '20px' }}>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '10px' }}>
-        <h1 style={{ margin: 0 }}>Gestion de Personal</h1>
-      </div>
+      {!compactRh && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '10px' }}>
+          <h1 style={{ margin: 0, fontSize: isMobile ? '1.2rem' : undefined }}>Gestion de Personal</h1>
+        </div>
+      )}
 
       {/* Main Tabs */}
-      <div style={{ display: 'flex', borderBottom: '2px solid #e5e7eb', marginBottom: '20px' }}>
-        <button style={mainTabStyle(mainTab === 'empleados')} onClick={() => setMainTab('empleados')}>Empleados</button>
-        <button style={mainTabStyle(mainTab === 'departamentos')} onClick={() => setMainTab('departamentos')}>Departamentos</button>
-        <button style={mainTabStyle(mainTab === 'puestos')} onClick={() => setMainTab('puestos')}>Puestos</button>
-      </div>
+      {isMobile ? (
+        <div style={{ ...rhMobileTabScroll, marginBottom: 12 }}>
+          {(['empleados', 'departamentos', 'puestos'] as const).map(key => (
+            <button
+              key={key}
+              type="button"
+              style={rhMobileTabPill(mainTab === key)}
+              onClick={() => setMainTab(key)}
+            >
+              {key === 'empleados' ? 'Empleados' : key === 'departamentos' ? 'Deptos.' : 'Puestos'}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', borderBottom: '2px solid #e5e7eb', marginBottom: '20px' }}>
+          <button style={mainTabStyle(mainTab === 'empleados')} onClick={() => setMainTab('empleados')}>Empleados</button>
+          <button style={mainTabStyle(mainTab === 'departamentos')} onClick={() => setMainTab('departamentos')}>Departamentos</button>
+          <button style={mainTabStyle(mainTab === 'puestos')} onClick={() => setMainTab('puestos')}>Puestos</button>
+        </div>
+      )}
 
       {/* ====== TAB: DEPARTAMENTOS ====== */}
       {mainTab === 'departamentos' && (
@@ -1564,6 +1607,43 @@ export const PersonalPage = ({ hideImport = false }: PersonalPageProps) => {
           </div>
 
           {/* Search + Filters */}
+          {isMobile ? (
+            <div style={rhMobileFilterStack}>
+              <input type="text" placeholder="Buscar por nombre, numero o email..."
+                value={search} onChange={e => { setSearch(e.target.value); setPagina(1); }}
+                onKeyDown={e => e.key === 'Enter' && loadData()}
+                style={rhMobileInput} />
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                <select value={filtroEstado} onChange={e => { setFiltroEstado(e.target.value); setPagina(1); }} style={rhMobileInput}>
+                  <option value="">Todos</option>
+                  <option value="activo">Activos</option>
+                  <option value="inactivo">Inactivos</option>
+                  <option value="baja">Bajas</option>
+                </select>
+                <select value={filtroEmpresa} onChange={e => { setFiltroEmpresa(e.target.value); setFiltroDepto(''); setPagina(1); }} style={rhMobileInput}>
+                  <option value="">Empresa</option>
+                  {activeEmpresas.map(emp => (
+                    <option key={emp.id} value={String(emp.id)}>{emp.nombre}</option>
+                  ))}
+                </select>
+              </div>
+              <select
+                value={filtroDepto}
+                onChange={e => { setFiltroDepto(e.target.value); setPagina(1); }}
+                style={rhMobileInput}
+                disabled={!filtroEmpresa}
+              >
+                <option value="">Departamento</option>
+                {departamentos
+                  .filter(d => !filtroEmpresa || String(d.empresa_id) === filtroEmpresa)
+                  .map(d => (
+                    <option key={d.id} value={String(d.id)}>{d.nombre}</option>
+                  ))
+                }
+              </select>
+              <button onClick={loadData} style={{ ...btnPrimary, width: '100%', minHeight: 44 }}>Buscar</button>
+            </div>
+          ) : (
           <div style={{ ...cardStyle, marginBottom: '20px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
             <input type="text" placeholder="Buscar por nombre, numero o email..."
               value={search} onChange={e => { setSearch(e.target.value); setPagina(1); }}
@@ -1597,6 +1677,7 @@ export const PersonalPage = ({ hideImport = false }: PersonalPageProps) => {
             </select>
             <button onClick={loadData} style={btnPrimary}>Buscar</button>
           </div>
+          )}
 
           {/* Table */}
           {(() => {
@@ -1614,6 +1695,46 @@ export const PersonalPage = ({ hideImport = false }: PersonalPageProps) => {
 
             return filteredEmpleados.length === 0 ? (
               <p style={{ textAlign: 'center', color: '#888', padding: '40px 0' }}>No se encontraron empleados.</p>
+            ) : isMobile ? (
+              <>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {empPagina.map(emp => (
+                    <div key={emp.id} style={rhMobileCard} onClick={() => viewDetail(emp)}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={rhMobileCardTitle}>{nombreCompleto(emp)}</div>
+                          <div style={rhMobileCardSub}>No. {emp.numero_empleado}</div>
+                        </div>
+                        {estadoBadge(emp.estado)}
+                      </div>
+                      <div style={rhMobileCardRow}>
+                        <span>{emp.departamento?.nombre || getDeptoNombre(emp.departamento_id)}</span>
+                        <span>{emp.puesto?.nombre || '—'}</span>
+                      </div>
+                      <div style={{ ...rhMobileCardSub, marginTop: 6 }}>
+                        {emp.empresa?.nombre || getEmpresaNombre(emp.empresa_id)}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={e => { e.stopPropagation(); viewDetail(emp); }}
+                        style={{ marginTop: 10, width: '100%', minHeight: 38, border: '1px solid #bae6fd', borderRadius: 8, background: '#f0f9ff', color: '#0369a1', fontWeight: 600, fontSize: '0.82rem', cursor: 'pointer' }}
+                      >
+                        Ver detalle
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '14px', flexWrap: 'wrap', gap: '8px' }}>
+                  <span style={{ fontSize: '0.82rem', color: '#6b7280' }}>
+                    {filteredEmpleados.length} · {inicio + 1}–{Math.min(inicio + POR_PAGINA, filteredEmpleados.length)}
+                  </span>
+                  <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                    <button style={{ ...btnPag(false), opacity: paginaReal === 1 ? 0.4 : 1 }} disabled={paginaReal === 1} onClick={() => setPagina(p => Math.max(1, p - 1))}>‹</button>
+                    <span style={{ fontSize: '0.82rem', color: '#374151', padding: '0 6px' }}>{paginaReal}/{totalPaginas}</span>
+                    <button style={{ ...btnPag(false), opacity: paginaReal === totalPaginas ? 0.4 : 1 }} disabled={paginaReal === totalPaginas} onClick={() => setPagina(p => Math.min(totalPaginas, p + 1))}>›</button>
+                  </div>
+                </div>
+              </>
             ) : (
               <>
                 <div style={{ overflowX: 'auto' }}>
@@ -2301,6 +2422,24 @@ export const PersonalPage = ({ hideImport = false }: PersonalPageProps) => {
                     <p style={{ textAlign: 'center', color: '#888', padding: '20px 0' }}>Cargando asistencias...</p>
                   ) : empDayRows.length === 0 ? (
                     <p style={{ textAlign: 'center', color: '#888', padding: '20px 0' }}>No hay asistencias en esta quincena.</p>
+                  ) : isMobile ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: '50vh', overflowY: 'auto' }}>
+                      {empDayRows.map((row) => (
+                        <div key={row.key} style={{
+                          backgroundColor: row.esTiempoExtra ? '#fff8e1' : 'white',
+                          borderRadius: 12, padding: '10px 12px',
+                          border: `1px solid ${row.esTiempoExtra ? '#ffe082' : '#e5e7eb'}`,
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                            <span style={{ fontWeight: 700, fontSize: '0.88rem', color: '#1e3a5f' }}>{row.fecha}</span>
+                            {row.esTiempoExtra && (
+                              <span style={{ padding: '2px 7px', borderRadius: 4, fontSize: '0.65rem', fontWeight: 700, backgroundColor: '#ff9800', color: '#fff' }}>T.EXTRA</span>
+                            )}
+                          </div>
+                          <ChecadaMiniGrid entrada={row.entrada} salida_comer={row.salida_comer} regreso_comer={row.regreso_comer} salida={row.salida} />
+                        </div>
+                      ))}
+                    </div>
                   ) : (
                     <div style={{ overflowX: 'auto', maxHeight: '440px', overflowY: 'auto' }}>
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88rem' }}>

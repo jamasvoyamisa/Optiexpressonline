@@ -42,9 +42,10 @@ build/
 agent-local/buffer.db
 agent-local/*.log
 agent-local/config.yaml
-
-# Agent Linux (config con API keys - no subir)
-agent-linux/config.yaml
+agent-local/dist/
+agent-local/build/
+agent-local/venv/
+agent-local/*.exe
 
 # OS
 .DS_Store

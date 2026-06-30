@@ -2,6 +2,21 @@ import { useState, useEffect, useCallback } from 'react';
 import api from '../../services/api';
 import { fmtNombreEmpleado } from '../../utils/format';
 import { descargarArchivo, XLSX_MIME } from '../../utils/download';
+import { estiloPuntualidad } from '../../utils/puntualidad';
+import { useIsMobile } from '../../hooks/useIsMobile';
+import {
+  rhMobileBtnPrimary,
+  rhMobileBtnSecondary,
+  rhMobileCard,
+  rhMobileCardRow,
+  rhMobileCardSub,
+  rhMobileCardTitle,
+  rhMobileSheetContainer,
+  rhMobileSheetHandle,
+  rhMobileSheetOverlay,
+} from './rhMobileStyles';
+
+const FILAS_POR_PAGINA = 25;
 
 interface Empresa { id: number; nombre: string; }
 interface Departamento { id: number; nombre: string; empresa_id: number; }
@@ -14,7 +29,11 @@ interface ResumenEmpleado {
   apellido_materno: string;
   empresa: string;
   departamento: string;
+  total_dias_periodo?: number;
+  dias_periodo_evaluados?: number;
   total_dias_laborables: number;
+  dias_laborables_evaluados?: number;
+  periodo_en_curso?: boolean;
   dias_asistio: number;
   dias_completos: number;
   faltas: number;
@@ -45,6 +64,20 @@ interface DetalleEmpleado {
   fecha_inicio: string;
   fecha_fin: string;
   dias: DetalleDia[];
+}
+
+function fmtDiasPeriodo(r: ResumenEmpleado): string {
+  const total = r.total_dias_periodo ?? r.total_dias_laborables;
+  const evaluados = r.dias_periodo_evaluados ?? r.dias_laborables_evaluados;
+  if (r.periodo_en_curso && evaluados != null) {
+    return `${evaluados}/${total}`;
+  }
+  return String(total);
+}
+
+function fmtPuntualidad(r: ResumenEmpleado): string {
+  const pct = `${r.puntualidad_pct}%`;
+  return r.periodo_en_curso ? `${pct} progreso` : pct;
 }
 
 const th: React.CSSProperties = {
@@ -162,7 +195,9 @@ function quincenaActual(): { fi: string; ff: string; label: string; fiNominal: s
 }
 
 // ─── Componente ──────────────────────────────────────────────────────────────
-export const ReportesAsistenciaPage = () => {
+export const ReportesAsistenciaPage = ({ embeddedRh = false }: { embeddedRh?: boolean } = {}) => {
+  const isMobile = useIsMobile();
+  const compactRh = embeddedRh && isMobile;
   const [fechaInicio, setFechaInicio] = useState('');
   const [fechaFin, setFechaFin] = useState('');
   const [quinLabel, setQuinLabel] = useState<string>('');
@@ -178,6 +213,7 @@ export const ReportesAsistenciaPage = () => {
   const [cargando, setCargando] = useState(false);
   const [buscado, setBuscado] = useState(false);
   const [busqueda, setBusqueda] = useState('');
+  const [pagina, setPagina] = useState(1);
 
   const [detalleEmp, setDetalleEmp] = useState<ResumenEmpleado | null>(null);
   const [detalleData, setDetalleData] = useState<DetalleEmpleado | null>(null);
@@ -294,6 +330,50 @@ export const ReportesAsistenciaPage = () => {
     );
   });
 
+  const totalPaginas = Math.max(1, Math.ceil(filtrados.length / FILAS_POR_PAGINA));
+  const paginaSegura = Math.min(pagina, totalPaginas);
+  const inicioPagina = (paginaSegura - 1) * FILAS_POR_PAGINA;
+  const filtradosPagina = filtrados.slice(inicioPagina, inicioPagina + FILAS_POR_PAGINA);
+
+  useEffect(() => {
+    setPagina(1);
+  }, [busqueda, datos, filtroEmpresa, filtroDepto]);
+
+  useEffect(() => {
+    setPagina(p => Math.min(p, totalPaginas));
+  }, [totalPaginas]);
+
+  const paginationBar = filtrados.length > FILAS_POR_PAGINA && (
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, padding: isMobile ? '4px 0' : '8px 16px' }}>
+      <span style={{ color: '#6b7280', fontSize: '0.82rem' }}>
+        {inicioPagina + 1}–{Math.min(inicioPagina + FILAS_POR_PAGINA, filtrados.length)} de {filtrados.length} empleados
+      </span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <button
+          type="button"
+          disabled={paginaSegura <= 1}
+          onClick={() => setPagina(p => Math.max(1, p - 1))}
+          style={isMobile
+            ? { ...rhMobileBtnSecondary, minHeight: 36, opacity: paginaSegura <= 1 ? 0.5 : 1 }
+            : { padding: '6px 14px', border: '1px solid #d1d5db', borderRadius: 6, background: paginaSegura <= 1 ? '#f9fafb' : 'white', cursor: paginaSegura <= 1 ? 'not-allowed' : 'pointer', fontSize: '0.85rem' }}
+        >
+          Anterior
+        </button>
+        <span style={{ color: '#374151', fontSize: '0.85rem', fontWeight: 600 }}>{paginaSegura}/{totalPaginas}</span>
+        <button
+          type="button"
+          disabled={paginaSegura >= totalPaginas}
+          onClick={() => setPagina(p => Math.min(totalPaginas, p + 1))}
+          style={isMobile
+            ? { ...rhMobileBtnSecondary, minHeight: 36, opacity: paginaSegura >= totalPaginas ? 0.5 : 1 }
+            : { padding: '6px 14px', border: '1px solid #d1d5db', borderRadius: 6, background: paginaSegura >= totalPaginas ? '#f9fafb' : 'white', cursor: paginaSegura >= totalPaginas ? 'not-allowed' : 'pointer', fontSize: '0.85rem' }}
+        >
+          Siguiente
+        </button>
+      </div>
+    </div>
+  );
+
   // ── Totales ──
   const totales = filtrados.reduce((acc, r) => ({
     faltas: acc.faltas + r.faltas,
@@ -310,8 +390,8 @@ export const ReportesAsistenciaPage = () => {
   );
 
   return (
-    <div style={{ padding: '24px' }}>
-      <h1 style={{ marginBottom: '20px', fontSize: '1.4rem' }}>Reportes de Asistencia</h1>
+    <div style={{ padding: compactRh ? 0 : isMobile ? '12px' : '24px' }}>
+      {!compactRh && <h1 style={{ marginBottom: '20px', fontSize: isMobile ? '1.2rem' : '1.4rem' }}>Reportes de Asistencia</h1>}
 
       {/* ── Filtros: todo en una línea ── */}
       <div style={{ backgroundColor: 'white', borderRadius: 10, border: '1px solid #e5e7eb', padding: '16px 20px', marginBottom: 20 }}>
@@ -432,6 +512,11 @@ export const ReportesAsistenciaPage = () => {
                 <span style={{ fontSize: '0.8rem', color: '#6b7280', whiteSpace: 'nowrap' }}>
                   <strong>{quinLabel || 'Período'}</strong> ({fechaInicio} → {fechaFin})
                 </span>
+                {filtrados.some(r => r.periodo_en_curso) && (
+                  <span style={{ fontSize: '0.75rem', color: '#0369a1', backgroundColor: '#f0f9ff', borderRadius: 6, padding: '4px 10px', fontWeight: 600 }}>
+                    Quincena en curso — {filtrados[0] ? fmtDiasPeriodo(filtrados[0]) : ''} días del periodo
+                  </span>
+                )}
               </div>
               <button
                 onClick={() => descargarReporteDetalle(fechaInicio, fechaFin, filtroEmpresa, filtroDepto)}
@@ -446,8 +531,36 @@ export const ReportesAsistenciaPage = () => {
             <div style={{ padding: 32, textAlign: 'center', backgroundColor: 'white', borderRadius: 10, border: '1px solid #e5e7eb', color: '#9ca3af' }}>
               No se encontraron empleados con los filtros seleccionados.
             </div>
+          ) : isMobile ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {paginationBar}
+              {filtradosPagina.map(r => {
+                const pct = r.puntualidad_pct;
+                const punt = estiloPuntualidad(pct);
+                return (
+                  <div key={r.empleado_id} style={rhMobileCard}>
+                    <div style={rhMobileCardTitle}>{fmtNombreEmpleado(r)}</div>
+                    <div style={rhMobileCardSub}>No. {r.numero_empleado} · {r.departamento || '—'}</div>
+                    <div style={{ ...rhMobileCardRow, marginTop: 10 }}>
+                      <span>Periodo: {fmtDiasPeriodo(r)} días</span>
+                      <span style={{ color: punt.text, fontWeight: 700, backgroundColor: punt.bg, borderRadius: 5, padding: '2px 8px', fontSize: '0.78rem' }}>{fmtPuntualidad(r)}</span>
+                    </div>
+                    <div style={rhMobileCardRow}>
+                      <span>Completos: {r.dias_completos}</span>
+                      <span>Faltas: {r.faltas}</span>
+                      <span>Retardos: {r.retardos}</span>
+                    </div>
+                    <button type="button" onClick={() => verDetalle(r)} style={{ ...rhMobileBtnPrimary, marginTop: 10, backgroundColor: '#0369a1' }}>
+                      Ver detalle
+                    </button>
+                  </div>
+                );
+              })}
+              {paginationBar}
+            </div>
           ) : (
             <div style={{ overflowX: 'auto', backgroundColor: 'white', borderRadius: 10, border: '1px solid #e5e7eb', boxShadow: '0 1px 4px rgba(0,0,0,0.05)' }}>
+              {paginationBar}
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                 <thead>
                   <tr>
@@ -455,7 +568,7 @@ export const ReportesAsistenciaPage = () => {
                     <th style={th}>Nombre</th>
                     <th style={th}>Empresa</th>
                     <th style={th}>Departamento</th>
-                    <th style={thC}>Días lab.</th>
+                    <th style={thC}>Días período{filtrados.some(r => r.periodo_en_curso) ? ' (prog.)' : ''}</th>
                     <th style={thC}>Asistió</th>
                     <th style={thC}>Completos</th>
                     <th style={thC}>Faltas</th>
@@ -465,15 +578,14 @@ export const ReportesAsistenciaPage = () => {
                     <th style={thC}>Sal. Antic.</th>
                     <th style={thC}>Incapac.</th>
                     <th style={thC}>Vacac.</th>
-                    <th style={thC}>Puntualidad</th>
+                    <th style={thC}>Puntualidad{filtrados.some(r => r.periodo_en_curso) ? ' (prog.)' : ''}</th>
                     <th style={thC}>Detalle</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {filtrados.map(r => {
+                  {filtradosPagina.map(r => {
                     const pct = r.puntualidad_pct;
-                    const pctColor = pct >= 90 ? '#065f46' : pct >= 70 ? '#92400e' : '#991b1b';
-                    const pctBg = pct >= 90 ? '#d1fae5' : pct >= 70 ? '#fef3c7' : '#fee2e2';
+                    const punt = estiloPuntualidad(pct);
                     return (
                       <tr key={r.empleado_id} style={{ borderBottom: '1px solid #f0f0f0' }}>
                         <td style={td}><span style={{ color: '#9ca3af', fontSize: '0.8rem' }}>{r.numero_empleado}</span></td>
@@ -482,7 +594,7 @@ export const ReportesAsistenciaPage = () => {
                         </td>
                         <td style={{ ...td, fontSize: '0.8rem', color: '#6b7280' }}>{r.empresa || '—'}</td>
                         <td style={{ ...td, fontSize: '0.8rem', color: '#6b7280' }}>{r.departamento || '—'}</td>
-                        <td style={tdC}>{r.total_dias_laborables}</td>
+                        <td style={tdC}>{fmtDiasPeriodo(r)}</td>
                         <td style={tdC}>{r.dias_asistio}</td>
                         <td style={tdC}>{r.dias_completos}</td>
                         <td style={tdC}>{r.faltas > 0 ? badge(r.faltas, '#fee2e2', '#991b1b') : <span style={{ color: '#d1d5db' }}>0</span>}</td>
@@ -493,8 +605,8 @@ export const ReportesAsistenciaPage = () => {
                         <td style={tdC}>{r.dias_incapacidad > 0 ? badge(r.dias_incapacidad, '#f0f9ff', '#0369a1') : <span style={{ color: '#d1d5db' }}>0</span>}</td>
                         <td style={tdC}>{(r.dias_vacaciones ?? 0) > 0 ? badge(r.dias_vacaciones, '#f0fdf4', '#166534') : <span style={{ color: '#d1d5db' }}>0</span>}</td>
                         <td style={tdC}>
-                          <span style={{ backgroundColor: pctBg, color: pctColor, borderRadius: 5, padding: '2px 9px', fontSize: '0.78rem', fontWeight: 700 }}>
-                            {pct}%
+                          <span style={{ backgroundColor: punt.bg, color: punt.text, borderRadius: 5, padding: '2px 9px', fontSize: '0.78rem', fontWeight: 700 }} title={r.periodo_en_curso ? `${punt.tier} · progreso de quincena` : punt.tier}>
+                            {fmtPuntualidad(r)}
                           </span>
                         </td>
                         <td style={tdC}>
@@ -510,9 +622,7 @@ export const ReportesAsistenciaPage = () => {
                   })}
                 </tbody>
               </table>
-              <div style={{ padding: '8px 16px', color: '#9ca3af', fontSize: '0.78rem' }}>
-                {filtrados.length} empleado{filtrados.length !== 1 ? 's' : ''}
-              </div>
+              {paginationBar}
             </div>
           )}
         </>
@@ -522,12 +632,19 @@ export const ReportesAsistenciaPage = () => {
       {detalleEmp && (
         <div
           onClick={() => setDetalleEmp(null)}
-          style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+          style={rhMobileSheetOverlay(isMobile)}
         >
           <div
             onClick={e => e.stopPropagation()}
-            style={{ backgroundColor: 'white', borderRadius: 12, padding: 24, width: 760, maxWidth: '96vw', maxHeight: '88vh', display: 'flex', flexDirection: 'column', boxShadow: '0 20px 60px rgba(0,0,0,0.25)' }}
+            style={{
+              ...rhMobileSheetContainer(isMobile),
+              maxHeight: isMobile ? '92dvh' : '88vh',
+              display: 'flex',
+              flexDirection: 'column',
+              ...(isMobile ? {} : { width: 760, maxWidth: '96vw', boxShadow: '0 20px 60px rgba(0,0,0,0.25)' }),
+            }}
           >
+            {isMobile && <div style={rhMobileSheetHandle} />}
             {/* Encabezado */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
               <div>
@@ -544,7 +661,7 @@ export const ReportesAsistenciaPage = () => {
                     disabled={cargandoDetalle}
                     style={{ background: 'none', border: '1px solid #d1d5db', borderRadius: 6, width: 28, height: 28, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '0.9rem', color: '#374151' }}
                   >‹</button>
-                  <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#1d4ed8', minWidth: 240, textAlign: 'center' }}>
+                  <span style={{ fontSize: isMobile ? '0.78rem' : '0.82rem', fontWeight: 600, color: '#1d4ed8', minWidth: isMobile ? 0 : 240, textAlign: 'center', flex: 1 }}>
                     {detalleQ?.label ?? ''}
                   </span>
                   <button
@@ -559,27 +676,86 @@ export const ReportesAsistenciaPage = () => {
 
             {/* Mini-resumen */}
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
-              {[
-                { l: 'Faltas', v: detalleEmp.faltas, bg: '#fee2e2', c: '#991b1b' },
-                { l: 'F.Just.', v: detalleEmp.faltas_justificadas, bg: '#f5f3ff', c: '#7c3aed' },
-                { l: 'Incompl.', v: detalleEmp.incompletas ?? 0, bg: '#fef9c3', c: '#854d0e' },
-                { l: 'Retardos', v: detalleEmp.retardos, bg: '#fef3c7', c: '#92400e' },
-                { l: 'Sal.Antic.', v: detalleEmp.salidas_anticipadas, bg: '#fff7ed', c: '#c2410c' },
-                { l: 'Incapac.', v: detalleEmp.dias_incapacidad, bg: '#f0f9ff', c: '#0369a1' },
-                { l: 'Vacac.', v: detalleEmp.dias_vacaciones ?? 0, bg: '#f0fdf4', c: '#166534' },
-                { l: 'Puntualidad', v: `${detalleEmp.puntualidad_pct}%`, bg: '#ecfdf5', c: '#065f46' },
-              ].map(x => (
-                <div key={x.l} style={{ backgroundColor: x.bg, borderRadius: 6, padding: '6px 12px', textAlign: 'center' }}>
-                  <div style={{ fontSize: '0.7rem', color: '#6b7280', fontWeight: 600 }}>{x.l}</div>
-                  <div style={{ fontSize: '1.1rem', fontWeight: 800, color: x.c }}>{x.v}</div>
-                </div>
-              ))}
+              {(() => {
+                const puntDet = estiloPuntualidad(detalleEmp.puntualidad_pct);
+                return [
+                  { l: 'Faltas', v: detalleEmp.faltas, bg: '#fef2f2', c: '#b91c1c' },
+                  { l: 'F.Just.', v: detalleEmp.faltas_justificadas, bg: '#f5f3ff', c: '#7c3aed' },
+                  { l: 'Incompl.', v: detalleEmp.incompletas ?? 0, bg: '#fefce8', c: '#a16207' },
+                  { l: 'Retardos', v: detalleEmp.retardos, bg: '#fffbeb', c: '#b45309' },
+                  { l: 'Sal.Antic.', v: detalleEmp.salidas_anticipadas, bg: '#fff7ed', c: '#c2410c' },
+                  { l: 'Incapac.', v: detalleEmp.dias_incapacidad, bg: '#f0f9ff', c: '#0369a1' },
+                  { l: 'Vacac.', v: detalleEmp.dias_vacaciones ?? 0, bg: '#f0fdf4', c: '#166534' },
+                  { l: 'Puntualidad', v: fmtPuntualidad(detalleEmp), bg: puntDet.bg, c: puntDet.text },
+                ].map(x => (
+                  <div key={x.l} style={{ backgroundColor: x.bg, borderRadius: 6, padding: '6px 12px', textAlign: 'center' }}>
+                    <div style={{ fontSize: '0.7rem', color: '#6b7280', fontWeight: 600 }}>{x.l}</div>
+                    <div style={{ fontSize: '1.1rem', fontWeight: 800, color: x.c }}>{x.v}</div>
+                  </div>
+                ));
+              })()}
             </div>
 
             {/* Tabla de días */}
             <div style={{ flex: 1, overflowY: 'auto' }}>
               {cargandoDetalle ? (
                 <p style={{ textAlign: 'center', color: '#9ca3af', padding: 32 }}>Cargando detalle...</p>
+              ) : detalleData && isMobile ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  {detalleData.dias.map(d => {
+                    const bgRow = d.es_domingo ? '#f3f4f6' : d.en_vacaciones ? '#f0fdf4' : d.en_incapacidad ? '#f0f9ff' : d.es_festivo ? '#fff7ed' : d.incidencias.some(i => i.tipo === 'falta' && !i.justificada) ? '#fef2f2' : 'white';
+                    return (
+                      <div key={d.fecha} style={{ ...rhMobileCard, backgroundColor: bgRow }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                          <div style={rhMobileCardTitle}>
+                            {new Date(d.fecha + 'T12:00:00').toLocaleDateString('es-MX', { dateStyle: 'short' })}
+                          </div>
+                          <div style={{ ...rhMobileCardSub, marginTop: 0 }}>{d.dia_semana}</div>
+                        </div>
+                        <div style={{ fontSize: '0.78rem', marginBottom: 6 }}>
+                          {d.es_domingo ? (
+                            <span style={{ color: '#6b7280', fontWeight: 600 }}>Descanso</span>
+                          ) : d.en_vacaciones ? (
+                            <span style={{ color: '#166534', fontWeight: 600 }}>Vacaciones</span>
+                          ) : d.en_incapacidad ? (
+                            <span style={{ color: '#0369a1', fontWeight: 600 }}>Incapacidad</span>
+                          ) : d.es_festivo ? (
+                            <span style={{ color: '#c2410c', fontWeight: 600 }}>{d.festivo_nombre}</span>
+                          ) : d.checadas.length === 0 ? (
+                            <span style={{ color: '#d1d5db' }}>Sin checadas</span>
+                          ) : (
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                              {d.checadas.map((c, i) => (
+                                <span key={i} style={{ backgroundColor: '#f0fdf4', color: '#166534', borderRadius: 4, padding: '2px 6px', fontSize: '0.72rem', fontWeight: 600 }}>
+                                  {c.hora} {TIPO_CHECADA[c.tipo] ?? c.tipo}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        {d.incidencias.length > 0 && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 4 }}>
+                            {d.incidencias.map((inc, i) => {
+                              const s = TIPO_INC_LABEL[inc.tipo] ?? { label: inc.tipo, bg: '#f3f4f6', color: '#374151' };
+                              return (
+                                <span key={i} style={{ backgroundColor: s.bg, color: s.color, borderRadius: 4, padding: '2px 7px', fontSize: '0.72rem', fontWeight: 700 }}>
+                                  {s.label}{inc.justificada ? ' ✓' : ''}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
+                        {d.incidencias.some(i => i.descripcion || i.comentarios) && (
+                          <div style={{ ...rhMobileCardSub, fontSize: '0.75rem', lineHeight: 1.35 }}>
+                            {d.incidencias.map((i, idx) => (
+                              <div key={idx}>{i.justificada ? (i.comentarios || '') : (i.descripcion || '')}</div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               ) : detalleData ? (
                 <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.83rem' }}>
                   <thead>
@@ -668,8 +844,12 @@ export const ReportesAsistenciaPage = () => {
               ) : null}
             </div>
 
-            <div style={{ textAlign: 'right', marginTop: 14 }}>
-              <button onClick={() => setDetalleEmp(null)} style={{ padding: '8px 22px', backgroundColor: '#374151', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }}>
+            <div style={{ marginTop: 14 }}>
+              <button
+                type="button"
+                onClick={() => setDetalleEmp(null)}
+                style={isMobile ? { ...rhMobileBtnPrimary, backgroundColor: '#374151', width: '100%' } : { padding: '8px 22px', backgroundColor: '#374151', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600 }}
+              >
                 Cerrar
               </button>
             </div>

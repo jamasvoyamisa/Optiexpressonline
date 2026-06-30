@@ -27,3 +27,7 @@ buffer:
 logging:
   level: "INFO"
   file: "agent.log"
+  retention_days: 30   # borra logs de mas de 30 dias (rotacion diaria)
+
+# Opcional: proteger Configuración con contraseña (desde la GUI → Establecer contraseña).
+# No incluir security aquí — instalación nueva abre config sin pedir clave.

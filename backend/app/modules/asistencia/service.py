@@ -944,6 +944,254 @@ class AsistenciaService:
         return 4, "entre_semana"
 
     @staticmethod
+    def dias_periodo_rango(inicio: date, fin: date) -> int:
+        """Días naturales del periodo [inicio, fin] (incluye domingos de descanso remunerado)."""
+        if fin < inicio:
+            return 0
+        return (fin - inicio).days + 1
+
+    @staticmethod
+    def dias_laborables_rango(inicio: date, fin: date, festivos_set: set) -> int:
+        """Días laborables lun–sáb en [inicio, fin], sin domingos ni festivos."""
+        if fin < inicio:
+            return 0
+        count = 0
+        d = inicio
+        while d <= fin:
+            if d.weekday() != 6 and d not in festivos_set:
+                count += 1
+            d += timedelta(days=1)
+        return count
+
+    @staticmethod
+    def rango_evaluado_reporte(fi: date, ff: date) -> Tuple[date, bool]:
+        """Para reportes: limita el cálculo al día de hoy (México) si el período sigue en curso."""
+        from app.core.timezone_utils import hoy_mexico
+
+        hoy = hoy_mexico()
+        ff_eval = min(ff, hoy)
+        if ff_eval < fi:
+            ff_eval = fi
+        return ff_eval, ff > hoy
+
+    @staticmethod
+    def contar_dias_completos_reporte(
+        db: Session,
+        empleados_by_id: Dict[int, personal_models.Empleado],
+        checadas_por_emp_dia: Dict[Tuple[int, str], int],
+        ff_eval: date,
+    ) -> Dict[int, int]:
+        """
+        Día completo = checadas registradas >= requeridas (2 sáb/dom reducido, 4 entre semana).
+        Alineado con generación de incidencias (_checadas_requeridas_dia_horario).
+        """
+        dias_completos: Dict[int, int] = {eid: 0 for eid in empleados_by_id}
+        for (emp_id, dia_str), n in checadas_por_emp_dia.items():
+            try:
+                fecha_d = date.fromisoformat(dia_str)
+            except ValueError:
+                continue
+            if fecha_d > ff_eval:
+                continue
+            emp = empleados_by_id.get(emp_id)
+            if not emp:
+                continue
+            req, _ = AsistenciaService._checadas_requeridas_dia_horario(db, emp, fecha_d)
+            if req > 0 and n >= req:
+                dias_completos[emp_id] = dias_completos.get(emp_id, 0) + 1
+        return dias_completos
+
+    @staticmethod
+    def build_reporte_resumen(
+        db: Session,
+        fi: date,
+        ff: date,
+        *,
+        empleado_id: Optional[int] = None,
+        departamento_id: Optional[int] = None,
+        empresa_id: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Resumen de asistencia por empleado en [fi, ff]. Misma lógica que reporte RH."""
+        from datetime import datetime as dt
+        from app.core.timezone_utils import mexico_date_to_utc_range, to_mexico
+        from app.modules.incapacidades import models as inc_models
+        from app.modules.vacaciones import models as vac_models
+
+        q = db.query(personal_models.Empleado).filter(
+            personal_models.Empleado.estado == personal_models.EstadoEmpleado.ACTIVO,
+            personal_models.Empleado.empresa_id.isnot(None),
+            personal_models.Empleado.exento_incidencias == False,
+        )
+        if empleado_id:
+            q = q.filter(personal_models.Empleado.id == empleado_id)
+        elif departamento_id:
+            q = q.filter(personal_models.Empleado.departamento_id == departamento_id)
+        elif empresa_id:
+            q = q.filter(personal_models.Empleado.empresa_id == empresa_id)
+
+        empleados = q.options(joinedload(personal_models.Empleado.empresa)).order_by(
+            personal_models.Empleado.apellido_paterno, personal_models.Empleado.nombre
+        ).all()
+        if not empleados:
+            return []
+
+        emp_ids = [e.id for e in empleados]
+        empleados_by_id = {e.id: e for e in empleados}
+
+        festivos_bd = db.query(models.DiaFestivo).filter(
+            models.DiaFestivo.activo == True,
+            models.DiaFestivo.fecha >= fi,
+            models.DiaFestivo.fecha <= ff,
+        ).all()
+        festivos_set = {f.fecha for f in festivos_bd}
+
+        ff_eval, periodo_en_curso = AsistenciaService.rango_evaluado_reporte(fi, ff)
+        dias_lab = AsistenciaService.dias_laborables_rango
+        dias_periodo = AsistenciaService.dias_periodo_rango
+        total_dias_periodo = dias_periodo(fi, ff)
+        total_dias_evaluados = dias_periodo(fi, ff_eval)
+        dias_lab_evaluados = dias_lab(fi, ff_eval, festivos_set)
+
+        dt_inicio_utc, _ = mexico_date_to_utc_range(fi)
+        _, dt_fin_utc = mexico_date_to_utc_range(ff + timedelta(days=1))
+
+        checadas_rows = db.query(
+            models.Asistencia.empleado_id,
+            models.Asistencia.timestamp,
+        ).filter(
+            models.Asistencia.empleado_id.in_(emp_ids),
+            models.Asistencia.timestamp >= dt_inicio_utc,
+            models.Asistencia.timestamp < dt_fin_utc,
+        ).all()
+
+        dias_con_checada: dict[int, set] = {e.id: set() for e in empleados}
+        checadas_por_emp_dia: dict[tuple[int, str], int] = {}
+        for row in checadas_rows:
+            ts_mex = to_mexico(row.timestamp) or row.timestamp
+            dia_str = ts_mex.strftime("%Y-%m-%d") if hasattr(ts_mex, "strftime") else str(row.timestamp.date())
+            dias_con_checada[row.empleado_id].add(dia_str)
+            key = (row.empleado_id, dia_str)
+            checadas_por_emp_dia[key] = checadas_por_emp_dia.get(key, 0) + 1
+        dias_completos = AsistenciaService.contar_dias_completos_reporte(
+            db, empleados_by_id, checadas_por_emp_dia, ff_eval
+        )
+
+        incidencias_rows = db.query(models.Incidencia).filter(
+            models.Incidencia.empleado_id.in_(emp_ids),
+            models.Incidencia.fecha >= dt_inicio_utc,
+            models.Incidencia.fecha < dt_fin_utc,
+        ).all()
+
+        faltas: dict[int, int] = {e.id: 0 for e in empleados}
+        faltas_justificadas: dict[int, int] = {e.id: 0 for e in empleados}
+        incompletas: dict[int, int] = {e.id: 0 for e in empleados}
+        retardos: dict[int, int] = {e.id: 0 for e in empleados}
+        salidas_anticipadas: dict[int, int] = {e.id: 0 for e in empleados}
+
+        for inc in incidencias_rows:
+            eid = inc.empleado_id
+            if inc.tipo == models.TipoIncidencia.FALTA:
+                if inc.justificada:
+                    faltas_justificadas[eid] = faltas_justificadas.get(eid, 0) + 1
+                else:
+                    faltas[eid] = faltas.get(eid, 0) + 1
+            elif inc.tipo == models.TipoIncidencia.INCOMPLETA:
+                incompletas[eid] = incompletas.get(eid, 0) + 1
+            elif inc.tipo == models.TipoIncidencia.RETARDO:
+                retardos[eid] = retardos.get(eid, 0) + 1
+            elif inc.tipo == models.TipoIncidencia.SALIDA_ANTICIPADA:
+                salidas_anticipadas[eid] = salidas_anticipadas.get(eid, 0) + 1
+
+        incapacidades_rows = db.query(inc_models.Incapacidad).filter(
+            inc_models.Incapacidad.empleado_id.in_(emp_ids),
+            inc_models.Incapacidad.estado != inc_models.EstadoIncapacidad.CANCELADA,
+            inc_models.Incapacidad.fecha_inicio <= ff,
+            inc_models.Incapacidad.fecha_fin >= fi,
+        ).all()
+
+        dias_incapacidad: dict[int, int] = {e.id: 0 for e in empleados}
+        for inc in incapacidades_rows:
+            inicio_real = max(inc.fecha_inicio, fi)
+            fin_real = min(inc.fecha_fin, ff_eval)
+            if fin_real >= inicio_real:
+                dias_incapacidad[inc.empleado_id] = (
+                    dias_incapacidad.get(inc.empleado_id, 0)
+                    + dias_lab(inicio_real, fin_real, festivos_set)
+                )
+
+        vacaciones_rows = db.query(vac_models.SolicitudVacaciones).filter(
+            vac_models.SolicitudVacaciones.empleado_id.in_(emp_ids),
+            vac_models.SolicitudVacaciones.estado.in_(
+                (vac_models.EstadoSolicitud.APROBADA, vac_models.EstadoSolicitud.APROBADA_JEFE)
+            ),
+            vac_models.SolicitudVacaciones.fecha_inicio <= dt(ff.year, ff.month, ff.day, 23, 59, 59),
+            vac_models.SolicitudVacaciones.fecha_fin >= dt(fi.year, fi.month, fi.day),
+        ).all()
+
+        dias_vacaciones: dict[int, int] = {e.id: 0 for e in empleados}
+        for vac in vacaciones_rows:
+            vac_fi = vac.fecha_inicio.date() if hasattr(vac.fecha_inicio, "date") else vac.fecha_inicio
+            vac_ff = vac.fecha_fin.date() if hasattr(vac.fecha_fin, "date") else vac.fecha_fin
+            inicio_real = max(vac_fi, fi)
+            fin_real = min(vac_ff, ff_eval)
+            if fin_real >= inicio_real:
+                dias_vacaciones[vac.empleado_id] = (
+                    dias_vacaciones.get(vac.empleado_id, 0)
+                    + dias_lab(inicio_real, fin_real, festivos_set)
+                )
+
+        dep_ids = {e.departamento_id for e in empleados if e.departamento_id}
+        emp_empresa_ids = {e.empresa_id for e in empleados if e.empresa_id}
+        deptos_map = {
+            d.id: d.nombre
+            for d in db.query(personal_models.Departamento).filter(
+                personal_models.Departamento.id.in_(dep_ids)
+            ).all()
+        } if dep_ids else {}
+        empresas_map = {
+            em.id: em.nombre
+            for em in db.query(personal_models.Empresa).filter(
+                personal_models.Empresa.id.in_(emp_empresa_ids)
+            ).all()
+        } if emp_empresa_ids else {}
+
+        resultado: List[Dict[str, Any]] = []
+        for emp in empleados:
+            f = faltas.get(emp.id, 0)
+            fj = faltas_justificadas.get(emp.id, 0)
+            di = dias_incapacidad.get(emp.id, 0)
+            dv = dias_vacaciones.get(emp.id, 0)
+            dc = dias_completos.get(emp.id, 0)
+            denominador = dias_lab_evaluados - di - dv - f - fj
+            resultado.append({
+                "empleado_id": emp.id,
+                "numero_empleado": emp.numero_empleado,
+                "nombre": emp.nombre,
+                "apellido_paterno": emp.apellido_paterno or "",
+                "apellido_materno": emp.apellido_materno or "",
+                "empresa": empresas_map.get(emp.empresa_id, "") if emp.empresa_id else "",
+                "departamento": deptos_map.get(emp.departamento_id, "") if emp.departamento_id else "",
+                "total_dias_periodo": total_dias_periodo,
+                "dias_periodo_evaluados": total_dias_evaluados,
+                "total_dias_laborables": total_dias_periodo,
+                "dias_laborables_evaluados": total_dias_evaluados,
+                "periodo_en_curso": periodo_en_curso,
+                "dias_asistio": len(dias_con_checada.get(emp.id, set())),
+                "dias_completos": dc,
+                "faltas": f,
+                "faltas_justificadas": fj,
+                "incompletas": incompletas.get(emp.id, 0),
+                "retardos": retardos.get(emp.id, 0),
+                "salidas_anticipadas": salidas_anticipadas.get(emp.id, 0),
+                "dias_incapacidad": di,
+                "dias_vacaciones": dv,
+                "puntualidad_pct": round(
+                    (dc / max(1, denominador)) * 100, 1
+                ) if denominador > 0 else 0,
+            })
+        return resultado
+
+    @staticmethod
     def contexto_dia_laboral_empleado(
         db: Session,
         empleado: personal_models.Empleado,

@@ -1,19 +1,47 @@
 @echo off
+setlocal enabledelayedexpansion
 cd /d "%~dp0"
-echo === Instalando Agente Local ZKTeco ===
+echo === Instalando Agente Optiexpress ===
+echo.
 
-where python >nul 2>&1
-if %ERRORLEVEL% equ 0 (
-    set PYTHON_CMD=python
-) else (
-    where py >nul 2>&1
-    if %ERRORLEVEL% equ 0 (
-        set PYTHON_CMD=py -3
-    ) else (
-        echo ERROR: Python no encontrado. Instala Python 3.8+ desde https://python.org
-        pause
-        exit /b 1
+set "PYTHON_CMD="
+for %%P in (python py python3) do (
+    if not defined PYTHON_CMD (
+        where %%P >nul 2>&1
+        if !ERRORLEVEL! equ 0 (
+            if /I "%%P"=="py" (
+                set "PYTHON_CMD=py -3"
+            ) else (
+                set "PYTHON_CMD=%%P"
+            )
+        )
     )
+)
+
+if not defined PYTHON_CMD (
+    echo [ERROR] Python no encontrado.
+    echo.
+    echo Instala Python 3.11 desde:
+    echo   https://www.python.org/downloads/
+    echo.
+    echo IMPORTANTE al instalar, marca estas casillas:
+    echo   [x] Add python.exe to PATH
+    echo   [x] Install py launcher
+    echo.
+    echo O desde PowerShell como administrador:
+    echo   winget install Python.Python.3.11
+    echo.
+    echo Cierra esta ventana, abre CMD NUEVO y vuelve a ejecutar install.bat
+    pause
+    exit /b 1
+)
+
+echo Usando: %PYTHON_CMD%
+%PYTHON_CMD% --version
+if %ERRORLEVEL% neq 0 (
+    echo [ERROR] Python no responde. Reinstala marcando "Add to PATH".
+    pause
+    exit /b 1
 )
 
 if not exist "venv\Scripts\activate.bat" (
@@ -24,13 +52,14 @@ if not exist "venv\Scripts\activate.bat" (
     echo Creando entorno virtual...
     %PYTHON_CMD% -m venv venv
     if %ERRORLEVEL% neq 0 (
-        echo ERROR: No se pudo crear el entorno virtual.
+        echo [ERROR] No se pudo crear el entorno virtual.
         pause
         exit /b 1
     )
 )
 
 call venv\Scripts\activate.bat
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 if %ERRORLEVEL% neq 0 (
     echo ERROR al instalar dependencias.
@@ -45,6 +74,5 @@ if not exist "config.yaml" (
 
 echo.
 echo === Instalacion completada ===
-echo Edita config.yaml con la IP del dispositivo y la API Key del backend.
-echo Luego ejecuta: run.bat
+echo Siguiente paso para compilar el instalador: build_installer.bat
 pause

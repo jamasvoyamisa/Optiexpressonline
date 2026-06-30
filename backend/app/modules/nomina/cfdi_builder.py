@@ -232,7 +232,7 @@ def build_payroll_invoice(
     if sdi and Decimal(str(sdi)) > 0:
         sbc = _q2(Decimal(str(sdi)) * Decimal(str(det.dias_pagados or 0)))
     elif nom.salario_base:
-        dias_mes = Decimal("30.4")
+        dias_mes = Decimal("30")
         sbc = _q2(Decimal(str(nom.salario_base)) / dias_mes * Decimal(str(det.dias_pagados or 0)))
 
     tax_credentials = None

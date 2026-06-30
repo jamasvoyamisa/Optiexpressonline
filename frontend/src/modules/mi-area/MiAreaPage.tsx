@@ -3,6 +3,21 @@ import api from '../../services/api';
 import { parseTimestampForMexico, toMexicoDateString } from '../../utils/date';
 import { fmtNombreEmpleado } from '../../utils/format';
 import { useSearchParams } from 'react-router-dom';
+import { useIsMobile } from '../../hooks/useIsMobile';
+import { ChecadaMiniGrid } from '../../components/asistencia/ChecadaMiniGrid';
+import {
+  rhMobileBadge,
+  rhMobileBtnPrimary,
+  rhMobileBtnSecondary,
+  rhMobileCard,
+  rhMobileCardRow,
+  rhMobileCardSub,
+  rhMobileCardTitle,
+  rhMobileContentShell,
+  rhMobileHero,
+  rhMobileTabPill,
+  rhMobileTabScroll,
+} from '../rh/rhMobileStyles';
 
 type TipoIncidencia = 'retardo' | 'falta' | 'completa' | 'horas_extra' | 'salida_anticipada' | 'incompleta';
 type TipoChecada = 'entrada' | 'salida' | 'salida_comer' | 'regreso_comer';
@@ -334,6 +349,14 @@ const tipoIncidenciasColores: Record<string, { backgroundColor: string; color: s
 
 type TabKey = 'personal' | 'asistencia' | 'incidencias' | 'vacaciones' | 'prestamos';
 
+const MI_AREA_TABS: { key: TabKey; label: string; short: string }[] = [
+  { key: 'personal', label: 'Personal del área', short: 'Personal' },
+  { key: 'asistencia', label: 'Asistencia', short: 'Asistencia' },
+  { key: 'incidencias', label: 'Incidencias', short: 'Incidencias' },
+  { key: 'vacaciones', label: 'Vacaciones', short: 'Vacaciones' },
+  { key: 'prestamos', label: 'Préstamos', short: 'Préstamos' },
+];
+
 const ITEMS_PER_PAGE = 30;
 
 const tabStyle = (active: boolean): React.CSSProperties => ({
@@ -390,6 +413,7 @@ function formatQuincenaLabel(year: number, month: number, num: 1 | 2): string {
 }
 
 export const MiAreaPage = () => {
+  const isMobile = useIsMobile();
   const [searchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState<TabKey>('personal');
   const [authMe, setAuthMe] = useState<AuthMe | null>(null);
@@ -1101,75 +1125,71 @@ export const MiAreaPage = () => {
     );
   }
 
-  return (
-    <div style={{ padding: '24px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
-        <h1 style={{ margin: 0 }}>{authMe?.is_superuser && deptos.length === 0 ? 'Asistencia y solicitudes' : 'Mi Área'}</h1>
-        {(deptos.length > 0 || authMe?.is_superuser) &&
-          (authMe?.is_superuser ? (
-            <label
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                color: '#555',
-                fontSize: '0.9rem',
-                backgroundColor: '#f0f9ff',
-                padding: '6px 14px',
-                borderRadius: '20px',
-                border: '1px solid #bae6fd',
-                cursor: 'pointer',
-              }}
-            >
-              <span style={{ fontWeight: 600 }}>Área:</span>
-              <select
-                value={areaFiltroAdmin === null ? '' : String(areaFiltroAdmin)}
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setAreaFiltroAdmin(v === '' ? null : Number(v));
-                }}
-                style={{
-                  padding: '4px 10px',
-                  borderRadius: 8,
-                  border: '1px solid #bae6fd',
-                  backgroundColor: '#fff',
-                  fontSize: '0.9rem',
-                  maxWidth: 340,
-                  cursor: 'pointer',
-                }}
-              >
-                <option value="">Todos los departamentos</option>
-                {listaDeptosCat.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.nombre}{d.empresa?.nombre ? ` (${d.empresa.nombre})` : ''}
-                  </option>
-                ))}
-              </select>
-            </label>
-          ) : (
-            <span
-              style={{
-                color: '#555',
-                fontSize: '0.9rem',
-                backgroundColor: '#f0f9ff',
-                padding: '4px 12px',
-                borderRadius: '20px',
-                border: '1px solid #bae6fd',
-              }}
-            >
-              {deptos.map((d) => d.nombre).join(' · ')}
-            </span>
-          ))}
-      </div>
+  const pageTitle = authMe?.is_superuser && deptos.length === 0 ? 'Asistencia y solicitudes' : 'Mi Área';
+  const activeTabLabel = MI_AREA_TABS.find(t => t.key === activeTab)?.label ?? pageTitle;
 
-      {/* Pestañas */}
-      <div style={{ display: 'flex', borderBottom: '2px solid #e5e7eb', marginBottom: '20px' }}>
-        <button style={tabStyle(activeTab === 'personal')} onClick={() => setActiveTab('personal')}>Personal del área</button>
-        <button style={tabStyle(activeTab === 'asistencia')} onClick={() => setActiveTab('asistencia')}>Asistencia</button>
-        <button style={tabStyle(activeTab === 'incidencias')} onClick={() => setActiveTab('incidencias')}>Incidencias</button>
-        <button style={tabStyle(activeTab === 'vacaciones')} onClick={() => setActiveTab('vacaciones')}>Vacaciones</button>
-        <button style={tabStyle(activeTab === 'prestamos')} onClick={() => setActiveTab('prestamos')}>Préstamos</button>
-      </div>
+  const areaFilter = (deptos.length > 0 || authMe?.is_superuser) && (
+    authMe?.is_superuser ? (
+      <label style={{
+        display: 'flex', alignItems: 'center', gap: 8, color: '#555', fontSize: '0.85rem',
+        backgroundColor: '#f0f9ff', padding: isMobile ? '8px 12px' : '6px 14px', borderRadius: '20px',
+        border: '1px solid #bae6fd', cursor: 'pointer', width: isMobile ? '100%' : undefined, boxSizing: 'border-box',
+      }}>
+        <span style={{ fontWeight: 600, flexShrink: 0 }}>Área:</span>
+        <select
+          value={areaFiltroAdmin === null ? '' : String(areaFiltroAdmin)}
+          onChange={(e) => {
+            const v = e.target.value;
+            setAreaFiltroAdmin(v === '' ? null : Number(v));
+          }}
+          style={{
+            padding: '4px 10px', borderRadius: 8, border: '1px solid #bae6fd', backgroundColor: '#fff',
+            fontSize: '0.85rem', flex: 1, minWidth: 0, cursor: 'pointer',
+          }}
+        >
+          <option value="">Todos los departamentos</option>
+          {listaDeptosCat.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.nombre}{d.empresa?.nombre ? ` (${d.empresa.nombre})` : ''}
+            </option>
+          ))}
+        </select>
+      </label>
+    ) : (
+      <span style={{ color: '#555', fontSize: '0.85rem', backgroundColor: '#f0f9ff', padding: '4px 12px', borderRadius: '20px', border: '1px solid #bae6fd' }}>
+        {deptos.map((d) => d.nombre).join(' · ')}
+      </span>
+    )
+  );
+
+  const tabBar = isMobile ? (
+    <div style={rhMobileTabScroll}>
+      {MI_AREA_TABS.map(t => (
+        <button key={t.key} type="button" style={rhMobileTabPill(activeTab === t.key)} onClick={() => setActiveTab(t.key)}>
+          {t.short}
+        </button>
+      ))}
+    </div>
+  ) : (
+    <div style={{ display: 'flex', borderBottom: '2px solid #e5e7eb', marginBottom: '20px', overflowX: 'auto' }}>
+      {MI_AREA_TABS.map(t => (
+        <button key={t.key} style={tabStyle(activeTab === t.key)} onClick={() => setActiveTab(t.key)}>{t.label}</button>
+      ))}
+    </div>
+  );
+
+  const pageBody = (
+    <>
+      {!isMobile && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: '8px' }}>
+          <h1 style={{ margin: 0 }}>{pageTitle}</h1>
+          {areaFilter}
+        </div>
+      )}
+
+      {isMobile && areaFilter && <div style={{ marginBottom: 12 }}>{areaFilter}</div>}
+
+      {tabBar}
 
       {/* ─── TAB: PERSONAL ─── */}
       {activeTab === 'personal' && (
@@ -1215,6 +1235,37 @@ export const MiAreaPage = () => {
               <p style={{ color: '#666', padding: '24px', backgroundColor: '#f8f9fa', borderRadius: '8px', fontSize: '0.9rem' }}>
                 No se encontraron empleados para &quot;{busquedaPersonal.trim()}&quot;.
               </p>
+            ) : isMobile ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {personalFiltrado.map(emp => (
+                <div key={emp.id} style={rhMobileCard}>
+                  <div style={rhMobileCardTitle}>{fmtNombreEmpleado(emp)}</div>
+                  <div style={rhMobileCardSub}>#{emp.numero_empleado} · {emp.puesto?.nombre ?? '—'}</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 8 }}>
+                    {ausenciasDelDia[emp.id]?.en_incapacidad && <span style={rhMobileBadge('#dbeafe', '#1e40af')}>Incapacidad</span>}
+                    {ausenciasDelDia[emp.id]?.en_vacaciones && <span style={rhMobileBadge('#dcfce7', '#166534')}>Vacaciones</span>}
+                    {!ausenciasDelDia[emp.id]?.en_incapacidad && !ausenciasDelDia[emp.id]?.en_vacaciones && (
+                      <span style={{ color: '#94a3b8', fontSize: '0.78rem' }}>Sin ausencia hoy</span>
+                    )}
+                  </div>
+                  {emp.departamento && (
+                    <div style={rhMobileCardRow}><span>Depto.</span><span>{emp.departamento.nombre}</span></div>
+                  )}
+                  {emp.telefono && (
+                    <div style={rhMobileCardRow}><span>Tel.</span><a href={`tel:${emp.telefono}`} style={{ color: '#0369a1', textDecoration: 'none' }}>{emp.telefono}</a></div>
+                  )}
+                  <div style={rhMobileCardRow}>
+                    <span>Estado</span>
+                    <span style={{ fontWeight: 600, color: emp.estado === 'activo' ? '#15803d' : '#b91c1c' }}>
+                      {emp.estado ? emp.estado.charAt(0).toUpperCase() + emp.estado.slice(1) : '—'}
+                    </span>
+                  </div>
+                </div>
+              ))}
+              <p style={{ margin: 0, color: '#888', fontSize: '0.82rem', textAlign: 'center' }}>
+                {personalFiltrado.length} empleado{personalFiltrado.length !== 1 ? 's' : ''}
+              </p>
+            </div>
             ) : (
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
@@ -1490,6 +1541,50 @@ export const MiAreaPage = () => {
                   incompleta: '#e5e7eb',
                   falta: '#fee2e2',
                 };
+                if (isMobile) {
+                  return (
+                    <div>
+                      {totalPagChecadas > 1 && (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 8 }}>
+                          <span style={{ fontSize: '0.82rem', color: '#64748b' }}>Pág. {pagChecadas}/{totalPagChecadas}</span>
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <button type="button" disabled={pagChecadas <= 1} onClick={() => setPagChecadas(p => Math.max(1, p - 1))} style={{ ...rhMobileBtnSecondary, minHeight: 34, opacity: pagChecadas <= 1 ? 0.5 : 1 }}>‹</button>
+                            <button type="button" disabled={pagChecadas >= totalPagChecadas} onClick={() => setPagChecadas(p => Math.min(totalPagChecadas, p + 1))} style={{ ...rhMobileBtnSecondary, minHeight: 34, opacity: pagChecadas >= totalPagChecadas ? 0.5 : 1 }}>›</button>
+                          </div>
+                        </div>
+                      )}
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        {dayRowsPag.map((row) => (
+                          <div key={row.key} style={{ ...rhMobileCard, backgroundColor: row.esTiempoExtra ? '#fff8e1' : '#fff' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                              <div>
+                                <div style={rhMobileCardTitle}>{row.empleadoNombre}</div>
+                                <div style={rhMobileCardSub}>#{row.numeroEmpleado} · {row.fecha}</div>
+                              </div>
+                              <div style={{ textAlign: 'right' }}>
+                                {row.esTiempoExtra && <span style={{ ...rhMobileBadge('#ff9800', '#fff'), display: 'block', marginBottom: 4 }}>T.EXTRA</span>}
+                                <span style={{ fontWeight: 800, color: '#0ea5e9' }}>{row.totalHoras}</span>
+                              </div>
+                            </div>
+                            {row.incidenciasDelDia.length > 0 && (
+                              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
+                                {row.incidenciasDelDia.map((inc, idx) => (
+                                  <span key={idx} style={{ ...rhMobileBadge(incBg[inc.tipo] ?? '#f3f4f6', '#374151'), textDecoration: inc.justificada ? 'line-through' : 'none', opacity: inc.justificada ? 0.7 : 1 }}>
+                                    {tipoLabels[inc.tipo] || inc.tipo}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            <ChecadaMiniGrid entrada={row.entrada} salida_comer={row.salida_comer} regreso_comer={row.regreso_comer} salida={row.salida} />
+                          </div>
+                        ))}
+                      </div>
+                      <p style={{ marginTop: 8, color: '#888', fontSize: '0.82rem', textAlign: 'center' }}>
+                        {dayRowsAsistencia.length} días · {checadas.length} checadas
+                      </p>
+                    </div>
+                  );
+                }
                 return (
                   <div style={{ overflowX: 'auto' }}>
                     <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
@@ -1704,6 +1799,55 @@ export const MiAreaPage = () => {
               <p style={{ color: '#666', padding: '16px', backgroundColor: '#f8f9fa', borderRadius: '8px', fontSize: '0.9rem' }}>
                 {busquedaIncidencias.trim() ? `No se encontraron incidencias para "${busquedaIncidencias.trim()}".` : `No hay incidencias del personal del área ${filtroJustificada === 'pendientes' ? 'pendientes' : filtroJustificada === 'justificadas' ? 'justificadas' : ''}.`}
               </p>
+            ) : isMobile ? (
+              (() => {
+                const startInc = (pagIncidencias - 1) * ITEMS_PER_PAGE;
+                const incPag = filteredIncBusqueda.slice(startInc, startInc + ITEMS_PER_PAGE);
+                const totalPagInc = Math.max(1, Math.ceil(filteredIncBusqueda.length / ITEMS_PER_PAGE));
+                return (
+                  <div>
+                    {totalPagInc > 1 && (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
+                        <span style={{ fontSize: '0.82rem', color: '#64748b' }}>Pág. {pagIncidencias}/{totalPagInc}</span>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <button type="button" disabled={pagIncidencias <= 1} onClick={() => setPagIncidencias(p => Math.max(1, p - 1))} style={{ ...rhMobileBtnSecondary, minHeight: 34 }}>‹</button>
+                          <button type="button" disabled={pagIncidencias >= totalPagInc} onClick={() => setPagIncidencias(p => Math.min(totalPagInc, p + 1))} style={{ ...rhMobileBtnSecondary, minHeight: 34 }}>›</button>
+                        </div>
+                      </div>
+                    )}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                      {incPag.map(inc => (
+                        <div key={inc.id} style={rhMobileCard}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                            <div style={rhMobileCardTitle}>{inc.empleado_nombre || empleadosMap[inc.empleado_id] || `#${inc.empleado_id}`}</div>
+                            <span style={rhMobileBadge(
+                              (tipoIncidenciasColores[inc.tipo] ?? { backgroundColor: '#f3f4f6' }).backgroundColor as string,
+                              (tipoIncidenciasColores[inc.tipo] ?? { color: '#374151' }).color as string,
+                            )}>
+                              {tipoLabels[inc.tipo] || inc.tipo}
+                            </span>
+                          </div>
+                          <div style={rhMobileCardSub}>{new Date(inc.fecha).toLocaleDateString('es-MX', { dateStyle: 'short' })}</div>
+                          {(inc.descripcion || '').trim() && (
+                            <div style={{ ...rhMobileCardRow, alignItems: 'flex-start' }}><span>Motivo</span><span style={{ textAlign: 'right', maxWidth: '58%' }}>{inc.descripcion}</span></div>
+                          )}
+                          <div style={rhMobileCardRow}>
+                            <span>Justificada</span>
+                            <span style={{ fontWeight: 700, color: inc.justificada ? '#15803d' : '#b45309' }}>{inc.justificada ? 'Sí' : 'No'}</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => { setModalIncidencia(inc); setJustificarComentarios(inc.comentarios || ''); setJustificada(inc.justificada); }}
+                            style={{ ...rhMobileBtnPrimary, marginTop: 10, backgroundColor: '#0d9488' }}
+                          >
+                            Justificar
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()
             ) : (
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
@@ -1811,6 +1955,30 @@ export const MiAreaPage = () => {
             <p style={{ color: '#666', padding: '24px', backgroundColor: '#f8f9fa', borderRadius: '8px' }}>
               No hay solicitudes {filtroEstadoVacaciones === 'pendientes' ? 'pendientes de tu aprobación' : ''}.
             </p>
+          ) : isMobile ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {solicitudesVacaciones.map(s => (
+                <div key={s.id} style={rhMobileCard}>
+                  <div style={rhMobileCardTitle}>{empleadosMap[s.empleado_id] || `#${s.empleado_id}`}</div>
+                  <div style={rhMobileCardSub}>
+                    {new Date(s.fecha_inicio).toLocaleDateString('es-MX', { dateStyle: 'short' })} – {new Date(s.fecha_fin).toLocaleDateString('es-MX', { dateStyle: 'short' })}
+                  </div>
+                  <div style={rhMobileCardRow}><span>Días</span><span style={{ fontWeight: 700 }}>{s.dias_solicitados}</span></div>
+                  {s.motivo && <div style={{ ...rhMobileCardRow, alignItems: 'flex-start' }}><span>Motivo</span><span style={{ textAlign: 'right', maxWidth: '58%' }}>{s.motivo}</span></div>}
+                  <div style={rhMobileCardRow}>
+                    <span>Estado</span>
+                    <span style={{ fontWeight: 600, color: s.estado === 'aprobada' ? '#15803d' : s.estado === 'rechazada' ? '#b91c1c' : '#b45309' }}>
+                      {s.estado === 'pendiente' ? 'Pendiente' : s.estado === 'aprobada' ? 'Aprobada' : s.estado === 'rechazada' ? 'Rechazada' : s.estado}
+                    </span>
+                  </div>
+                  {s.estado === 'pendiente' && (
+                    <button type="button" onClick={() => { setModalAprobar(s); setAprobacionComentarios(''); }} style={{ ...rhMobileBtnPrimary, marginTop: 10, backgroundColor: '#0d9488' }}>
+                      Aprobar / Rechazar
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
@@ -1887,6 +2055,34 @@ export const MiAreaPage = () => {
             <p style={{ color: '#666', padding: '24px', backgroundColor: '#f8f9fa', borderRadius: '8px' }}>
               No hay solicitudes de préstamos para el filtro seleccionado.
             </p>
+          ) : isMobile ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {solicitudesPrestamos.map((s) => {
+                const empleadoNombre = s.empleado ? fmtNombreEmpleado(s.empleado) : (empleadosMap[s.empleado_id] || `#${s.empleado_id}`);
+                const montoNum = Number(s.monto || 0);
+                const estadoLabel: Record<string, string> = {
+                  pendiente: 'Pendiente',
+                  aprobada_departamento: 'Aprobada por área',
+                  depositado: 'Depositada',
+                  finalizado: 'Finalizado',
+                  rechazada: 'Rechazada',
+                };
+                return (
+                  <div key={s.id} style={rhMobileCard}>
+                    <div style={rhMobileCardTitle}>{empleadoNombre}</div>
+                    <div style={rhMobileCardSub}>{s.numero_solicitud || `#${s.id}`}</div>
+                    <div style={rhMobileCardRow}><span>Monto</span><span style={{ fontWeight: 700 }}>${montoNum.toLocaleString('es-MX', { minimumFractionDigits: 2 })}</span></div>
+                    <div style={rhMobileCardRow}><span>Plazo</span><span>{s.plazo_meses} quincenas</span></div>
+                    <div style={rhMobileCardRow}><span>Estado</span><span>{estadoLabel[s.estado] || s.estado}</span></div>
+                    {s.estado === 'pendiente' && (
+                      <button type="button" onClick={() => { setModalAprobarPrestamo(s); setComentariosPrestamo(''); }} style={{ ...rhMobileBtnPrimary, marginTop: 10, backgroundColor: '#0d9488' }}>
+                        Aprobar / Rechazar
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 1px 4px rgba(0,0,0,0.06)' }}>
@@ -2070,6 +2266,18 @@ export const MiAreaPage = () => {
           </div>
         </div>
       )}
+    </>
+  );
+
+  return isMobile ? (
+    <div style={{ padding: '0 0 24px', minHeight: '100%' }}>
+      <div style={rhMobileHero}>
+        <div style={{ color: 'rgba(255,255,255,0.75)', fontSize: '0.78rem', marginBottom: 4 }}>{pageTitle}</div>
+        <div style={{ color: '#fff', fontWeight: 800, fontSize: '1.25rem', lineHeight: 1.2 }}>{activeTabLabel}</div>
+      </div>
+      <div style={rhMobileContentShell}>{pageBody}</div>
     </div>
+  ) : (
+    <div style={{ padding: '24px' }}>{pageBody}</div>
   );
 };

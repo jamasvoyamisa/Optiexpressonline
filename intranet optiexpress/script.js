@@ -1,6 +1,7 @@
 // Avisos: imágenes de la carpeta images/Avisos/
 const avisos = [
-    { imagen: 'images/Avisos/cumpleaños-junio.jpeg', titulo: 'Cumpleaños junio' },
+    { imagen: 'images/Avisos/quiniela.jpeg', titulo: 'Quiniela Mundialista Grupo Cristal', ampliar: true, destacado: true },
+    { imagen: 'images/Avisos/cumpleaños-julio.jpeg', titulo: 'Cumpleaños julio' },
     { imagen: 'images/Avisos/dias-feriados-oficiales.jpg', titulo: 'Días Feriados Oficiales' },
     { imagen: 'images/Avisos/dias-feriados-no-oficiales.jpg', titulo: 'Días Feriados No Oficiales' }
 ];
@@ -44,20 +45,75 @@ function renderizarAvisos() {
     }
     avisos.forEach((item, index) => {
         const slide = document.createElement('div');
-        slide.className = 'carousel-slide carousel-slide--avisos';
+        slide.className = 'carousel-slide carousel-slide--avisos' + (item.destacado ? ' carousel-slide--destacado' : '');
         slide.style.animationDelay = `${index * 0.12}s`;
         const img = document.createElement('img');
         img.src = item.imagen;
         img.alt = item.titulo;
-        img.className = 'promocion-imagen';
+        img.className = 'promocion-imagen' + (item.destacado ? ' promocion-imagen--contain' : '');
         configurarCargaImagen(img, index);
         img.onerror = function() { console.error('Error cargando imagen:', this.src); };
         const wrapper = document.createElement('div');
-        wrapper.className = 'promocion-imagen-wrapper';
+        wrapper.className = 'promocion-imagen-wrapper' + (item.ampliar ? ' promocion-imagen-wrapper--clic' : '');
+        if (item.ampliar) {
+            wrapper.setAttribute('role', 'button');
+            wrapper.setAttribute('tabindex', '0');
+            wrapper.setAttribute('aria-label', `${item.titulo}. Clic para ver en grande`);
+            wrapper.title = 'Clic para ver en grande';
+            const abrir = () => mostrarLightboxImagen(item.imagen, item.titulo);
+            wrapper.addEventListener('click', abrir);
+            wrapper.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    abrir();
+                }
+            });
+        }
         wrapper.appendChild(img);
         slide.appendChild(wrapper);
         carouselWrapper.appendChild(slide);
     });
+}
+
+/** Lightbox: imagen de aviso a pantalla completa (p. ej. quiniela). */
+function mostrarLightboxImagen(src, titulo) {
+    const anterior = document.getElementById('avisoLightboxOverlay');
+    if (anterior) anterior.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'avisoLightboxOverlay';
+    overlay.className = 'aviso-lightbox-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-label', titulo || 'Imagen ampliada');
+    overlay.innerHTML = `
+        <button type="button" class="aviso-lightbox-cerrar" aria-label="Cerrar">✕</button>
+        <figure class="aviso-lightbox-figura">
+            <img src="${src}" alt="${titulo || ''}" class="aviso-lightbox-img" decoding="async">
+        </figure>`;
+
+    document.body.appendChild(overlay);
+    landingPrepararOverlay(overlay);
+
+    const cerrar = () => {
+        overlay.classList.remove('activo');
+        setTimeout(() => {
+            overlay.remove();
+            landingDesbloquearScroll();
+        }, 280);
+    };
+    overlay.querySelector('.aviso-lightbox-cerrar')?.addEventListener('click', cerrar);
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay || e.target.classList.contains('aviso-lightbox-figura')) cerrar();
+    });
+    document.addEventListener('keydown', function onEsc(e) {
+        if (e.key === 'Escape') {
+            document.removeEventListener('keydown', onEsc);
+            cerrar();
+        }
+    });
+
+    requestAnimationFrame(() => overlay.classList.add('activo'));
 }
 
 // Función para renderizar promociones activas (página Promociones Activas)
@@ -178,6 +234,26 @@ function getLandingApiBase() {
     return '';
 }
 const BACKEND_URL = getLandingApiBase();
+
+/** Evita scroll de la landing detrás del popup; restaura posición al cerrar. */
+let _landingScrollY = 0;
+function landingBloquearScroll() {
+    _landingScrollY = window.scrollY || document.documentElement.scrollTop || 0;
+    document.documentElement.classList.add('landing-popup-open');
+    document.body.classList.add('landing-popup-open');
+    document.body.style.top = `-${_landingScrollY}px`;
+}
+function landingDesbloquearScroll() {
+    document.documentElement.classList.remove('landing-popup-open');
+    document.body.classList.remove('landing-popup-open');
+    document.body.style.top = '';
+    window.scrollTo(0, _landingScrollY);
+}
+function landingPrepararOverlay(overlay) {
+    landingBloquearScroll();
+    overlay.scrollTop = 0;
+    window.scrollTo(0, 0);
+}
 
 async function verificarCumpleaneros() {
     const params = new URLSearchParams(window.location.search || '');
@@ -347,8 +423,15 @@ function mostrarPopupCumpleanosPublico(personas) {
     overlay.className = 'cumpleanos-overlay';
     overlay.innerHTML = html;
     document.body.appendChild(overlay);
+    landingPrepararOverlay(overlay);
 
-    const cerrar = () => overlay.classList.remove('activo');
+    const cerrar = () => {
+        overlay.classList.remove('activo');
+        setTimeout(() => {
+            overlay.remove();
+            landingDesbloquearScroll();
+        }, 350);
+    };
     overlay.querySelectorAll('.cp-btn-cerrar, .cp-cerrar').forEach(btn => btn.addEventListener('click', cerrar));
     overlay.addEventListener('click', (e) => { if (e.target === overlay) cerrar(); });
 
@@ -413,10 +496,14 @@ function mostrarPopupJubilacionArcelia() {
     </div>`;
 
     document.body.appendChild(overlay);
+    landingPrepararOverlay(overlay);
 
     const cerrar = () => {
         overlay.classList.remove('activo');
-        setTimeout(() => overlay.remove(), 350);
+        setTimeout(() => {
+            overlay.remove();
+            landingDesbloquearScroll();
+        }, 350);
     };
     overlay.querySelector('.jubi-cerrar')?.addEventListener('click', cerrar);
     overlay.addEventListener('click', (e) => {
@@ -487,6 +574,7 @@ function mostrarPopupDiaMadres2026(opciones) {
     </div>`;
 
     document.body.appendChild(overlay);
+    landingPrepararOverlay(overlay);
 
     let onCerrarLanzado = false;
     const lanzarOnCerrar = () => {
@@ -499,7 +587,10 @@ function mostrarPopupDiaMadres2026(opciones) {
     };
     const cerrar = () => {
         overlay.classList.remove('activo');
-        setTimeout(() => overlay.remove(), 350);
+        setTimeout(() => {
+            overlay.remove();
+            landingDesbloquearScroll();
+        }, 350);
         lanzarOnCerrar();
     };
     overlay.querySelector('.mama-cerrar')?.addEventListener('click', cerrar);

@@ -8,6 +8,12 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+AGENT_VERSION = "1.2.9"
+
+# device-sync puede tardar si el servidor está procesando ráfaga matutina; 10s provocaba 499 y reintentos duplicados
+SYNC_ATTENDANCE_TIMEOUT = 30
+DEFAULT_REQUEST_TIMEOUT = 10
+
 
 class CloudSync:
     """Cliente para enviar datos a la API en la nube"""
@@ -19,7 +25,8 @@ class CloudSync:
         self.base_url = api_url.rsplit("/", 1)[0]  # quitar /device-sync
         self.headers = {
             "X-API-Key": api_key,
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "User-Agent": f"Optiexpress-Agent/{AGENT_VERSION}",
         }
 
     def _post_follow_redirect(self, url: str, *, timeout: int = 10, **kwargs: Any) -> requests.Response:
@@ -60,7 +67,7 @@ class CloudSync:
         }
         
         try:
-            response = self._post_follow_redirect(self.api_url, json=payload, timeout=10)
+            response = self._post_follow_redirect(self.api_url, json=payload, timeout=SYNC_ATTENDANCE_TIMEOUT)
             
             if response.status_code == 201:
                 logger.info(f"OK Checada sincronizada: Usuario={user_id}, Hora={timestamp}")
@@ -305,6 +312,33 @@ class CloudSync:
         except requests.exceptions.RequestException as e:
             logger.error(f"Error al marcar replicate done: {e}")
             return False
+
+    def report_device_users(self, device_users: List[Dict]) -> dict:
+        """
+        Envía al backend la lista de usuarios del reloj (pin + nombre).
+        Retorna el resumen de reconciliación o {} si hay error.
+        """
+        checador_log = logging.getLogger("checador")
+        try:
+            url = f"{self.base_url}/agent/sync-device-users"
+            payload = {"usuarios": device_users}
+            response = self._post_follow_redirect(url, json=payload, timeout=DEFAULT_REQUEST_TIMEOUT)
+            if response.status_code == 200:
+                result = response.json()
+                checador_log.info(
+                    f"[{self.device_id}] Usuarios del reloj reportados: "
+                    f"{result.get('reconocidos', 0)} reconocidos, "
+                    f"{result.get('sin_mapeo', 0)} sin mapeo"
+                )
+                return result
+            checador_log.warning(
+                f"[{self.device_id}] Error al reportar usuarios del reloj: "
+                f"HTTP {response.status_code} - {response.text[:200]}"
+            )
+            return {}
+        except requests.exceptions.RequestException as e:
+            checador_log.error(f"[{self.device_id}] Error de red al reportar usuarios del reloj: {e}")
+            return {}
 
     def get_pending_templates(self) -> list:
         """Obtiene templates pendientes de replicar a este dispositivo"""

@@ -3,7 +3,16 @@ import api from '../../services/api';
 import { toMexicoDateString } from '../../utils/date';
 import { fmtNombreEmpleado } from '../../utils/format';
 import { useAuth } from '../../hooks/useAuth';
+import { useIsMobile } from '../../hooks/useIsMobile';
 import { SolicitudVacaciones } from '../../types';
+import {
+  rhMobileBadge,
+  rhMobileCard,
+  rhMobileCardRow,
+  rhMobileCardSub,
+  rhMobileCardTitle,
+  rhMobileBtnPrimary,
+} from '../rh/rhMobileStyles';
 
 interface EmpleadoResumen {
   id: number;
@@ -347,7 +356,9 @@ const filtroSelectStyle: React.CSSProperties = {
   minHeight: 36,
 };
 
-export const VacacionesPage = () => {
+export const VacacionesPage = ({ embeddedRh = false }: { embeddedRh?: boolean } = {}) => {
+  const isMobile = useIsMobile();
+  const compactRh = embeddedRh && isMobile;
   const { authMe } = useAuth();
   const isSuperuser = authMe?.is_superuser === true;
 
@@ -481,12 +492,12 @@ export const VacacionesPage = () => {
   const hayFiltros = busqueda || filtroEstado || filtroEmpresa || filtroDepartamento || filtroFechaInicio || filtroFechaFin;
 
   if (loading) {
-    return <div style={{ padding: '24px', color: '#666' }}>Cargando solicitudes...</div>;
+    return <div style={{ padding: compactRh ? 0 : isMobile ? '12px' : '24px', color: '#666' }}>Cargando solicitudes...</div>;
   }
 
   return (
-    <div style={{ padding: '24px' }}>
-      <h1 style={{ marginBottom: '20px' }}>Solicitudes de Vacaciones</h1>
+    <div style={{ padding: compactRh ? 0 : isMobile ? '12px' : '24px' }}>
+      {!compactRh && <h1 style={{ marginBottom: '20px', fontSize: isMobile ? '1.2rem' : undefined }}>Solicitudes de Vacaciones</h1>}
 
       {/* ── Barra de búsqueda y filtros ── */}
       <div style={{ backgroundColor: 'white', borderRadius: '10px', border: '1px solid #e5e7eb', padding: '12px 16px', marginBottom: '20px', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
@@ -584,6 +595,43 @@ export const VacacionesPage = () => {
         <p style={{ color: '#666', padding: '24px', backgroundColor: '#f8f9fa', borderRadius: '8px' }}>
           {hayFiltros ? 'No se encontraron solicitudes con los filtros aplicados.' : 'No hay solicitudes de vacaciones registradas.'}
         </p>
+      ) : isMobile ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {solicitudesPagina.map(sol => {
+            const emp = empleadosMap[sol.empleado_id];
+            const esAprobadaJefe = sol.estado === 'aprobada_jefe';
+            const badge = estadoBadgeStyle(sol.estado);
+            return (
+              <div key={sol.id} style={{ ...rhMobileCard, backgroundColor: esAprobadaJefe ? '#f0f9ff' : '#fff' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                  <div>
+                    <div style={rhMobileCardTitle}>{nombreCompleto(emp)}</div>
+                    <div style={rhMobileCardSub}>No. {emp?.numero_empleado ?? sol.empleado_id}</div>
+                  </div>
+                  <span style={rhMobileBadge(String(badge.background), String(badge.color))}>{ESTADO_LABEL[sol.estado] ?? sol.estado}</span>
+                </div>
+                <div style={rhMobileCardRow}>
+                  <span>{new Date(sol.fecha_inicio).toLocaleDateString('es-MX')}</span>
+                  <span>→ {new Date(sol.fecha_fin).toLocaleDateString('es-MX')}</span>
+                </div>
+                <div style={rhMobileCardRow}>
+                  <span>{sol.dias_solicitados} días</span>
+                  <span>{emp?.departamento?.nombre ?? '—'}</span>
+                </div>
+                {esAprobadaJefe && (
+                  <button
+                    type="button"
+                    disabled={confirmandoId === sol.id}
+                    onClick={() => { setModalConfirmar(sol.id); setComentarioRH(''); }}
+                    style={{ ...rhMobileBtnPrimary, marginTop: 10, background: '#059669' }}
+                  >
+                    Confirmar RH
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
       ) : (
         <>
           <div style={{ overflowX: 'auto' }}>

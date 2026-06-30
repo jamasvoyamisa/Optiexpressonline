@@ -48,6 +48,23 @@ export interface AsistenciaResponse {
   departamento_nombre?: string | null;
 }
 
+export interface ResumenAsistenciaEmpleado {
+  empleado_id: number;
+  total_dias_periodo: number;
+  dias_periodo_evaluados: number;
+  periodo_en_curso: boolean;
+  dias_asistio: number;
+  dias_completos: number;
+  faltas: number;
+  faltas_justificadas: number;
+  incompletas?: number;
+  retardos: number;
+  salidas_anticipadas: number;
+  dias_incapacidad: number;
+  dias_vacaciones: number;
+  puntualidad_pct: number;
+}
+
 /** Por día: contexto laboral (incapacidad, vacaciones, festivo, jornada…). Ver GET /asistencia/mis-contexto-dias */
 export interface DiaContextoLaboral {
   fecha: string;

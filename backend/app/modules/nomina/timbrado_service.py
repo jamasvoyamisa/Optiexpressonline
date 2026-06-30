@@ -69,8 +69,20 @@ def timbrar_detalle_empleado(
             "mensaje": "Recibo ya timbrado previamente.",
         }
 
-    empresa = db.query(Empresa).filter(Empresa.id == periodo.empresa_id).first()
-    emp = db.query(Empleado).filter(Empleado.id == empleado_id).first()
+    empresa = (
+        db.query(Empresa)
+        .filter(Empresa.id == periodo.empresa_id)
+        .first()
+    )
+    emp = (
+        db.query(Empleado)
+        .options(
+            joinedload(Empleado.departamento_rel),
+            joinedload(Empleado.puesto_rel),
+        )
+        .filter(Empleado.id == empleado_id)
+        .first()
+    )
     nom = db.query(EmpleadoNomina).filter(EmpleadoNomina.empleado_id == empleado_id).first()
     cfg = (
         db.query(EmpresaNominaConfig)

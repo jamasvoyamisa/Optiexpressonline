@@ -117,8 +117,8 @@ def calcular_periodo_prueba(db: Session, periodo_id: int) -> dict:
     de la empresa del periodo que tengan salario_base en empleado_nomina.
 
     - Solo periodos en estado borrador.
-    - Periodicidad 04 (quincenal): escala por días naturales del periodo vs 15.
-    - Otras periodicidades: aproxima con factor mensual 30.4 y días del periodo.
+    - Periodicidad 04 (quincenal): escala por días pagados vs días base del mes (30.4).
+    - Otras periodicidades: mismo prorrateo mensual × (días pagados / 30.4).
     """
     periodo = db.query(PeriodoNomina).filter(PeriodoNomina.id == periodo_id).first()
     if not periodo:
@@ -128,14 +128,12 @@ def calcular_periodo_prueba(db: Session, periodo_id: int) -> dict:
 
     per = (periodo.periodicidad or "04").strip()
     dias_nat = _dias_natural_periodo(periodo.fecha_inicio, periodo.fecha_fin)
+    dias_base_mes = Decimal("30.4")
     if per == "04":
-        factor_dias_nomina = Decimal("15")
         dias_pagados = min(Decimal(str(dias_nat)), Decimal("15"))
     elif per == "05":
-        factor_dias_nomina = Decimal("30.4")
         dias_pagados = min(Decimal(str(dias_nat)), Decimal("31"))
     else:
-        factor_dias_nomina = Decimal("15")
         dias_pagados = min(Decimal(str(dias_nat)), Decimal("15"))
 
     empleados = (
@@ -161,8 +159,8 @@ def calcular_periodo_prueba(db: Session, periodo_id: int) -> dict:
             continue
 
         salario_mensual = Decimal(str(nom.salario_base))
-        salario_diario_nom = _q2(salario_mensual / Decimal("30.4"))
-        sueldo = _q2(salario_mensual * (dias_pagados / factor_dias_nomina))
+        salario_diario_nom = _q2(salario_mensual / dias_base_mes)
+        sueldo = _q2(salario_mensual * (dias_pagados / dias_base_mes))
 
         percepciones: List[dict] = [
             {

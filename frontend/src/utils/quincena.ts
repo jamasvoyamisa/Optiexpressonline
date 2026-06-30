@@ -67,3 +67,89 @@ export function quincenaMetaForMexicoDay(fechaSort: string): {
   const blockKey = `${year}-${String(month1).padStart(2, '0')}-Q${num}`;
   return { blockKey, label, year, monthIndex, num };
 }
+
+/** Número de quincena en el ejercicio (1–24). Q1 = 1–15 ene, Q2 = 16–31 ene, … Q24 = 16–31 dic. */
+export function numeroQuincenaAnual(_year: number, month1: number, numMes: 1 | 2): number {
+  return (month1 - 1) * 2 + numMes;
+}
+
+export function numeroQuincenaAnualFromFin(fechaFin: string): number {
+  const [y, m, d] = fechaFin.slice(0, 10).split('-').map((x) => parseInt(x, 10));
+  const numMes: 1 | 2 = d <= 15 ? 1 : 2;
+  return numeroQuincenaAnual(y, m, numMes);
+}
+
+export function formatNumeroQuincenaAnual(numero: number): string {
+  return `Quincena ${numero}`;
+}
+
+/** Rango YYYY-MM-DD de la quincena `numero` (1–24) del `ejercicio`. */
+export function rangoQuincenaAnual(ejercicio: number, numero: number): { inicio: string; fin: string } {
+  if (numero < 1 || numero > 24) throw new Error('Quincena fuera de rango');
+  const mes = Math.floor((numero - 1) / 2) + 1;
+  const numMes: 1 | 2 = numero % 2 === 1 ? 1 : 2;
+  const monthIndex = mes - 1;
+  const { inicio, fin } = getQuincenaRango(ejercicio, monthIndex, numMes);
+  return { inicio: inicio.slice(0, 10), fin: fin.slice(0, 10) };
+}
+
+export interface QuincenaEjercicioItem {
+  numero: number;
+  ejercicio: number;
+  mes: number;
+  quincena_mes: number;
+  fecha_inicio: string;
+  fecha_fin: string;
+  etiqueta: string;
+}
+
+export function quincenaEsPasada(fechaFin: string): boolean {
+  const hoy = toMexicoDateString(new Date());
+  return fechaFin.slice(0, 10) < hoy;
+}
+
+export function quincenasDisponiblesEjercicio(ejercicio: number): QuincenaEjercicioItem[] {
+  return listarQuincenasEjercicio(ejercicio).filter((q) => !quincenaEsPasada(q.fecha_fin));
+}
+
+export function listarQuincenasEjercicio(ejercicio: number): QuincenaEjercicioItem[] {
+  const items: QuincenaEjercicioItem[] = [];
+  for (let n = 1; n <= 24; n++) {
+    const mes = Math.floor((n - 1) / 2) + 1;
+    const quincena_mes: 1 | 2 = n % 2 === 1 ? 1 : 2;
+    const { inicio, fin } = rangoQuincenaAnual(ejercicio, n);
+    items.push({
+      numero: n,
+      ejercicio,
+      mes,
+      quincena_mes,
+      fecha_inicio: inicio,
+      fecha_fin: fin,
+      etiqueta: `${formatNumeroQuincenaAnual(n)} — ${formatQuincenaLabel(ejercicio, mes - 1, quincena_mes)}`,
+    });
+  }
+  return items;
+}
+
+/** Etiqueta corta para tablas: Quincena 8, M03/12, etc. */
+export function etiquetaQuincenaPeriodo(periodo: {
+  periodicidad?: string | null;
+  numero_periodo?: number | null;
+  periodo_etiqueta?: string | null;
+  fecha_fin?: string;
+}): string {
+  if (periodo.periodo_etiqueta) {
+    const m = periodo.periodo_etiqueta.match(/^(Quincena \d+|M\d{2}\/12|P\d{2}\/\d+)/);
+    if (m) return m[0];
+  }
+  if (periodo.numero_periodo != null && (periodo.periodicidad ?? '04') === '04') {
+    return formatNumeroQuincenaAnual(periodo.numero_periodo);
+  }
+  if (periodo.fecha_fin && (periodo.periodicidad ?? '04') === '04') {
+    return formatNumeroQuincenaAnual(numeroQuincenaAnualFromFin(periodo.fecha_fin));
+  }
+  if (periodo.numero_periodo != null) {
+    return `#${periodo.numero_periodo}`;
+  }
+  return '—';
+}

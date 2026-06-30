@@ -26,13 +26,35 @@ from .schemas import (
     FiscalApiStatusResponse,
     TimbrarPeriodoResponse,
     TimbrarDetalleResponse,
+    ValidarTimbradoResponse,
+    PreviewPeriodoResponse,
+    AreasNominaResponse,
+    EjerciciosHistorialResponse,
+    CerrarPeriodoResponse,
+    QuincenasEjercicioResponse,
 )
 from .service import NominaService
 from .calculo_prueba import calcular_periodo_prueba
 from .calculo_nomina import calcular_periodo_nomina
-from .export_nomina import generar_csv_periodo
+from .export_nomina import generar_xlsx_periodo
 from .fiscalapi_client import fiscalapi_status_publico
 from .timbrado_service import timbrar_detalle_empleado, timbrar_periodo
+from .validacion_timbrado import validar_periodo_para_timbrado
+from .preview_service import preview_periodo
+from .nomina_areas import listar_areas_periodo
+from .numero_periodo import meta_periodo_nomina
+from .historial_service import (
+    cerrar_periodo_historial,
+    listar_ejercicios,
+    listar_periodos_ejercicio,
+)
+
+def _departamento_query(departamento_id: Optional[int]) -> Optional[int]:
+    """0 = sin área (NULL en BD)."""
+    if departamento_id == 0:
+        return None
+    return departamento_id
+
 
 router = APIRouter(
     prefix=f"{settings.API_V1_PREFIX}/nomina",
@@ -128,16 +150,42 @@ def listar_datos_empleados(
 
 # ── Periodos ───────────────────────────────────────────────────────────────
 
+def _serializar_periodo(p) -> PeriodoNominaResponse:
+    base = PeriodoNominaResponse.model_validate(p)
+    meta = meta_periodo_nomina(p.periodicidad, p.fecha_inicio, p.fecha_fin)
+    return base.model_copy(update=meta)
+
+
+@router.get("/quincenas", response_model=QuincenasEjercicioResponse)
+def catalogo_quincenas(
+    ejercicio: int = Query(..., ge=2000, le=2100),
+    _ctx: dict = Depends(require_superuser),
+):
+    """Catálogo de quincenas 1–24 del ejercicio (fechas de calendario)."""
+    from .numero_periodo import listar_quincenas_ejercicio
+
+    return QuincenasEjercicioResponse(ejercicio=ejercicio, items=listar_quincenas_ejercicio(ejercicio))
+
+
 @router.get("/periodos", response_model=PeriodoNominaListResponse)
 def listar_periodos(
     empresa_id: Optional[int] = None,
+    activos: bool = Query(
+        True,
+        description="Si true, solo borrador y calculada (excluye timbrada y pagada).",
+    ),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
     _ctx: dict = Depends(require_superuser),
     db: Session = Depends(get_db),
 ):
-    items, total = NominaService.listar_periodos(db, empresa_id=empresa_id, skip=skip, limit=limit)
-    return PeriodoNominaListResponse(items=items, total=total)
+    items, total = NominaService.listar_periodos(
+        db, empresa_id=empresa_id, skip=skip, limit=limit, activos=activos
+    )
+    return PeriodoNominaListResponse(
+        items=[_serializar_periodo(p) for p in items],
+        total=total,
+    )
 
 
 @router.post("/periodos", response_model=PeriodoNominaResponse, status_code=status.HTTP_201_CREATED)
@@ -148,7 +196,8 @@ def crear_periodo(
 ):
     data = body.model_dump()
     try:
-        return NominaService.crear_periodo(db, data, creado_por=ctx["user_id"])
+        p = NominaService.crear_periodo(db, data, creado_por=ctx["user_id"])
+        return _serializar_periodo(p)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
@@ -162,7 +211,7 @@ def get_periodo(
     periodo = NominaService.get_periodo(db, periodo_id)
     if not periodo:
         raise HTTPException(status_code=404, detail="Periodo no encontrado.")
-    return periodo
+    return _serializar_periodo(periodo)
 
 
 @router.patch("/periodos/{periodo_id}", response_model=PeriodoNominaResponse)
@@ -176,7 +225,60 @@ def actualizar_periodo(
     periodo = NominaService.actualizar_periodo(db, periodo_id, data)
     if not periodo:
         raise HTTPException(status_code=404, detail="Periodo no encontrado.")
-    return periodo
+    return _serializar_periodo(periodo)
+
+
+@router.post("/periodos/{periodo_id}/cerrar", response_model=CerrarPeriodoResponse)
+def cerrar_periodo_historial_endpoint(
+    periodo_id: int,
+    _ctx: dict = Depends(require_superuser),
+    db: Session = Depends(get_db),
+):
+    """
+    Guarda el periodo en el historial (estado pagada).
+    Consultable después por ejercicio fiscal.
+    """
+    try:
+        return cerrar_periodo_historial(db, periodo_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get("/historial/ejercicios", response_model=EjerciciosHistorialResponse)
+def historial_ejercicios(
+    empresa_id: Optional[int] = None,
+    solo_cerrados: bool = Query(False),
+    _ctx: dict = Depends(require_superuser),
+    db: Session = Depends(get_db),
+):
+    """Lista ejercicios fiscales con totales acumulados de nómina."""
+    items = listar_ejercicios(db, empresa_id=empresa_id, solo_cerrados=solo_cerrados)
+    return EjerciciosHistorialResponse(items=items)
+
+
+@router.get("/historial/periodos", response_model=PeriodoNominaListResponse)
+def historial_periodos(
+    ejercicio: int = Query(..., ge=2000, le=2100),
+    empresa_id: Optional[int] = None,
+    solo_cerrados: bool = Query(False),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=200),
+    _ctx: dict = Depends(require_superuser),
+    db: Session = Depends(get_db),
+):
+    """Periodos de un ejercicio fiscal (consulta de historial)."""
+    items, total = listar_periodos_ejercicio(
+        db,
+        ejercicio=ejercicio,
+        empresa_id=empresa_id,
+        solo_cerrados=solo_cerrados,
+        skip=skip,
+        limit=limit,
+    )
+    return PeriodoNominaListResponse(
+        items=[PeriodoNominaResponse.model_validate(i) for i in items],
+        total=total,
+    )
 
 
 @router.get("/fiscalapi/status", response_model=FiscalApiStatusResponse)
@@ -188,6 +290,57 @@ def fiscalapi_status(
     No expone credenciales. Requiere NOMINA_FISCALAPI_ENABLED + API key en .env.
     """
     return fiscalapi_status_publico()
+
+
+@router.get("/periodos/{periodo_id}/areas-nomina", response_model=AreasNominaResponse)
+def areas_nomina_periodo(
+    periodo_id: int,
+    _ctx: dict = Depends(require_superuser),
+    db: Session = Depends(get_db),
+):
+    """Áreas (departamentos) con recibos calculados en el periodo."""
+    try:
+        items = listar_areas_periodo(db, periodo_id)
+        if not items:
+            raise ValueError("No hay recibos calculados en este periodo.")
+        return AreasNominaResponse(periodo_id=periodo_id, items=items)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get("/periodos/{periodo_id}/preview", response_model=PreviewPeriodoResponse)
+def preview_periodo_nomina(
+    periodo_id: int,
+    departamento_id: Optional[int] = Query(None, description="Área/departamento a previsualizar."),
+    _ctx: dict = Depends(require_superuser),
+    db: Session = Depends(get_db),
+):
+    """
+    Previsualiza recibos calculados del área indicada y el resumen CFDI.
+    No llama a FiscalAPI ni cambia el periodo.
+    """
+    try:
+        return preview_periodo(
+            db, periodo_id, departamento_id=_departamento_query(departamento_id)
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.get("/periodos/{periodo_id}/validar-timbrado", response_model=ValidarTimbradoResponse)
+def validar_timbrado_periodo(
+    periodo_id: int,
+    _ctx: dict = Depends(require_superuser),
+    db: Session = Depends(get_db),
+):
+    """
+    Revisa datos fiscales de empresa y empleados antes de timbrar.
+    No llama a FiscalAPI; útil para corregir RFC, CP, salarios, etc.
+    """
+    try:
+        return validar_periodo_para_timbrado(db, periodo_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @router.post("/periodos/{periodo_id}/timbrar-prueba", response_model=TimbrarPeriodoResponse)
@@ -240,19 +393,19 @@ def calcular_periodo_endpoint(
 
 
 @router.get("/periodos/{periodo_id}/export")
-def exportar_periodo_csv(
+def exportar_periodo_xlsx(
     periodo_id: int,
     _ctx: dict = Depends(require_superuser),
     db: Session = Depends(get_db),
 ):
-    """Exporta detalle del periodo en CSV."""
+    """Exporta todos los recibos del periodo en Excel (.xlsx), una hoja por área."""
     try:
-        filename, content = generar_csv_periodo(db, periodo_id)
+        filename, content = generar_xlsx_periodo(db, periodo_id)
     except ValueError as e:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     return Response(
-        content=content.encode("utf-8-sig"),
-        media_type="text/csv; charset=utf-8",
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 

@@ -1,31 +1,36 @@
-# Agente de sincronización ZKTeco
+# Agente Optiexpress — ZKTeco
 
-El agente local está organizado en carpetas por plataforma. **Usa la carpeta correspondiente a tu sistema operativo.**
+Un solo agente para todas las plataformas: **[agent-local/](agent-local/)**
 
-| Carpeta | Plataforma | Uso |
-|---------|------------|-----|
-| [agent-windows](agent-windows/) | Windows | `install.bat` y `run.bat` (o `run_gui.bat` para interfaz gráfica) |
-| [agent-local](agent-local/) | Linux, Mac | `./install.sh` y `./run.sh` |
-| [agent-linux](agent-linux/) | Linux, Ubuntu Server | `./install.sh` y `./run.sh` |
-| [agent-mac](agent-mac/) | macOS | `./install.sh` y `./run.sh` |
+| Plataforma | Cómo se ejecuta |
+|------------|-----------------|
+| **Windows (sucursales)** | `OptiexpressAgent.exe` — bandeja del sistema + instalador Setup |
+| **Linux / Ubuntu Server** | `python main.py` o servicio systemd |
+| **macOS** | `./run.sh` o `./run_gui.sh` |
 
-> **Nota:** `agent-windows` incluye las correcciones de `pin_checador` (rango por empresa). Todos los agentes usan un solo backend y varios dispositivos.
+Documentación detallada:
 
-## Contenido de cada carpeta
+- [agent-local/README.md](agent-local/README.md) — instalación y uso
+- [agent-local/BUILD_TRAY.md](agent-local/BUILD_TRAY.md) — compilar exe e instalador Windows
+- [docs/AGENTE-CHECADOR.md](docs/AGENTE-CHECADOR.md) — lógica de sync y reglas del backend
 
-Cada carpeta incluye solo los archivos necesarios para esa plataforma:
+## Inicio rápido
 
-- **Archivos comunes**: `main.py`, `cloud_sync.py`, `local_buffer.py`, `zkteco_client.py`, `agent_gui.py`, `requirements.txt`, `config.yaml.example`
-- **Linux**: scripts `.sh`, servicio systemd, guía Ubuntu Server
-- **agent-windows**: Windows, scripts `.bat`, interfaz gráfica, inicio automático
-- **agent-local**: Linux/Mac, scripts `.sh`
-- **Mac**: scripts `.sh`
+### Windows (sucursales)
 
-## Configuración
+1. Ejecutar `OptiexpressAgent-Setup-X.Y.Z.exe` (generado con `build_installer.bat`)
+2. Configurar desde bandeja → **Abrir Configuración** (contraseña por defecto: `Optiexpress`)
+3. El agente arranca solo si existe `config.yaml`
 
-1. Copia la carpeta de tu plataforma al equipo donde correrá el agente
-2. Ejecuta el instalador (`install.sh` o `install.bat`)
-3. Edita `config.yaml` con la IP del dispositivo y la API Key (obtener desde la web del sistema)
-4. Ejecuta el agente (`run.sh` o `run.bat`)
+### Linux / Mac (desarrollo o servidor)
 
-Ver el README dentro de cada carpeta para instrucciones detalladas.
+```bash
+cd agent-local
+./install.sh
+cp config.yaml.example config.yaml
+# editar config.yaml
+./run.sh          # consola
+./run_tray.bat    # solo Windows
+```
+
+Para Ubuntu Server con systemd: ver [agent-local/UBUNTU_SERVER.md](agent-local/UBUNTU_SERVER.md).

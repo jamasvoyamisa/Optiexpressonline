@@ -46,7 +46,7 @@ IMSS_OBRERO_2025: Dict[str, Decimal] = {
 EJERCICIOS_DEFAULT: Dict[int, Dict[str, Any]] = {
     2025: {
         "uma_diaria": Decimal("108.57"),
-        "dias_base_mes": Decimal("30.4"),
+        "dias_base_mes": Decimal("30"),
         "tope_uma_sbc": 25,
         "isr_quincenal": ISR_QUINCENAL_2025,
         "subsidio_quincenal": SUBSIDIO_QUINCENAL_2025,
@@ -54,7 +54,7 @@ EJERCICIOS_DEFAULT: Dict[int, Dict[str, Any]] = {
     },
     2026: {
         "uma_diaria": Decimal("113.14"),
-        "dias_base_mes": Decimal("30.4"),
+        "dias_base_mes": Decimal("30"),
         "tope_uma_sbc": 25,
         "isr_quincenal": ISR_QUINCENAL_2025,  # actualizar cuando SAT publique 2026
         "subsidio_quincenal": SUBSIDIO_QUINCENAL_2025,

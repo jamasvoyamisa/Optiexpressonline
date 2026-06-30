@@ -32,12 +32,18 @@ if not exist "icon.ico" (
 
 echo [*] Compilando OptiexpressAgent.exe ...
 pyinstaller --onefile --windowed ^
+    --runtime-hook runtime_hook.py ^
     --name "OptiexpressAgent" ^
     --icon "icon.ico" ^
     --hidden-import main ^
     --hidden-import cloud_sync ^
     --hidden-import zkteco_client ^
     --hidden-import local_buffer ^
+    --hidden-import single_instance ^
+    --hidden-import config_guard ^
+    --hidden-import agent_gui ^
+    --hidden-import log_setup ^
+    --hidden-import win_utils ^
     --hidden-import zk ^
     --hidden-import zk.base ^
     --hidden-import zk.finger ^
@@ -65,6 +71,9 @@ echo [*] Preparando carpeta de distribucion...
 if not exist "dist" mkdir dist
 copy /y config.yaml.example "dist\config.yaml.example" >nul 2>&1
 copy /y agent_gui.py "dist\agent_gui.py" >nul 2>&1
+copy /y config_guard.py "dist\config_guard.py" >nul 2>&1
+copy /y log_setup.py "dist\log_setup.py" >nul 2>&1
+copy /y win_utils.py "dist\win_utils.py" >nul 2>&1
 
 :: Limpiar archivos temporales de build
 echo [*] Limpiando archivos temporales...
@@ -88,4 +97,6 @@ echo   3. Edita config.yaml con los datos del dispositivo
 echo   4. Ejecuta OptiexpressAgent.exe
 echo   5. Clic derecho en el icono de la bandeja ^> "Iniciar con Windows"
 echo.
-pause
+echo Para generar el INSTALADOR (.exe Setup): build_installer.bat
+echo.
+if /I not "%~1"=="NOPAUSE" pause

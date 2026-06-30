@@ -131,6 +131,12 @@ class PeriodoNominaResponse(BaseModel):
     tipo: str
     periodicidad: Optional[str] = None
     estado: str
+    ejercicio_fiscal: Optional[int] = None
+    numero_periodo: Optional[int] = None
+    total_periodos_ejercicio: Optional[int] = None
+    periodo_etiqueta: Optional[str] = None
+    mes: Optional[int] = None
+    quincena_mes: Optional[int] = None
     total_percepciones: Optional[Decimal] = None
     total_deducciones: Optional[Decimal] = None
     total_neto: Optional[Decimal] = None
@@ -145,6 +151,43 @@ class PeriodoNominaResponse(BaseModel):
         if isinstance(v, py_enum.Enum):
             return v.value
         return v
+
+
+class EjercicioHistorialItem(BaseModel):
+    ejercicio: int
+    total_periodos: int
+    periodos_pagados: int
+    periodos_timbrados: int
+    total_neto: float
+    total_percepciones: float
+    total_deducciones: float
+
+
+class EjerciciosHistorialResponse(BaseModel):
+    items: List[EjercicioHistorialItem]
+
+
+class CerrarPeriodoResponse(BaseModel):
+    periodo_id: int
+    estado: str
+    ejercicio_fiscal: int
+    ya_cerrado: bool = False
+    mensaje: str
+
+
+class QuincenaEjercicioItem(BaseModel):
+    numero: int
+    ejercicio: int
+    mes: int
+    quincena_mes: int
+    fecha_inicio: str
+    fecha_fin: str
+    etiqueta: str
+
+
+class QuincenasEjercicioResponse(BaseModel):
+    ejercicio: int
+    items: List[QuincenaEjercicioItem]
 
 
 class PeriodoNominaListResponse(BaseModel):
@@ -237,6 +280,55 @@ class TimbrarPeriodoResponse(BaseModel):
     exitos: List[dict]
     fallos: List[dict]
     sandbox: bool = True
+
+
+class ValidarTimbradoEmpleadoItem(BaseModel):
+    empleado_id: int
+    nombre: str
+    listo: bool
+    ya_timbrado: bool
+    cfdi_uuid: Optional[str] = None
+    cfdi_error: Optional[str] = None
+    errores: List[str] = []
+
+
+class ValidarTimbradoResponse(BaseModel):
+    periodo_id: int
+    empresa_id: int
+    estado_periodo: str
+    fiscalapi: FiscalApiStatusResponse
+    errores_empresa: List[str]
+    resumen: dict
+    puede_timbrar: bool
+    empleados: List[ValidarTimbradoEmpleadoItem]
+
+
+class PreviewPeriodoResponse(BaseModel):
+    periodo_id: int
+    empresa_id: int
+    empresa_nombre: Optional[str] = None
+    departamento_id: Optional[int] = None
+    departamento_nombre: Optional[str] = None
+    areas_disponibles: List[dict] = []
+    fecha_inicio: str
+    fecha_fin: str
+    tipo: str
+    periodicidad: Optional[str] = None
+    estado: str
+    totales: dict
+    resumen: dict
+    empleados: List[dict]
+
+
+class AreaNominaItem(BaseModel):
+    departamento_id: Optional[int] = None
+    departamento_nombre: str
+    empleados: int
+
+
+class AreasNominaResponse(BaseModel):
+    periodo_id: int
+    items: List[AreaNominaItem]
 
 
 class CatalogosResponse(BaseModel):

@@ -6,6 +6,20 @@ import { ActividadLogResponse, ActividadPurgeRequest, DepartamentoResponse, Disp
 import { VacacionesGeneralesPage } from '../vacaciones/VacacionesGeneralesPage';
 import { ChecadasEspecialesPage } from './ChecadasEspecialesPage';
 import { isNominaEnabled } from '../../config/features';
+import { useIsMobile } from '../../hooks/useIsMobile';
+import {
+  rhMobileBadge,
+  rhMobileBtnPrimary,
+  rhMobileBtnSecondary,
+  rhMobileCard,
+  rhMobileCardRow,
+  rhMobileCardSub,
+  rhMobileCardTitle,
+  rhMobileContentShell,
+  rhMobileHero,
+  rhMobileTabPill,
+  rhMobileTabScroll,
+} from '../rh/rhMobileStyles';
 const toLocalDate = (iso: string) =>
   new Date(iso.endsWith('Z') || iso.includes('+') ? iso : iso + 'Z');
 
@@ -44,6 +58,22 @@ const fmtDate = (iso: string) =>
 
 type ConfigTab = 'dispositivos' | 'empresas' | 'horarios' | 'eventos_especiales' | 'usuarios_especiales' | 'soporte' | 'actividad';
 type EventosEspecialesTab = 'festivos' | 'vacaciones_generales' | 'checadas_especiales';
+
+const CONFIG_TABS: { key: ConfigTab; label: string; short: string; superOnly?: boolean }[] = [
+  { key: 'dispositivos', label: 'Dispositivos', short: 'Disp.' },
+  { key: 'empresas', label: 'Empresas', short: 'Empresas' },
+  { key: 'horarios', label: 'Horarios', short: 'Horarios' },
+  { key: 'eventos_especiales', label: 'Eventos especiales', short: 'Eventos', superOnly: true },
+  { key: 'usuarios_especiales', label: 'Usuarios especiales', short: 'Usuarios' },
+  { key: 'soporte', label: 'Soporte', short: 'Soporte', superOnly: true },
+  { key: 'actividad', label: 'Actividad', short: 'Actividad', superOnly: true },
+];
+
+const EVENTOS_TABS: { key: EventosEspecialesTab; label: string; short: string }[] = [
+  { key: 'festivos', label: 'Días festivos', short: 'Festivos' },
+  { key: 'vacaciones_generales', label: 'Vacaciones generales', short: 'Vac. gen.' },
+  { key: 'checadas_especiales', label: 'Checadas especiales', short: 'Checadas' },
+];
 
 function configTabSubtitle(tab: ConfigTab): string {
   switch (tab) {
@@ -159,6 +189,7 @@ type EmpresaFormState = {
   trabaja_festivos: boolean;
   // Nómina / timbrado
   registro_patronal: string;
+  codigo_postal_expedicion: string;
   periodicidad_nomina: string;
 };
 
@@ -179,6 +210,7 @@ const emptyEmpresaForm = (): EmpresaFormState => ({
   dias_laborales: 'lun-sab',
   trabaja_festivos: false,
   registro_patronal: '',
+  codigo_postal_expedicion: '',
   periodicidad_nomina: '04',
 });
 
@@ -200,6 +232,16 @@ const labelStyle: React.CSSProperties = { display: 'block', marginBottom: '4px',
 const inputStyle: React.CSSProperties = { width: '100%', height: '38px', padding: '0 12px', border: '1px solid #d1d5db', borderRadius: '6px', fontSize: '0.9rem', boxSizing: 'border-box' };
 const btnSuccess: React.CSSProperties = { padding: '9px 20px', backgroundColor: '#28a745', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', whiteSpace: 'nowrap' };
 const btnSecondary: React.CSSProperties = { padding: '9px 20px', backgroundColor: '#6c757d', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', whiteSpace: 'nowrap' };
+/** Categorías visibles en Configuración → Actividad (filtros y limpieza). */
+const ACTIVIDAD_CATEGORIAS = ['auth', 'negocio', 'sistema', 'checador', 'asistencia'] as const;
+const ACTIVIDAD_CATEGORIA_ICON: Record<string, string> = {
+  auth: '🔐',
+  negocio: '💼',
+  sistema: '⚙️',
+  checador: '🕐',
+  asistencia: '📋',
+  request: '🌐',
+};
 /** Fila de herramientas: etiqueta + select + botón en la misma línea (actividad / limpieza). */
 const actividadToolbarRow: React.CSSProperties = {
   display: 'flex',
@@ -230,6 +272,7 @@ const actividadSelectInline: React.CSSProperties = {
 
 export const ConfiguracionPage = () => {
   const { authMe } = useAuth();
+  const isMobile = useIsMobile();
   const isSuperuser = authMe?.is_superuser === true;
 
   const [configTab, setConfigTab] = useState<ConfigTab>('dispositivos');
@@ -306,6 +349,24 @@ export const ConfiguracionPage = () => {
   const [limpiezaAntiguosSoloCat, setLimpiezaAntiguosSoloCat] = useState('');
   const [showActividadVaciarModal, setShowActividadVaciarModal] = useState(false);
   const [vaciarConfirmInput, setVaciarConfirmInput] = useState('');
+
+  // ── Métricas (dentro de Actividad) ───────────────────────────────────────────
+  interface MetricasData {
+    dias: number;
+    total: number;
+    por_nivel: Record<string, number>;
+    por_categoria: Record<string, number>;
+    eventos_por_dia: { dia: string; error: number; warning: number; info: number }[];
+    logins_por_dia: { dia: string; n: number }[];
+    top_errores: { ruta: string; n: number }[];
+    top_empleados: { empleado_id: number; nombre: string; numero: string; n: number }[];
+  }
+  const [actividadVista, setActividadVista] = useState<'logs' | 'metricas'>('logs');
+  const [metricasData, setMetricasData] = useState<MetricasData | null>(null);
+  const [loadingMetricas, setLoadingMetricas] = useState(false);
+  const [metricasDias, setMetricasDias] = useState(30);
+  const [metricasFiltroNivel, setMetricasFiltroNivel] = useState('');
+  const [metricasFiltroCategoria, setMetricasFiltroCategoria] = useState('');
 
   const loadActividad = useCallback(async () => {
     setLoadingActividad(true);
@@ -416,6 +477,18 @@ export const ConfiguracionPage = () => {
     if (configTab !== 'actividad' || !isSuperuser) return;
     void loadActividad();
   }, [configTab, isSuperuser, loadActividad]);
+
+  useEffect(() => {
+    if (configTab !== 'actividad' || actividadVista !== 'metricas' || !isSuperuser) return;
+    setLoadingMetricas(true);
+    const params: Record<string, string | number> = { dias: metricasDias };
+    if (metricasFiltroNivel) params.nivel = metricasFiltroNivel;
+    if (metricasFiltroCategoria) params.categoria = metricasFiltroCategoria;
+    api.get('/audit/metricas', { params })
+      .then(res => setMetricasData(res.data))
+      .catch(() => setMetricasData(null))
+      .finally(() => setLoadingMetricas(false));
+  }, [configTab, isSuperuser, actividadVista, metricasDias, metricasFiltroNivel, metricasFiltroCategoria]);
 
   const toggleExentoIncidencias = async (emp: EmpleadoResponse, valor: boolean) => {
     setTogglingEspecial(emp.id);
@@ -1003,6 +1076,7 @@ export const ConfiguracionPage = () => {
       dias_laborales: emp.dias_laborales === 'lun-dom' ? 'lun-dom' : 'lun-sab',
       trabaja_festivos: !!emp.trabaja_festivos,
       registro_patronal: '',
+      codigo_postal_expedicion: '',
       periodicidad_nomina: '04',
     };
     setEmpresaForm(base);
@@ -1013,6 +1087,7 @@ export const ConfiguracionPage = () => {
           setEmpresaForm(prev => ({
             ...prev,
             registro_patronal: r.data.registro_patronal || '',
+            codigo_postal_expedicion: r.data.codigo_postal_expedicion || '',
             periodicidad_nomina: r.data.periodicidad_defecto || '04',
           }));
         })
@@ -1079,6 +1154,9 @@ export const ConfiguracionPage = () => {
         try {
           const nominaPayload: Record<string, string> = {};
           if (empresaForm.registro_patronal.trim()) nominaPayload.registro_patronal = empresaForm.registro_patronal.trim();
+          if (empresaForm.codigo_postal_expedicion.trim()) {
+            nominaPayload.codigo_postal_expedicion = empresaForm.codigo_postal_expedicion.trim();
+          }
           if (empresaForm.periodicidad_nomina) nominaPayload.periodicidad_defecto = empresaForm.periodicidad_nomina;
           await api.put(`/nomina/empresas/${savedEmpresaId}/config`, nominaPayload);
         } catch { /* si falla config nómina no bloqueamos */ } finally {
@@ -1108,90 +1186,124 @@ export const ConfiguracionPage = () => {
     }
   };
 
-  if (loading) return <div style={{ padding: '20px' }}>Cargando...</div>;
+  if (loading) return <div style={{ padding: isMobile ? '14px' : '20px' }}>Cargando...</div>;
 
-  return (
-    <div style={{ padding: '20px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
-        <div>
-          <h1 style={{ margin: 0 }}>Configuracion</h1>
-          <p style={{ margin: '4px 0 0', color: '#888', fontSize: '0.9rem' }}>
-            {configTabSubtitle(configTab)}
-          </p>
-        </div>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          {configTab === 'dispositivos' && (
-            <button
-              onClick={() => setShowDeviceForm(!showDeviceForm)}
-              style={{ padding: '9px 20px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', whiteSpace: 'nowrap' }}
-            >
-              {showDeviceForm ? 'Cancelar' : '+ Registrar Dispositivo'}
-            </button>
-          )}
-          {configTab === 'empresas' && (
-            <button onClick={openNewEmpresa} style={btnSuccess}>+ Nueva Empresa</button>
-          )}
-          {configTab === 'horarios' && (
-            <button onClick={openNewHorario} style={btnSuccess}>+ Nuevo Horario</button>
-          )}
-          {configTab === 'eventos_especiales' && eventosEspecialesTab === 'festivos' && (
-            <button onClick={() => setShowFestivoModal(true)} style={btnSuccess}>+ Agregar Festivo</button>
-          )}
-          {configTab === 'usuarios_especiales' && (
-            <button onClick={openCrearUsuarioEspecial} style={btnSuccess}>+ Agregar usuario especial</button>
-          )}
-          {configTab === 'soporte' && isSuperuser && (
-            <>
-              <button onClick={openNewClaseSoporte} style={{ ...btnSuccess, background: '#7c3aed' }}>+ Nueva categoría</button>
-              <button onClick={openNewTipoSoporte} style={btnSuccess}>+ Nuevo tipo de ticket</button>
-            </>
-          )}
-          <button
-            onClick={() => {
-              if (configTab === 'actividad' && isSuperuser) {
-                void loadActividad();
-                return;
-              }
-              if (configTab === 'eventos_especiales' && eventosEspecialesTab === 'festivos' && isSuperuser) {
-                void loadFestivos();
-                return;
-              }
-              setLoading(true);
-              loadData();
-            }}
-            disabled={loading || (configTab === 'actividad' && (loadingActividad || purgingActividad))}
-            style={{ padding: '8px 18px', backgroundColor: '#6b7280', color: 'white', border: 'none', borderRadius: '5px', cursor: loading || (configTab === 'actividad' && (loadingActividad || purgingActividad)) ? 'not-allowed' : 'pointer', opacity: loading || (configTab === 'actividad' && (loadingActividad || purgingActividad)) ? 0.6 : 1 }}
-          >
-            Actualizar
-          </button>
-        </div>
-      </div>
+  const visibleTabs = CONFIG_TABS.filter(t => !t.superOnly || isSuperuser);
+  const headerActions = (
+    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', ...(isMobile ? { width: '100%' } : {}) }}>
+      {configTab === 'dispositivos' && (
+        <button
+          type="button"
+          onClick={() => setShowDeviceForm(!showDeviceForm)}
+          style={isMobile
+            ? { ...rhMobileBtnPrimary, backgroundColor: '#0ea5e9', flex: 1, minWidth: 0 }
+            : { padding: '9px 20px', backgroundColor: '#0ea5e9', color: 'white', border: 'none', borderRadius: '7px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', whiteSpace: 'nowrap' }}
+        >
+          {showDeviceForm ? 'Cancelar' : '+ Registrar Dispositivo'}
+        </button>
+      )}
+      {configTab === 'empresas' && (
+        <button type="button" onClick={openNewEmpresa} style={isMobile ? { ...rhMobileBtnPrimary, flex: 1 } : btnSuccess}>+ Nueva Empresa</button>
+      )}
+      {configTab === 'horarios' && (
+        <button type="button" onClick={openNewHorario} style={isMobile ? { ...rhMobileBtnPrimary, flex: 1 } : btnSuccess}>+ Nuevo Horario</button>
+      )}
+      {configTab === 'eventos_especiales' && eventosEspecialesTab === 'festivos' && (
+        <button type="button" onClick={() => setShowFestivoModal(true)} style={isMobile ? { ...rhMobileBtnPrimary, flex: 1 } : btnSuccess}>+ Agregar Festivo</button>
+      )}
+      {configTab === 'usuarios_especiales' && (
+        <button type="button" onClick={openCrearUsuarioEspecial} style={isMobile ? { ...rhMobileBtnPrimary, flex: 1 } : btnSuccess}>+ Agregar usuario especial</button>
+      )}
+      {configTab === 'soporte' && isSuperuser && (
+        <>
+          <button type="button" onClick={openNewClaseSoporte} style={isMobile ? { ...rhMobileBtnPrimary, backgroundColor: '#7c3aed', flex: 1 } : { ...btnSuccess, background: '#7c3aed' }}>+ Categoría</button>
+          <button type="button" onClick={openNewTipoSoporte} style={isMobile ? { ...rhMobileBtnPrimary, flex: 1 } : btnSuccess}>+ Tipo ticket</button>
+        </>
+      )}
+      <button
+        type="button"
+        onClick={() => {
+          if (configTab === 'actividad' && isSuperuser) {
+            void loadActividad();
+            return;
+          }
+          if (configTab === 'eventos_especiales' && eventosEspecialesTab === 'festivos' && isSuperuser) {
+            void loadFestivos();
+            return;
+          }
+          setLoading(true);
+          loadData();
+        }}
+        disabled={loading || (configTab === 'actividad' && (loadingActividad || purgingActividad))}
+        style={isMobile
+          ? { ...rhMobileBtnSecondary, minHeight: 44, flex: configTab === 'soporte' ? '1 1 100%' : 1, opacity: loading || (configTab === 'actividad' && (loadingActividad || purgingActividad)) ? 0.6 : 1 }
+          : { padding: '8px 18px', backgroundColor: '#6b7280', color: 'white', border: 'none', borderRadius: '5px', cursor: loading || (configTab === 'actividad' && (loadingActividad || purgingActividad)) ? 'not-allowed' : 'pointer', opacity: loading || (configTab === 'actividad' && (loadingActividad || purgingActividad)) ? 0.6 : 1 }}
+      >
+        Actualizar
+      </button>
+    </div>
+  );
 
-      {/* Tabs */}
-      <div style={{ display: 'flex', borderBottom: '2px solid #e5e7eb', marginBottom: '20px' }}>
-        <button style={tabStyle(configTab === 'dispositivos')} onClick={() => setConfigTab('dispositivos')}>Dispositivos</button>
-        <button style={tabStyle(configTab === 'empresas')} onClick={() => setConfigTab('empresas')}>Empresas</button>
-        <button style={tabStyle(configTab === 'horarios')} onClick={() => setConfigTab('horarios')}>Horarios</button>
-        {isSuperuser && (
-          <button
-            style={tabStyle(configTab === 'eventos_especiales')}
-            onClick={() => {
-              setConfigTab('eventos_especiales');
+  const mainTabBar = isMobile ? (
+    <div style={rhMobileTabScroll}>
+      {visibleTabs.map(t => (
+        <button
+          key={t.key}
+          type="button"
+          style={rhMobileTabPill(configTab === t.key)}
+          onClick={() => {
+            setConfigTab(t.key);
+            if (t.key === 'eventos_especiales') {
               setEventosEspecialesTab('festivos');
               void loadFestivos();
-            }}
-          >
-            Eventos especiales
-          </button>
-        )}
-        <button style={tabStyle(configTab === 'usuarios_especiales')} onClick={() => setConfigTab('usuarios_especiales')}>Usuarios especiales</button>
-        {isSuperuser && (
-          <button style={tabStyle(configTab === 'soporte')} onClick={() => setConfigTab('soporte')}>Soporte</button>
-        )}
-        {isSuperuser && (
-          <button style={tabStyle(configTab === 'actividad')} onClick={() => setConfigTab('actividad')}>Actividad</button>
-        )}
-      </div>
+            }
+          }}
+        >
+          {t.short}
+        </button>
+      ))}
+    </div>
+  ) : (
+    <div style={{ display: 'flex', borderBottom: '2px solid #e5e7eb', marginBottom: '20px', overflowX: 'auto' }}>
+      {visibleTabs.map(t => (
+        <button
+          key={t.key}
+          style={tabStyle(configTab === t.key)}
+          onClick={() => {
+            setConfigTab(t.key);
+            if (t.key === 'eventos_especiales') {
+              setEventosEspecialesTab('festivos');
+              void loadFestivos();
+            }
+          }}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+
+  const pageBody = (
+    <>
+      {!isMobile && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap', gap: '10px' }}>
+          <div>
+            <h1 style={{ margin: 0 }}>Configuracion</h1>
+            <p style={{ margin: '4px 0 0', color: '#888', fontSize: '0.9rem' }}>
+              {configTabSubtitle(configTab)}
+            </p>
+          </div>
+          {headerActions}
+        </div>
+      )}
+
+      {isMobile && (
+        <div style={{ marginBottom: 12 }}>
+          {headerActions}
+        </div>
+      )}
+
+      {mainTabBar}
 
       {/* ====== TAB: DISPOSITIVOS ====== */}
       {configTab === 'dispositivos' && (
@@ -1309,7 +1421,7 @@ export const ConfiguracionPage = () => {
       )}
 
       {/* Resumen */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '16px', marginBottom: '24px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr 1fr' : 'repeat(auto-fit, minmax(160px, 1fr))', gap: isMobile ? 8 : '16px', marginBottom: '24px' }}>
         <div style={{ padding: '16px', backgroundColor: 'white', borderRadius: '8px', border: '1px solid #e5e7eb' }}>
           <div style={{ color: '#888', fontSize: '0.85rem', marginBottom: '4px' }}>Total</div>
           <div style={{ fontSize: '1.6rem', fontWeight: 'bold', color: '#333' }}>{dispositivos.length}</div>
@@ -1328,7 +1440,7 @@ export const ConfiguracionPage = () => {
       {dispositivos.length === 0 ? (
         <p style={{ color: '#666', textAlign: 'center', padding: '40px 0' }}>No hay dispositivos. Registra uno para comenzar.</p>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))', gap: '16px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fill, minmax(360px, 1fr))', gap: '16px' }}>
           {dispositivos.map((device) => (
             <div key={device.id} style={{ padding: '18px', border: '1px solid #e5e7eb', borderRadius: '8px', backgroundColor: 'white' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
@@ -1420,6 +1532,31 @@ export const ConfiguracionPage = () => {
           </div>
           {empresas.length === 0 ? (
             <p style={{ textAlign: 'center', color: '#888', padding: '40px 0' }}>No hay empresas registradas.</p>
+          ) : isMobile ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {empresas.map(emp => {
+                const count = empleados.filter(e => e.empresa_id === emp.id).length;
+                return (
+                  <div key={emp.id} style={rhMobileCard}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                      <div style={rhMobileCardTitle}>{emp.nombre}</div>
+                      <span style={rhMobileBadge(emp.activo ? '#d4edda' : '#f8d7da', emp.activo ? '#155724' : '#721c24')}>
+                        {emp.activo ? 'Activa' : 'Inactiva'}
+                      </span>
+                    </div>
+                    <div style={rhMobileCardSub}>{emp.rfc || 'Sin RFC'}</div>
+                    <div style={rhMobileCardRow}><span>Empleados</span><span style={{ fontWeight: 700 }}>{count}</span></div>
+                    <div style={rhMobileCardRow}><span>Jornada</span><span>{emp.dias_laborales === 'lun-dom' ? 'Lun-Dom' : 'Lun-Sáb'}</span></div>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                      <button type="button" onClick={() => startEditEmpresa(emp)} style={{ ...rhMobileBtnSecondary, flex: 1 }}>Editar</button>
+                      <button type="button" onClick={() => toggleEmpresaActivo(emp)} style={{ ...rhMobileBtnSecondary, flex: 1, color: emp.activo ? '#b91c1c' : '#15803d' }}>
+                        {emp.activo ? 'Desactivar' : 'Activar'}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '10px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
@@ -1477,6 +1614,35 @@ export const ConfiguracionPage = () => {
           {horarios.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '40px', color: '#888' }}>
               <p>No hay horarios registrados. Crea el primero.</p>
+            </div>
+          ) : isMobile ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {horarios.map(h => {
+                const dias = h.dias_semana ? h.dias_semana.split(',').map(Number).filter(d => d !== 6) : [];
+                const diasLabel = dias.map(d => DIAS[d - 1] || '').filter(Boolean).join(', ') || 'L-V';
+                return (
+                  <div key={h.id} style={rhMobileCard}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                      <div style={rhMobileCardTitle}>{h.nombre}</div>
+                      <span style={rhMobileBadge(h.activo ? '#d4edda' : '#f8d7da', h.activo ? '#155724' : '#721c24')}>
+                        {h.activo ? 'Activo' : 'Inactivo'}
+                      </span>
+                    </div>
+                    <div style={rhMobileCardRow}><span>Entrada</span><span style={{ fontWeight: 700, color: '#059669' }}>{h.hora_entrada}</span></div>
+                    <div style={rhMobileCardRow}><span>Salida L-V</span><span style={{ fontWeight: 700, color: '#dc2626' }}>{h.hora_salida}</span></div>
+                    {h.hora_salida_sabado && (
+                      <div style={rhMobileCardRow}><span>Salida sáb</span><span>{h.hora_salida_sabado}</span></div>
+                    )}
+                    <div style={rhMobileCardRow}><span>Tolerancia</span><span>{h.tolerancia_minutos} min · {diasLabel}</span></div>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                      <button type="button" onClick={() => startEditHorario(h)} style={{ ...rhMobileBtnSecondary, flex: 1 }}>Editar</button>
+                      <button type="button" onClick={() => toggleHorarioActivo(h)} style={{ ...rhMobileBtnSecondary, flex: 1 }}>
+                        {h.activo ? 'Desactivar' : 'Activar'}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
@@ -1743,7 +1909,7 @@ export const ConfiguracionPage = () => {
                 {isNominaEnabled && (
                   <>
                     <p style={{ margin: '8px 0 0', fontSize: '0.82rem', color: '#64748b', fontWeight: 600 }}>Nómina / Timbrado</p>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '12px' }}>
                       <div>
                         <label style={labelStyle}>Registro patronal IMSS</label>
                         <input
@@ -1752,6 +1918,16 @@ export const ConfiguracionPage = () => {
                           onChange={e => setEmpresaForm(p => ({ ...p, registro_patronal: e.target.value.toUpperCase() }))}
                           maxLength={20}
                           placeholder="Ej. Y99 00 00 000 0"
+                        />
+                      </div>
+                      <div>
+                        <label style={labelStyle}>CP expedición CFDI</label>
+                        <input
+                          style={inputStyle}
+                          value={empresaForm.codigo_postal_expedicion}
+                          onChange={e => setEmpresaForm(p => ({ ...p, codigo_postal_expedicion: e.target.value.replace(/\D/g, '').slice(0, 5) }))}
+                          maxLength={5}
+                          placeholder="5 dígitos (lugar de timbrado)"
                         />
                       </div>
                       <div>
@@ -1797,6 +1973,23 @@ export const ConfiguracionPage = () => {
       {/* ====== TAB: EVENTOS ESPECIALES (solo administrador) ====== */}
       {isSuperuser && configTab === 'eventos_especiales' && (
         <div style={{ marginBottom: '18px' }}>
+          {isMobile ? (
+            <div style={rhMobileTabScroll}>
+              {EVENTOS_TABS.map(t => (
+                <button
+                  key={t.key}
+                  type="button"
+                  style={rhMobileTabPill(eventosEspecialesTab === t.key)}
+                  onClick={() => {
+                    setEventosEspecialesTab(t.key);
+                    if (t.key === 'festivos') void loadFestivos();
+                  }}
+                >
+                  {t.short}
+                </button>
+              ))}
+            </div>
+          ) : (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', borderBottom: '1px solid #e5e7eb', paddingBottom: '10px' }}>
             <button
               type="button"
@@ -1823,6 +2016,7 @@ export const ConfiguracionPage = () => {
               Checadas especiales
             </button>
           </div>
+          )}
         </div>
       )}
 
@@ -1852,7 +2046,41 @@ export const ConfiguracionPage = () => {
             </span>
           </div>
 
-          {/* Tabla de festivos */}
+          {/* Tabla / tarjetas de festivos */}
+          {festivos.length === 0 ? (
+            <p style={{ color: '#9ca3af', textAlign: 'center', padding: '28px 12px' }}>
+              No hay días festivos para {festivoAño}. Usa &quot;Generar LFT&quot; para agregarlos automáticamente.
+            </p>
+          ) : isMobile ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {festivos.map((f) => {
+                const fechaLocal = new Date(f.fecha + 'T12:00:00');
+                const diasSemana = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+                const diaNombre = diasSemana[fechaLocal.getDay()];
+                return (
+                  <div key={f.id} style={{ ...rhMobileCard, opacity: f.activo ? 1 : 0.55 }}>
+                    <div style={rhMobileCardTitle}>{f.nombre}</div>
+                    <div style={rhMobileCardSub}>
+                      {fechaLocal.toLocaleDateString('es-MX', { day: '2-digit', month: 'long', year: 'numeric' })} ({diaNombre})
+                    </div>
+                    <div style={{ marginTop: 8 }}>
+                      <span style={rhMobileBadge(f.tipo === 'LFT' ? '#e0f2fe' : '#fef9c3', f.tipo === 'LFT' ? '#0369a1' : '#854d0e')}>
+                        {f.tipo === 'LFT' ? 'Obligatorio LFT' : 'Adicional'}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                      <button type="button" onClick={() => toggleFestivoActivo(f)} style={{ ...rhMobileBtnSecondary, flex: 1 }}>
+                        {f.activo ? 'Activo' : 'Inactivo'}
+                      </button>
+                      <button type="button" onClick={() => deleteFestivo(f)} style={{ ...rhMobileBtnSecondary, flex: 1, color: '#dc2626', borderColor: '#fecaca' }}>
+                        Eliminar
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
           <div style={{ backgroundColor: 'white', borderRadius: '10px', border: '1px solid #e5e7eb', overflow: 'hidden' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
@@ -1865,11 +2093,7 @@ export const ConfiguracionPage = () => {
                 </tr>
               </thead>
               <tbody>
-                {festivos.length === 0 ? (
-                  <tr><td colSpan={5} style={{ padding: '32px', textAlign: 'center', color: '#9ca3af' }}>
-                    No hay días festivos para {festivoAño}. Usa "Generar LFT" para agregarlos automáticamente.
-                  </td></tr>
-                ) : festivos.map((f, i) => {
+                {festivos.map((f, i) => {
                   const fechaLocal = new Date(f.fecha + 'T12:00:00');
                   const diasSemana = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
                   const diaNombre = diasSemana[fechaLocal.getDay()];
@@ -1911,6 +2135,7 @@ export const ConfiguracionPage = () => {
               </tbody>
             </table>
           </div>
+          )}
 
           {/* Modal agregar festivo manual */}
           {showFestivoModal && (
@@ -1977,6 +2202,21 @@ export const ConfiguracionPage = () => {
             <div style={{ padding: '40px', textAlign: 'center', backgroundColor: '#f9fafb', borderRadius: '10px', border: '1px solid #e5e7eb' }}>
               <p style={{ color: '#6b7280', margin: 0 }}>No hay usuarios especiales configurados.</p>
               <p style={{ color: '#9ca3af', fontSize: '0.9rem', margin: '8px 0 0' }}>Usa "Agregar usuario especial" para asignar empleados que no generen incidencias.</p>
+            </div>
+          ) : isMobile ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {usuariosEspeciales.map(emp => (
+                <div key={emp.id} style={rhMobileCard}>
+                  <div style={rhMobileCardTitle}>{fmtNombreEmpleado(emp)}</div>
+                  <div style={rhMobileCardSub}>{emp.departamento?.nombre || 'Sin departamento'}</div>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                    <button type="button" onClick={() => openVerUsuarioEspecial(emp)} disabled={loadingUsuarioEspecialDetalle} style={{ ...rhMobileBtnSecondary, flex: 1 }}>Ver</button>
+                    <button type="button" onClick={() => toggleExentoIncidencias(emp, false)} disabled={togglingEspecial === emp.id} style={{ ...rhMobileBtnSecondary, flex: 1, color: '#dc2626', borderColor: '#fecaca' }}>
+                      {togglingEspecial === emp.id ? '...' : 'Quitar'}
+                    </button>
+                  </div>
+                </div>
+              ))}
             </div>
           ) : (
             <div style={{ overflowX: 'auto', backgroundColor: 'white', borderRadius: '10px', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
@@ -2212,6 +2452,52 @@ export const ConfiguracionPage = () => {
             </p>
           </div>
 
+          {isMobile ? (
+            <>
+              <h4 style={{ margin: '0 0 10px', fontSize: '0.95rem', color: '#6d28d9' }}>Categorías</h4>
+              {clasesSoporte.length === 0 ? (
+                <p style={{ color: '#6b7280', fontSize: '0.9rem', marginBottom: 20 }}>No hay categorías. Usa + Categoría arriba.</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
+                  {clasesSoporte.map((clase) => {
+                    const n = clase.nombre.trim().toLowerCase();
+                    const esInternaTi = n.includes('mantenimiento') || n.includes('ventana');
+                    return (
+                      <div key={clase.id} style={rhMobileCard}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                          <div style={rhMobileCardTitle}>{clase.nombre}</div>
+                          <span style={rhMobileBadge(clase.activo ? '#d4edda' : '#f8d7da', clase.activo ? '#155724' : '#721c24')}>
+                            {clase.activo ? 'Activo' : 'Inactivo'}
+                          </span>
+                        </div>
+                        {esInternaTi && <div style={{ ...rhMobileCardSub, marginTop: 6 }}>Solo app TI</div>}
+                        <button type="button" onClick={() => startEditClaseSoporte(clase)} style={{ ...rhMobileBtnSecondary, width: '100%', marginTop: 10 }}>Editar</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <h4 style={{ margin: '0 0 10px', fontSize: '0.95rem', color: '#374151' }}>Tipos de ticket</h4>
+              {tiposSoporte.length === 0 ? (
+                <p style={{ color: '#6b7280', fontSize: '0.9rem' }}>No hay tipos de ticket configurados.</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {tiposSoporte.map((tipo) => (
+                    <div key={tipo.id} style={rhMobileCard}>
+                      <div style={rhMobileCardTitle}>{tipo.nombre}</div>
+                      <div style={rhMobileCardSub}>{tipo.clase_nombre || 'Sin categoría'}</div>
+                      <div style={rhMobileCardRow}>
+                        <span>Estado</span>
+                        <span style={{ fontWeight: 600, color: tipo.activo ? '#15803d' : '#b91c1c' }}>{tipo.activo ? 'Activo' : 'Inactivo'}</span>
+                      </div>
+                      <button type="button" onClick={() => startEditTipoSoporte(tipo)} style={{ ...rhMobileBtnSecondary, width: '100%', marginTop: 10 }}>Editar</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : (
+            <>
           {/* ── Categorías ── */}
           <h4 style={{ margin: '0 0 10px', fontSize: '0.95rem', color: '#6d28d9' }}>Categorías</h4>
           {clasesSoporte.length === 0 ? (
@@ -2303,6 +2589,9 @@ export const ConfiguracionPage = () => {
             </div>
           )}
 
+            </>
+          )}
+
           {/* Modal: Categoría */}
           {showClaseSoporteModal && (
             <div style={modalOverlay} onClick={() => setShowClaseSoporteModal(false)}>
@@ -2372,6 +2661,20 @@ export const ConfiguracionPage = () => {
 
       {isSuperuser && configTab === 'actividad' && (
         <div>
+          {/* ── Sub-toggle Logs / Métricas ── */}
+          <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+            {(['logs', 'metricas'] as const).map(v => (
+              <button key={v} onClick={() => setActividadVista(v)}
+                style={{ padding: '7px 20px', borderRadius: 8, border: '1px solid', fontSize: '0.85rem', fontWeight: 600, cursor: 'pointer', transition: 'all 0.15s',
+                  borderColor: actividadVista === v ? '#6366f1' : '#e2e8f0',
+                  background: actividadVista === v ? '#6366f1' : '#f8fafc',
+                  color: actividadVista === v ? '#fff' : '#475569' }}>
+                {v === 'logs' ? '📋 Registros' : '📊 Métricas'}
+              </button>
+            ))}
+          </div>
+
+          {actividadVista === 'logs' && <>
           <div style={{ padding: '16px', backgroundColor: '#f0fdf4', borderRadius: '8px', marginBottom: '20px', border: '1px solid #bbf7d0' }}>
             <p style={{ margin: 0, fontSize: '0.9rem', color: '#166534' }}>
               <strong>negocio</strong>: solicitudes (vacaciones, préstamos, incapacidades). <strong>auth</strong>: inicios de sesión. <strong>sistema</strong>: errores graves.
@@ -2404,9 +2707,9 @@ export const ConfiguracionPage = () => {
                   }}
                 >
                   <option value="">Todas</option>
-                  <option value="auth">auth</option>
-                  <option value="sistema">sistema</option>
-                  <option value="negocio">negocio</option>
+                  {ACTIVIDAD_CATEGORIAS.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
                 </select>
               </div>
             </div>
@@ -2425,9 +2728,9 @@ export const ConfiguracionPage = () => {
                   onChange={(e) => setLimpiezaCategoria(e.target.value)}
                 >
                   <option value="">— Elegir —</option>
-                  <option value="auth">auth</option>
-                  <option value="sistema">sistema</option>
-                  <option value="negocio">negocio</option>
+                  {ACTIVIDAD_CATEGORIAS.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
                 </select>
                 <button
                   type="button"
@@ -2461,9 +2764,9 @@ export const ConfiguracionPage = () => {
                   onChange={(e) => setLimpiezaAntiguosSoloCat(e.target.value)}
                 >
                   <option value="">Todas</option>
-                  <option value="auth">auth</option>
-                  <option value="sistema">sistema</option>
-                  <option value="negocio">negocio</option>
+                  {ACTIVIDAD_CATEGORIAS.map((c) => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
                 </select>
                 <button
                   type="button"
@@ -2504,6 +2807,32 @@ export const ConfiguracionPage = () => {
           ) : actividadItems.length === 0 ? (
             <div style={{ padding: '40px', textAlign: 'center', backgroundColor: '#f9fafb', borderRadius: '10px', border: '1px solid #e5e7eb' }}>
               <p style={{ color: '#6b7280', margin: 0 }}>No hay registros con los filtros actuales.</p>
+            </div>
+          ) : isMobile ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {actividadItems.map((row) => {
+                const nivelBg = row.nivel === 'error' ? '#fee2e2' : row.nivel === 'warning' ? '#fef3c7' : '#e0f2fe';
+                const nivelFg = row.nivel === 'error' ? '#991b1b' : row.nivel === 'warning' ? '#92400e' : '#0369a1';
+                const displayEmpleado = row.empleado_nombre
+                  ? `${row.empleado_nombre}${row.empleado_numero ? ` (${row.empleado_numero})` : ''}`
+                  : row.empleado_username || (row.empleado_id != null ? `ID ${row.empleado_id}` : '—');
+                return (
+                  <div key={row.id} style={rhMobileCard}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                      <span style={rhMobileBadge(nivelBg, nivelFg)}>{row.nivel}</span>
+                      <span style={{ fontSize: '0.72rem', color: '#64748b' }}>{row.categoria}</span>
+                    </div>
+                    <div style={{ fontSize: '0.82rem', color: '#1f2937', lineHeight: 1.35, marginBottom: 6 }}>{row.mensaje}</div>
+                    <div style={rhMobileCardSub}>{fmtDate(row.created_at)}</div>
+                    <div style={rhMobileCardRow}><span>Empleado</span><span style={{ textAlign: 'right', maxWidth: '55%' }}>{displayEmpleado}</span></div>
+                    {(row.ruta || row.metodo_http) && (
+                      <div style={{ ...rhMobileCardSub, marginTop: 4, wordBreak: 'break-all' }}>
+                        {row.metodo_http && row.codigo_http != null ? `${row.metodo_http} ${row.codigo_http}` : ''}{row.ruta ? ` · ${row.ruta}` : ''}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           ) : (
             <div style={{ overflowX: 'auto', backgroundColor: 'white', borderRadius: '10px', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
@@ -2635,9 +2964,245 @@ export const ConfiguracionPage = () => {
               </div>
             </div>
           )}
+          {/* cierre del bloque logs */}
+          </>}
+
+          {/* ── MÉTRICAS (dentro de Actividad) ─────────────────────────────── */}
+          {actividadVista === 'metricas' && (() => {
+            const NIVEL_COLOR: Record<string, string> = { info: '#818cf8', warning: '#fbbf24', error: '#fb7185' };
+            const CAT_ICON = ACTIVIDAD_CATEGORIA_ICON;
+            const CATEGORIAS = [...ACTIVIDAD_CATEGORIAS, 'request'];
+
+            if (loadingMetricas) return (
+              <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8' }}>
+                <div style={{ display: 'inline-block', width: 22, height: 22, border: '3px solid #e2e8f0', borderTopColor: '#6366f1', borderRadius: '50%', animation: 'spin .7s linear infinite', marginRight: 10, verticalAlign: 'middle' }} />
+                Cargando métricas…
+                <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
+              </div>
+            );
+            if (!metricasData) return (
+              <div style={{ padding: 24, color: '#ef4444', background: '#fef2f2', borderRadius: 10, border: '1px solid #fecaca' }}>
+                No se pudieron cargar las métricas.
+              </div>
+            );
+
+            const { total, por_nivel, por_categoria, eventos_por_dia, logins_por_dia, top_errores, top_empleados } = metricasData;
+            const maxDia = Math.max(...eventos_por_dia.map(d => d.info + d.warning + d.error), 1);
+            const maxLogin = Math.max(...logins_por_dia.map(d => d.n), 1);
+            const maxErr = Math.max(...top_errores.map(e => e.n), 1);
+            const maxEmp = Math.max(...top_empleados.map(e => e.n), 1);
+
+            const card2 = (label: string, value: number | string, icon: string, bg: string, isDark: boolean, sub?: string) => (
+              <div key={label} style={{ background: bg, borderRadius: 14, padding: '18px 20px', boxShadow: isDark ? '0 6px 20px rgba(99,102,241,0.25)' : '0 2px 8px rgba(0,0,0,0.06)', border: isDark ? 'none' : '1px solid #e2e8f0', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.72rem', fontWeight: 600, color: isDark ? 'rgba(255,255,255,0.8)' : '#64748b', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</span>
+                  <span style={{ fontSize: '1.2rem' }}>{icon}</span>
+                </div>
+                <div style={{ fontSize: '1.9rem', fontWeight: 800, color: isDark ? '#fff' : '#0f172a', lineHeight: 1.1 }}>{typeof value === 'number' ? value.toLocaleString() : value}</div>
+                {sub && <div style={{ fontSize: '0.72rem', color: isDark ? 'rgba(255,255,255,0.65)' : '#94a3b8', fontWeight: 500 }}>{sub}</div>}
+              </div>
+            );
+
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+                {/* ── Filtros ── */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', padding: '14px 16px', background: '#f8fafc', borderRadius: 10, border: '1px solid #e2e8f0' }}>
+                  <span style={{ fontSize: '0.82rem', color: '#475569', fontWeight: 700 }}>Periodo:</span>
+                  {[7, 15, 30, 60, 90].map(d => (
+                    <button key={d} onClick={() => setMetricasDias(d)}
+                      style={{ padding: '4px 12px', borderRadius: 7, border: '1px solid', fontSize: '0.8rem', fontWeight: 600, cursor: 'pointer',
+                        borderColor: metricasDias === d ? '#6366f1' : '#e2e8f0',
+                        background: metricasDias === d ? '#6366f1' : '#fff',
+                        color: metricasDias === d ? '#fff' : '#475569' }}>
+                      {d}d
+                    </button>
+                  ))}
+                  <span style={{ color: '#e2e8f0', fontSize: '1.2rem' }}>|</span>
+                  <span style={{ fontSize: '0.82rem', color: '#475569', fontWeight: 700 }}>Nivel:</span>
+                  <select value={metricasFiltroNivel} onChange={e => setMetricasFiltroNivel(e.target.value)}
+                    style={{ padding: '4px 10px', borderRadius: 7, border: '1px solid #e2e8f0', fontSize: '0.82rem', background: '#fff', color: '#334155', cursor: 'pointer' }}>
+                    <option value="">Todos</option>
+                    <option value="info">info</option>
+                    <option value="warning">warning</option>
+                    <option value="error">error</option>
+                  </select>
+                  <span style={{ fontSize: '0.82rem', color: '#475569', fontWeight: 700 }}>Categoría:</span>
+                  <select value={metricasFiltroCategoria} onChange={e => setMetricasFiltroCategoria(e.target.value)}
+                    style={{ padding: '4px 10px', borderRadius: 7, border: '1px solid #e2e8f0', fontSize: '0.82rem', background: '#fff', color: '#334155', cursor: 'pointer' }}>
+                    <option value="">Todas</option>
+                    {CATEGORIAS.map(c => <option key={c} value={c}>{CAT_ICON[c]} {c}</option>)}
+                  </select>
+                  {(metricasFiltroNivel || metricasFiltroCategoria) && (
+                    <button onClick={() => { setMetricasFiltroNivel(''); setMetricasFiltroCategoria(''); }}
+                      style={{ padding: '4px 10px', borderRadius: 7, border: '1px solid #fecaca', background: '#fff', color: '#ef4444', fontSize: '0.78rem', fontWeight: 600, cursor: 'pointer' }}>
+                      ✕ Limpiar
+                    </button>
+                  )}
+                  <span style={{ fontSize: '0.75rem', color: '#94a3b8', marginLeft: 4 }}>· {total.toLocaleString()} eventos</span>
+                </div>
+
+            {/* ── KPI Cards ── */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 14 }}>
+                {card2('Total eventos', total, '📊', 'linear-gradient(135deg,#6366f1,#818cf8)', true, `últimos ${metricasDias} días`)}
+                {card2('Errores', por_nivel['error'] ?? 0, '⚠️', 'linear-gradient(135deg,#f43f5e,#fb7185)', true, (por_nivel['error'] ?? 0) === 0 ? 'Sin errores' : 'Requieren atención')}
+                {card2('Warnings', por_nivel['warning'] ?? 0, '🔔', '#fff', false, 'Alertas registradas')}
+                {card2('Info', por_nivel['info'] ?? 0, '📋', '#fff', false, 'Registros informativos')}
+            </div>
+
+            {/* ── Eventos por día ── */}
+            <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, padding: '20px 22px', boxShadow: '0 2px 6px rgba(0,0,0,0.05)' }}>
+              <h3 style={{ margin: '0 0 16px', fontSize: '0.92rem', fontWeight: 700, color: '#1e293b' }}>Eventos por día</h3>
+              {eventos_por_dia.length === 0 ? <p style={{ color: '#94a3b8', margin: 0, fontSize: '0.88rem' }}>Sin datos.</p> : (
+                <div style={{ overflowX: 'auto' }}>
+                  <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, minWidth: eventos_por_dia.length * 28, height: 160 }}>
+                    {eventos_por_dia.map(d => {
+                      const tot = d.info + d.warning + d.error;
+                      const h = Math.max(4, (tot / maxDia) * 140);
+                      const errH = tot > 0 ? (d.error / tot) * h : 0;
+                      const warnH = tot > 0 ? (d.warning / tot) * h : 0;
+                      const infoH = h - errH - warnH;
+                      const label = d.dia.slice(5);
+                      return (
+                        <div key={d.dia} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, minWidth: 22 }} title={`${d.dia}\nInfo: ${d.info}\nWarn: ${d.warning}\nErr: ${d.error}`}>
+                          <div style={{ width: '80%', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: 140 }}>
+                            {infoH > 0 && <div style={{ background: NIVEL_COLOR.info, height: infoH, borderRadius: errH === 0 && warnH === 0 ? '4px 4px 0 0' : '0' }} />}
+                            {warnH > 0 && <div style={{ background: NIVEL_COLOR.warning, height: warnH }} />}
+                            {errH > 0 && <div style={{ background: NIVEL_COLOR.error, height: errH }} />}
+                          </div>
+                          <span style={{ fontSize: '0.56rem', color: '#94a3b8', transform: 'rotate(-45deg)', transformOrigin: 'center', whiteSpace: 'nowrap' }}>{label}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div style={{ display: 'flex', gap: 16, marginTop: 12 }}>
+                    {['info', 'warning', 'error'].map(k => (
+                      <div key={k} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <div style={{ width: 10, height: 10, borderRadius: 2, background: NIVEL_COLOR[k] }} />
+                        <span style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 500 }}>{k}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* ── Row: Por categoría + Logins ── */}
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 16 }}>
+              {/* Por categoría */}
+              <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, padding: '20px 22px', boxShadow: '0 2px 6px rgba(0,0,0,0.05)' }}>
+                <h3 style={{ margin: '0 0 16px', fontSize: '0.92rem', fontWeight: 700, color: '#1e293b' }}>Por categoría</h3>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {Object.entries(por_categoria).sort((a, b) => b[1] - a[1]).map(([cat, n]) => {
+                    const maxCat = Math.max(...Object.values(por_categoria), 1);
+                    const pct = Math.round((n / maxCat) * 100);
+                    return (
+                      <div key={cat}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                          <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#334155' }}>{CAT_ICON[cat] ?? '📌'} {cat}</span>
+                          <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#0f172a' }}>{n.toLocaleString()}</span>
+                        </div>
+                        <div style={{ height: 8, background: '#e0e7ff', borderRadius: 4 }}>
+                          <div style={{ height: '100%', width: `${pct}%`, background: 'linear-gradient(90deg,#6366f1,#818cf8)', borderRadius: 4, transition: 'width 0.4s' }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {Object.keys(por_categoria).length === 0 && <p style={{ color: '#94a3b8', margin: 0, fontSize: '0.88rem' }}>Sin datos.</p>}
+                </div>
+              </div>
+
+              {/* Logins por día */}
+              <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, padding: '20px 22px', boxShadow: '0 2px 6px rgba(0,0,0,0.05)' }}>
+                <h3 style={{ margin: '0 0 16px', fontSize: '0.92rem', fontWeight: 700, color: '#1e293b' }}>Inicios de sesión por día</h3>
+                {logins_por_dia.length === 0 ? <p style={{ color: '#94a3b8', margin: 0, fontSize: '0.88rem' }}>Sin datos.</p> : (
+                  <div style={{ overflowX: 'auto' }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 4, minWidth: logins_por_dia.length * 28, height: 120 }}>
+                      {logins_por_dia.map(d => {
+                        const h = Math.max(4, (d.n / maxLogin) * 100);
+                        return (
+                          <div key={d.dia} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, minWidth: 22 }} title={`${d.dia}: ${d.n} logins`}>
+                            <div style={{ width: '70%', display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: 100 }}>
+                              <div style={{ background: 'linear-gradient(180deg,#818cf8,#6366f1)', height: h, borderRadius: '4px 4px 2px 2px' }} />
+                            </div>
+                            <span style={{ fontSize: '0.56rem', color: '#94a3b8', transform: 'rotate(-45deg)', transformOrigin: 'center', whiteSpace: 'nowrap' }}>{d.dia.slice(5)}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* ── Row: Top errores + Top empleados ── */}
+            <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 16 }}>
+              {/* Top rutas con errores */}
+              <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, padding: '20px 22px', boxShadow: '0 2px 6px rgba(0,0,0,0.05)' }}>
+                <h3 style={{ margin: '0 0 16px', fontSize: '0.92rem', fontWeight: 700, color: '#1e293b' }}>Top rutas con errores</h3>
+                {top_errores.length === 0 ? <p style={{ color: '#22c55e', margin: 0, fontSize: '0.88rem', fontWeight: 600 }}>Sin errores registrados 🎉</p> : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {top_errores.map(({ ruta, n }) => {
+                      const pct = Math.round((n / maxErr) * 100);
+                      return (
+                        <div key={ruta}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                            <span style={{ fontSize: '0.78rem', fontWeight: 500, color: '#475569', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '75%' }} title={ruta}>{ruta}</span>
+                            <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#f43f5e', flexShrink: 0 }}>{n}</span>
+                          </div>
+                          <div style={{ height: 6, background: '#ffe4e6', borderRadius: 3 }}>
+                            <div style={{ height: '100%', width: `${pct}%`, background: 'linear-gradient(90deg,#f43f5e,#fb7185)', borderRadius: 3, transition: 'width 0.4s' }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Empleados más activos */}
+              <div style={{ background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, padding: '20px 22px', boxShadow: '0 2px 6px rgba(0,0,0,0.05)' }}>
+                <h3 style={{ margin: '0 0 16px', fontSize: '0.92rem', fontWeight: 700, color: '#1e293b' }}>Empleados más activos</h3>
+                {top_empleados.length === 0 ? <p style={{ color: '#94a3b8', margin: 0, fontSize: '0.88rem' }}>Sin datos.</p> : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    {top_empleados.map(({ nombre, numero, n }) => {
+                      const pct = Math.round((n / maxEmp) * 100);
+                      return (
+                        <div key={nombre}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                            <span style={{ fontSize: '0.82rem', fontWeight: 600, color: '#334155', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '75%' }} title={nombre}>
+                              {nombre}{numero ? <span style={{ color: '#94a3b8', fontWeight: 400, marginLeft: 6 }}>#{numero}</span> : null}
+                            </span>
+                            <span style={{ fontSize: '0.82rem', fontWeight: 700, color: '#4f46e5', flexShrink: 0 }}>{n}</span>
+                          </div>
+                          <div style={{ height: 6, background: '#e0e7ff', borderRadius: 3 }}>
+                            <div style={{ height: '100%', width: `${pct}%`, background: 'linear-gradient(90deg,#6366f1,#818cf8)', borderRadius: 3, transition: 'width 0.4s' }} />
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+            );
+          })()}
+
         </div>
       )}
 
+    </>
+  );
+
+  return isMobile ? (
+    <div style={{ padding: '0 0 24px', minHeight: '100%' }}>
+      <div style={rhMobileHero}>
+        <div style={{ color: 'rgba(255,255,255,0.75)', fontSize: '0.78rem', marginBottom: 4 }}>Configuración</div>
+        <div style={{ color: '#fff', fontWeight: 800, fontSize: '1.2rem', lineHeight: 1.2 }}>{configTabSubtitle(configTab)}</div>
+      </div>
+      <div style={rhMobileContentShell}>{pageBody}</div>
     </div>
+  ) : (
+    <div style={{ padding: '20px' }}>{pageBody}</div>
   );
 };

@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
+import { useIsMobile } from '../../hooks/useIsMobile';
 import api from '../../services/api';
+import {
+  rhMobileBtnSecondary,
+  rhMobileCard,
+  rhMobileCardRow,
+  rhMobileCardSub,
+  rhMobileCardTitle,
+} from '../rh/rhMobileStyles';
 import type {
   AlcanceChecadaEspecial,
   ChecadaEspecialCreate,
@@ -90,6 +98,7 @@ export interface ChecadasEspecialesEditorProps {
 
 export function ChecadasEspecialesEditor({ embedded = false }: ChecadasEspecialesEditorProps) {
   const navigate = useNavigate();
+  const isMobile = useIsMobile();
   const [empresas, setEmpresas] = useState<EmpresaResponse[]>([]);
   const [departamentos, setDepartamentos] = useState<DepartamentoResponse[]>([]);
   const [items, setItems] = useState<ChecadaEspecialResponse[]>([]);
@@ -260,7 +269,7 @@ export function ChecadasEspecialesEditor({ embedded = false }: ChecadasEspeciale
   }, [empresas, departamentos]);
 
   return (
-    <div style={{ padding: embedded ? 0 : '20px', maxWidth: 1200 }}>
+    <div style={{ padding: embedded ? 0 : isMobile ? '14px 14px 30px' : '20px', maxWidth: isMobile ? undefined : 1200 }}>
       {!embedded && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
           <button
@@ -313,7 +322,7 @@ export function ChecadasEspecialesEditor({ embedded = false }: ChecadasEspeciale
           border: '1px solid #e5e7eb',
           display: 'grid',
           gap: 12,
-          gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+          gridTemplateColumns: isMobile ? '1fr' : 'repeat(auto-fill, minmax(200px, 1fr))',
           alignItems: 'end',
         }}
       >
@@ -489,6 +498,25 @@ export function ChecadasEspecialesEditor({ embedded = false }: ChecadasEspeciale
 
       {loading ? (
         <p style={{ color: '#64748b' }}>Cargando…</p>
+      ) : isMobile ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {items.map((row) => (
+            <div key={row.id} style={rhMobileCard}>
+              <div style={rhMobileCardTitle}>{row.nombre}</div>
+              <div style={rhMobileCardSub}>{formatYmdDisplay(fechaCell(row))}</div>
+              <div style={rhMobileCardRow}>
+                <span>Horario</span>
+                <span>{row.hora_entrada?.slice(0, 5) ?? '—'} – {row.hora_salida?.slice(0, 5) ?? '—'}</span>
+              </div>
+              <div style={rhMobileCardRow}><span>Checadas</span><span>{row.checadas_requeridas}</span></div>
+              <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: 6 }}>{resumenAlcance(row)}</div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                <button type="button" onClick={() => startEdit(row)} style={{ ...rhMobileBtnSecondary, flex: 1, minHeight: 40 }}>Editar</button>
+                <button type="button" onClick={() => void handleDelete(row.id)} style={{ ...rhMobileBtnSecondary, flex: 1, minHeight: 40, color: '#b91c1c', borderColor: '#fecaca' }}>Eliminar</button>
+              </div>
+            </div>
+          ))}
+        </div>
       ) : (
         <div style={{ overflowX: 'auto', background: '#fff', borderRadius: 10, border: '1px solid #e5e7eb' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
