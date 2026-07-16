@@ -124,8 +124,25 @@ export const NotificationBell = ({ dispositivos = [] }: Props) => {
     navigate('/mi-area?tab=incidencias&justificada=pendientes');
   };
 
+  const totalBadge = noLeidas + totalAlertas + incidenciasPorJustificar;
+  const campanaTiembla = totalBadge > 0 && !open;
+
   return (
     <div style={{ position: 'relative' }} ref={panelRef}>
+      {campanaTiembla && (
+        <style>{`
+          @keyframes notif-bell-ring {
+            0%, 100% { transform: rotate(0deg); }
+            4% { transform: rotate(16deg); }
+            8% { transform: rotate(-14deg); }
+            12% { transform: rotate(12deg); }
+            16% { transform: rotate(-10deg); }
+            20% { transform: rotate(6deg); }
+            24% { transform: rotate(-3deg); }
+            28%, 100% { transform: rotate(0deg); }
+          }
+        `}</style>
+      )}
       {/* Botón campana */}
       <button
         type="button"
@@ -145,11 +162,25 @@ export const NotificationBell = ({ dispositivos = [] }: Props) => {
         onMouseEnter={e => (e.currentTarget.style.color = 'white')}
         onMouseLeave={e => (e.currentTarget.style.color = 'rgba(255,255,255,0.9)')}
       >
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          style={{
+            transformOrigin: 'top center',
+            animation: campanaTiembla ? 'notif-bell-ring 2.2s ease-in-out infinite' : undefined,
+          }}
+        >
           <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
           <path d="M13.73 21a2 2 0 0 1-3.46 0" />
         </svg>
-        {(noLeidas + totalAlertas + incidenciasPorJustificar) > 0 && (
+        {totalBadge > 0 && (
           <span style={{
             position: 'absolute',
             top: '2px',
@@ -167,7 +198,7 @@ export const NotificationBell = ({ dispositivos = [] }: Props) => {
             justifyContent: 'center',
             lineHeight: 1,
           }}>
-            {(noLeidas + totalAlertas + incidenciasPorJustificar) > 99 ? '99+' : (noLeidas + totalAlertas + incidenciasPorJustificar)}
+            {totalBadge > 99 ? '99+' : totalBadge}
           </span>
         )}
       </button>

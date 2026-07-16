@@ -46,6 +46,13 @@ export interface AsistenciaResponse {
   empleado_numero?: string;
   empresa_nombre?: string | null;
   departamento_nombre?: string | null;
+  /** Fase D — portal remoto */
+  motivo_remoto?: string | null;
+  motivo_remoto_detalle?: string | null;
+  motivo_remoto_label?: string | null;
+  latitud?: number | null;
+  longitud?: number | null;
+  geo_precision_m?: number | null;
 }
 
 export interface ResumenAsistenciaEmpleado {
@@ -213,6 +220,7 @@ export interface ActividadLogResponse {
   empleado_numero?: string | null;
   empleado_nombre?: string | null;
   empleado_username?: string | null;
+  empleado_empresa?: string | null;
   ip_cliente?: string | null;
   metodo_http?: string | null;
   ruta?: string | null;
@@ -225,11 +233,12 @@ export interface ActividadLogListResponse {
   total: number;
 }
 
-export type ActividadPurgeModo = 'categoria' | 'antiguos' | 'todo';
+export type ActividadPurgeModo = 'categoria' | 'antiguos';
 
 export interface ActividadPurgeRequest {
   modo: ActividadPurgeModo;
   categoria?: string | null;
+  /** Mínimo 730 (2 años): no se pueden borrar registros más recientes. */
   dias?: number | null;
   confirmacion?: string | null;
 }
@@ -266,6 +275,9 @@ export interface DepartamentoResponse {
   empresa_id: number;
   jefe_id?: number | null;
   jefe_nombre?: string | null;
+  /** Departamento padre (subdepartamento). null = raíz. */
+  padre_id?: number | null;
+  padre_nombre?: string | null;
   activo: boolean;
   empresa?: EmpresaResponse | null;
   created_at?: string;
@@ -276,12 +288,14 @@ export interface DepartamentoCreate {
   nombre: string;
   empresa_id: number;
   jefe_id?: number | null;
+  padre_id?: number | null;
 }
 
 export interface DepartamentoUpdate {
   nombre?: string;
   empresa_id?: number;
   jefe_id?: number | null;
+  padre_id?: number | null;
   activo?: boolean;
 }
 
@@ -356,6 +370,8 @@ export interface EmpleadoCreate {
   registrar_en_checador?: boolean;
   dispositivo_ids?: number[];
   password?: string;
+  /** Director / Subdirector / Gerente General: empresas donde aparece en organigrama. */
+  empresas_supervision_ids?: number[];
 }
 
 // ========== VACACIONES GENERALES (calendario / empresa) ==========

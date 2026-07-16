@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Plan laboral — Optiexpress</title>
+  <style>
+    body { font-family: "Segoe UI", Calibri, Arial, sans-serif; max-width: 700px; margin: 0 auto; padding: 24px; font-size: 11pt; line-height: 1.4; color: #1a1a1a; }
+    h1 { font-size: 16pt; margin: 0 0 4px; }
+    .sub { color: #555; font-size: 9.5pt; margin: 0 0 16px; }
+    h2 { font-size: 12pt; margin: 18px 0 8px; border-bottom: 1px solid #333; padding-bottom: 3px; }
+    .box { border: 1px solid #ccc; padding: 10px 12px; margin: 10px 0; background: #f6f6f6; }
+    .box strong { display: block; margin-bottom: 3px; }
+    table { width: 100%; border-collapse: collapse; font-size: 10pt; margin: 6px 0 12px; }
+    th, td { border: 1px solid #ccc; padding: 6px 8px; text-align: left; vertical-align: top; }
+    th { background: #eee; }
+    .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .card { border: 1px solid #ccc; padding: 10px; font-size: 10pt; }
+    .card b { display: block; margin-bottom: 4px; }
+    .footer { margin-top: 20px; font-size: 9pt; color: #666; border-top: 1px solid #ccc; padding-top: 8px; }
+    .no-print { margin-bottom: 12px; padding: 8px; background: #e8f1fb; border: 1px solid #9bb8d9; font-size: 10pt; }
+    .no-print button { margin-top: 6px; padding: 6px 14px; font-weight: 600; cursor: pointer; }
+    @media print { .no-print { display: none !important; } body { padding: 0; } .box, th, .card { background: #fff !important; } }
+  </style>
+</head>
+<body>
+  <div class="no-print">
+    Ctrl+P o el botón · Impresora o “Guardar como PDF”
+    <br /><button type="button" onclick="window.print()">Imprimir / Guardar PDF</button>
+  </div>
+
+  <h1>Plan laboral — Optiexpress</h1>
+  <p class="sub">Para Dirección · Julio 2026 · No es dictamen jurídico</p>
+
+  <div class="box">
+    <strong>En una frase</strong>
+    Ya controlamos asistencia y vacaciones. Falta: que el colaborador tenga su propia clave y acepte lo importante;
+    prestar y descontar dentro de la ley; portal y reloj más seguros; entregar recibos.
+  </div>
+
+  <h2>Hoy</h2>
+  <table>
+    <thead><tr><th>Área</th><th>Estado</th><th>Qué falta</th></tr></thead>
+    <tbody>
+      <tr><td>Asistencia (reloj)</td><td>Bien</td><td>Más huellas; PIN solo con permiso; saber si fue huella o PIN</td></tr>
+      <tr><td>Portal remoto</td><td>Parcial</td><td>Motivo + ubicación al checar (sigue siendo con permiso)</td></tr>
+      <tr><td>Vacaciones</td><td>Bien</td><td>Que el colaborador acepte al solicitar</td></tr>
+      <tr><td>Préstamos</td><td>Parcial</td><td>Convenio de descuento y tope legal del abono</td></tr>
+      <tr><td>Recibos</td><td>Falta</td><td>Que vea / descargue su comprobante</td></tr>
+      <tr><td>Contraseña de la app</td><td>En plan</td><td>Solo él la conoce (hoy Admin/RH pueden fijarla)</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Qué vamos a hacer</h2>
+  <table>
+    <thead><tr><th>#</th><th>Acción</th><th>Para qué</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Cada quien cambia y guarda su contraseña de la app</td><td>Solo él “firma”</td></tr>
+      <tr><td>2</td><td>RH solo da clave temporal si olvidó</td><td>Admin ya no pone la definitiva</td></tr>
+      <tr><td>3</td><td>Aceptar vacaciones con contraseña</td><td>Prueba clara de quién pidió</td></tr>
+      <tr><td>4</td><td>Aceptar descuento del préstamo + topes de ley</td><td>Descuentos legales</td></tr>
+      <tr><td>5</td><td>Portal: motivo + ubicación solo al checar</td><td>Remotas claras, sin rastreo 24 h</td></tr>
+      <tr><td>6</td><td>Reloj: varias huellas; PIN solo con permiso</td><td>Respaldo controlado</td></tr>
+      <tr><td>7</td><td>Registrar si fue huella, PIN o portal</td><td>Reportes claros</td></tr>
+      <tr><td>8</td><td>Mis recibos + timbrado real</td><td>Comprobante al trabajador</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Reglas simples</h2>
+  <div class="two">
+    <div class="card">
+      <b>Admin / RH sí pueden</b>
+      Restablecer acceso temporal, dar permisos (remoto / PIN), aprobar vacaciones y préstamos, configurar relojes.
+    </div>
+    <div class="card">
+      <b>Admin / RH no deben</b>
+      Conocer la clave definitiva, abrir PIN o portal a todos, firmar por el colaborador, descontar sin acuerdo,
+      rastrear ubicación todo el día.
+    </div>
+  </div>
+
+  <div class="box">
+    <strong>Préstamos</strong>
+    Descontar solo con acuerdo. Monto máximo ≈ 1 mes de sueldo (ya casi lo hacemos). El abono por quincena también
+    tiene tope legal.
+  </div>
+
+  <div class="box">
+    <strong>Portal y ubicación</strong>
+    La ley pide registrar la jornada; no obliga GPS. Si usamos ubicación: solo al checar, avisado, y solo quien
+    tiene permiso remoto.
+  </div>
+
+  <div class="box">
+    <strong>Mensaje</strong>
+    No reinventamos el sistema. Cerramos confianza (clave y aceptaciones), legalidad en préstamos, control en
+    remotas y reloj, y entrega de recibos.
+  </div>
+
+  <p class="footer">Optiexpress / Grupo Cristal · Validar con asesoría laboral</p>
+</body>
+</html>

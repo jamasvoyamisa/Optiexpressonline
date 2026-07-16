@@ -32,10 +32,21 @@ class SolicitudVacaciones(Base):
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+
+    # Fase B — aceptación electrónica (FES simple, no SAT)
+    aceptacion_solicitante_at = Column(DateTime(timezone=True), nullable=True)
+    aceptacion_solicitante_ip = Column(String(64), nullable=True)
+    aceptacion_solicitante_texto = Column(Text, nullable=True)
+    aceptacion_jefe_at = Column(DateTime(timezone=True), nullable=True)
+    aceptacion_jefe_ip = Column(String(64), nullable=True)
+    aceptacion_rh_at = Column(DateTime(timezone=True), nullable=True)
+    aceptacion_rh_ip = Column(String(64), nullable=True)
+    rh_confirmador_id = Column(Integer, ForeignKey("empleados.id"), nullable=True)
     
     # Relaciones
     empleado = relationship("Empleado", foreign_keys=[empleado_id], backref="solicitudes_vacaciones")
     jefe_aprobador = relationship("Empleado", foreign_keys=[jefe_aprobador_id])
+    rh_confirmador = relationship("Empleado", foreign_keys=[rh_confirmador_id])
 
 
 class BalanceVacaciones(Base):

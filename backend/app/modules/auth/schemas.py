@@ -1,4 +1,4 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 
 
@@ -27,3 +27,15 @@ class UserInfo(BaseModel):
     apellido_materno: Optional[str]
     email: Optional[str]
     rol_id: Optional[int]
+
+
+class CambiarPasswordRequest(BaseModel):
+    # Opcional si must_change_password (ya entró con la temporal).
+    password_actual: Optional[str] = None
+    password_nueva: str = Field(..., min_length=8, max_length=128)
+
+
+class RestablecerPasswordResponse(BaseModel):
+    empleado_id: int
+    password_temporal: str
+    mensaje: str

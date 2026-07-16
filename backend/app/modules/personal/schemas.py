@@ -189,6 +189,7 @@ class DepartamentoBase(BaseModel):
     nombre: str
     empresa_id: int
     jefe_id: Optional[int] = None
+    padre_id: Optional[int] = None
 
 
 class DepartamentoCreate(DepartamentoBase):
@@ -199,6 +200,7 @@ class DepartamentoUpdate(BaseModel):
     nombre: Optional[str] = None
     empresa_id: Optional[int] = None
     jefe_id: Optional[int] = None
+    padre_id: Optional[int] = None
     activo: Optional[bool] = None
 
 
@@ -209,6 +211,7 @@ class DepartamentoResponse(DepartamentoBase):
     updated_at: Optional[datetime] = None
     empresa: Optional[EmpresaResponse] = None
     jefe_nombre: Optional[str] = None
+    padre_nombre: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -283,6 +286,8 @@ class EmpleadoCreate(EmpleadoBase):
     password: Optional[str] = None
     horario_id: Optional[int] = None        # Horario L-V a asignar al crear el empleado
     horario_sabado_id: Optional[int] = None  # Horario sábado (None = no labora sábados)
+    # Director / Subdirector / Gerente General: empresas donde aparece en organigrama.
+    empresas_supervision_ids: Optional[List[int]] = None
 
 
 class UsuarioEspecialCreate(BaseModel):
@@ -298,7 +303,7 @@ class UsuarioEspecialCreate(BaseModel):
     departamento_id: int
     puesto_id: int
     fecha_ingreso: Optional[datetime] = None
-    # Solo aplica si el puesto es Director: empresas adicionales que supervisa (siempre se incluye empresa_id).
+    # Aplica si el puesto es Director, Subdirector o Gerente General: empresas adicionales que supervisas/gerencia.
     empresas_supervision_ids: Optional[List[int]] = None
 
 
@@ -333,7 +338,7 @@ class EmpleadoUpdate(BaseModel):
     fecha_ingreso: Optional[datetime] = None
     fecha_baja: Optional[datetime] = None
     password: Optional[str] = None
-    # Solo si el puesto es Director: reemplaza el alcance multi-empresa.
+    # Director, Subdirector o Gerente General: reemplaza el alcance multi-empresa.
     empresas_supervision_ids: Optional[List[int]] = None
 
 

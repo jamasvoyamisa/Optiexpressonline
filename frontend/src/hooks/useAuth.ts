@@ -23,6 +23,8 @@ export interface AuthMe {
   dias_vacaciones_aniversario?: number;
   /** Usuario especial (exento de incidencias): no solicita vacaciones ni préstamos en la app. */
   exento_incidencias?: boolean;
+  /** True tras alta o reset temporal: debe cambiar la contraseña antes de usar el sistema. */
+  must_change_password?: boolean;
   /** True si puede ver Dashboard (Administrador, Director, Gerente General, RH). */
   puede_ver_dashboard?: boolean;
   /** True si es gerente (área a cargo) o supervisor en su departamento; puede ver Mi Área (incidencias y solicitudes). */
@@ -44,7 +46,7 @@ type AuthContextValue = AuthState & {
   /** Devuelve el AuthMe del usuario si el login fue exitoso, o null si falló. */
   login: (username: string, password: string) => Promise<AuthMe | null>;
   logout: () => void;
-  refreshAuthMe: () => void;
+  refreshAuthMe: () => Promise<AuthMe | null | void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -135,8 +137,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [doLogout]);
 
   const refreshAuthMe = useCallback(() => {
-    fetchAuthMe().then((me) => {
+    return fetchAuthMe().then((me) => {
       setAuthState((prev) => (prev.isAuthenticated ? { ...prev, authMe: me } : prev));
+      return me;
     });
   }, [fetchAuthMe]);
 
@@ -157,7 +160,7 @@ const defaultAuth: AuthContextValue = {
   loading: false,
   login: async () => null,
   logout: () => {},
-  refreshAuthMe: () => {},
+  refreshAuthMe: async () => null,
 };
 
 export const useAuth = () => {

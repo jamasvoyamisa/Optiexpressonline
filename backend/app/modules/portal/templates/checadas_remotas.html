@@ -334,17 +334,31 @@
         <img src="/api/v1/portal/logo" alt="Grupo Cristal" />
       </div>
       <h1>Asistencia Remota</h1>
-      <p class="subtitle">Ingresa tu empresa, número de empleado y contraseña.</p>
+      <p class="subtitle">Ingresa tu empresa, usuario, contraseña, motivo y permite la ubicación al checar.</p>
       <form id="form-checada">
         <div class="form-fields">
           <label for="empresa">Empresa</label>
           <select id="empresa" required>
             <option value="">-- Selecciona tu empresa --</option>
           </select>
-          <label for="numero">Número de empleado</label>
-          <input type="text" id="numero" placeholder="Ej: 001" required autocomplete="username">
+          <label for="username">Usuario</label>
+          <input type="text" id="username" placeholder="Tu usuario de la app" required autocomplete="username" autocapitalize="none" spellcheck="false">
           <label for="password">Contraseña</label>
           <input type="password" id="password" placeholder="Tu contraseña de la app" required autocomplete="current-password">
+          <label for="motivo">Motivo de checada remota</label>
+          <select id="motivo" required>
+            <option value="">-- Selecciona motivo --</option>
+            <option value="HO">HO — Home Office</option>
+            <option value="TFO">TFO — Trabajo fuera de oficina</option>
+            <option value="OTRO">Otro</option>
+          </select>
+          <div id="wrap-motivo-detalle" class="hide">
+            <label for="motivo-detalle">Detalle del motivo</label>
+            <input type="text" id="motivo-detalle" placeholder="Describe el motivo" maxlength="255" autocomplete="off">
+          </div>
+          <p id="geo-hint" class="subtitle" style="margin-top:0;margin-bottom:0.75rem;font-size:0.8rem;">
+            Al registrar se pedirá tu ubicación solo en este momento (no se rastrea después).
+          </p>
           <div id="msg-err" class="msg-err hide"></div>
           <div id="msg-info" class="msg-info hide"></div>
           <div id="msg-ok-inline" class="msg-ok hide"></div>
@@ -485,20 +499,78 @@
       document.getElementById('modal').classList.add('hide');
     }
 
+    function obtenerUbicacion() {
+      return new Promise((resolve, reject) => {
+        if (!navigator.geolocation) {
+          reject(new Error('Tu navegador no permite geolocalización. Usa otro dispositivo o contacta a RH.'));
+          return;
+        }
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            resolve({
+              latitud: pos.coords.latitude,
+              longitud: pos.coords.longitude,
+              geo_precision_m: typeof pos.coords.accuracy === 'number' ? pos.coords.accuracy : null,
+            });
+          },
+          (err) => {
+            let msg = 'No se pudo obtener la ubicación.';
+            if (err && err.code === 1) msg = 'Debes permitir la ubicación para registrar la checada remota.';
+            else if (err && err.code === 2) msg = 'Ubicación no disponible. Intenta de nuevo o muévete a un lugar con señal.';
+            else if (err && err.code === 3) msg = 'Tiempo agotado al obtener ubicación. Intenta de nuevo.';
+            reject(new Error(msg));
+          },
+          { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
+        );
+      });
+    }
+
+    document.getElementById('motivo').addEventListener('change', () => {
+      const wrap = document.getElementById('wrap-motivo-detalle');
+      const det = document.getElementById('motivo-detalle');
+      if (document.getElementById('motivo').value === 'OTRO') {
+        wrap.classList.remove('hide');
+        det.required = true;
+      } else {
+        wrap.classList.add('hide');
+        det.required = false;
+        det.value = '';
+      }
+    });
+
     document.getElementById('form-checada').addEventListener('submit', async (e) => {
       e.preventDefault();
       ocultarError();
       ocultarInfo();
       const btn = document.getElementById('btn');
+      const motivo = document.getElementById('motivo').value;
+      if (!motivo) {
+        mostrarError('Selecciona el motivo de la checada remota.');
+        return;
+      }
+      if (motivo === 'OTRO' && !document.getElementById('motivo-detalle').value.trim()) {
+        mostrarError('Indica el detalle del motivo «Otro».');
+        return;
+      }
       btn.disabled = true;
+      btn.textContent = 'Obteniendo ubicación…';
       try {
+        const geo = await obtenerUbicacion();
+        btn.textContent = 'Registrando…';
         const r = await fetch(API + '/checadas', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             empresa_id: parseInt(document.getElementById('empresa').value),
-            numero_empleado: document.getElementById('numero').value.trim(),
+            username: document.getElementById('username').value.trim().toLowerCase(),
             password: document.getElementById('password').value,
+            motivo,
+            motivo_detalle: motivo === 'OTRO'
+              ? document.getElementById('motivo-detalle').value.trim()
+              : null,
+            latitud: geo.latitud,
+            longitud: geo.longitud,
+            geo_precision_m: geo.geo_precision_m,
           }),
         });
         const data = await r.json();
@@ -532,10 +604,11 @@
         } else {
           mostrarError(data.mensaje || 'Error al registrar la checada.');
         }
-      } catch {
-        mostrarError('Error de conexión. Intenta de nuevo.');
+      } catch (err) {
+        mostrarError((err && err.message) ? err.message : 'Error de conexión. Intenta de nuevo.');
       } finally {
         btn.disabled = false;
+        btn.textContent = 'Registrar checada';
       }
     });
 

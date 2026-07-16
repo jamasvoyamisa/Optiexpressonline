@@ -9,6 +9,7 @@ from app.core.deps import get_current_empleado_with_rol, require_superuser_downl
 from app.modules.audit.service import ActividadService
 from app.modules.personal import models as personal_models
 from app.modules.personal.service import PersonalService
+from app.modules.asistencia.motivo_remoto import label_motivo_remoto
 from . import schemas, service, models
 from .biometric.sync_service import SyncService
 
@@ -502,6 +503,7 @@ def queue_delete_user(
     - Marca usuarios_pendientes_dispositivo.enviado=False (deja de considerarse 'dado de alta')
     - Cancela cualquier pending_enroll abierto para ese empleado en ese dispositivo
     - Borra la plantilla local en fingerprint_templates (para que no se replique)
+    - Limpia la cola de replicación (para permitir volver a registrar la huella)
     """
     dispositivo = db.query(models.Dispositivo).filter(models.Dispositivo.id == device_id).first()
     if not dispositivo:
@@ -555,6 +557,14 @@ def queue_delete_user(
     db.query(models.FingerprintTemplate).filter(
         models.FingerprintTemplate.empleado_id == empleado.id,
         models.FingerprintTemplate.source_device_id == device_id,
+    ).delete(synchronize_session=False)
+
+    # Limpiar la cola de replicación para este dispositivo/empleado. Sin esto,
+    # replicacion_completada seguiría en True tras el borrado y la UI no
+    # permitiría volver a registrar la huella (re-enroll) en este checador.
+    db.query(models.PendingReplicate).filter(
+        models.PendingReplicate.dispositivo_id == device_id,
+        models.PendingReplicate.numero_empleado == numero,
     ).delete(synchronize_session=False)
 
     db.commit()
@@ -2241,6 +2251,14 @@ def reporte_detalle_empleado(
         checadas_por_dia.setdefault(dia, []).append({
             "hora": ts_mex.strftime("%H:%M"),
             "tipo": c.tipo.value if hasattr(c.tipo, "value") else str(c.tipo),
+            "motivo_remoto": getattr(c, "motivo_remoto", None),
+            "motivo_remoto_detalle": getattr(c, "motivo_remoto_detalle", None),
+            "motivo_remoto_label": label_motivo_remoto(
+                getattr(c, "motivo_remoto", None),
+                getattr(c, "motivo_remoto_detalle", None),
+            ),
+            "latitud": getattr(c, "latitud", None),
+            "longitud": getattr(c, "longitud", None),
         })
 
     # Agrupar incidencias por día (fecha en México)
@@ -2383,6 +2401,14 @@ def reporte_export_detalle(
         checadas_idx[c.empleado_id].setdefault(dia, []).append({
             "hora": ts_mex.strftime("%H:%M"),
             "tipo": c.tipo.value if hasattr(c.tipo, "value") else str(c.tipo),
+            "motivo_remoto": getattr(c, "motivo_remoto", None),
+            "motivo_remoto_detalle": getattr(c, "motivo_remoto_detalle", None),
+            "motivo_remoto_label": label_motivo_remoto(
+                getattr(c, "motivo_remoto", None),
+                getattr(c, "motivo_remoto_detalle", None),
+            ),
+            "latitud": getattr(c, "latitud", None),
+            "longitud": getattr(c, "longitud", None),
         })
 
     incidencias_idx: dict[int, dict[str, list]] = {eid: {} for eid in emp_ids}
@@ -2563,6 +2589,14 @@ def reporte_export_xlsx(
         checadas_idx[c.empleado_id].setdefault(dia, []).append({
             "hora": ts_mex.strftime("%H:%M"),
             "tipo": c.tipo.value if hasattr(c.tipo, "value") else str(c.tipo),
+            "motivo_remoto": getattr(c, "motivo_remoto", None),
+            "motivo_remoto_detalle": getattr(c, "motivo_remoto_detalle", None),
+            "motivo_remoto_label": label_motivo_remoto(
+                getattr(c, "motivo_remoto", None),
+                getattr(c, "motivo_remoto_detalle", None),
+            ),
+            "latitud": getattr(c, "latitud", None),
+            "longitud": getattr(c, "longitud", None),
         })
         dias_con_checada[c.empleado_id].add(dia)
         key = (c.empleado_id, dia)
@@ -2973,9 +3007,13 @@ def reporte_export_xlsx(
                 dc = emp_ch.get(dia_str, [])
                 di = emp_inc.get(dia_str, [])
 
+                motivos: list[str] = []
                 cmap: dict = {}
                 for cc in dc:
                     cmap[cc["tipo"]] = cc["hora"]
+                    lbl_rem = (cc.get("motivo_remoto_label") or "").strip()
+                    if lbl_rem and lbl_rem not in motivos:
+                        motivos.append(f"Portal: {lbl_rem}")
 
                 inc_text = ""
                 just_text = ""
@@ -2990,7 +3028,6 @@ def reporte_export_xlsx(
                     inc_text = f"Festivo: {festivo}"
                 else:
                     parts = []
-                    motivos: list[str] = []
                     todas_just = bool(di) and all(ii["justificada"] for ii in di)
                     alguna_just = any(ii["justificada"] for ii in di)
                     for ii in di:
@@ -3004,7 +3041,8 @@ def reporte_export_xlsx(
                     inc_text = ", ".join(parts)
                     if di:
                         just_text = "Sí" if todas_just else ("Parcial" if alguna_just else "No")
-                    motivo_text = "\n".join(motivos)
+
+                motivo_text = "\n".join(motivos)
 
                 tiempo_str = ""
                 if cmap.get("entrada") and cmap.get("salida"):

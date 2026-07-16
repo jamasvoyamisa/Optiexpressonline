@@ -13,6 +13,7 @@ from app.modules.asistencia.biometric.sync_service import (
 )
 from app.core.security import verify_password
 from app.core.timezone_utils import to_mexico, mexico_date_to_utc_range
+from app.modules.asistencia.motivo_remoto import MOTIVOS_REMOTOS_VALIDOS
 from .schemas import ChecadaRemotaResponse, EstadoChecadaRemotaResponse
 
 logger = logging.getLogger(__name__)
@@ -98,10 +99,10 @@ def _verificar_password(empleado: personal_models.Empleado, password: str) -> bo
 def _auth_portal_checada(
     db: Session,
     empresa_id: int,
-    numero_empleado: str,
+    username: str,
     password: str,
 ) -> Tuple[Optional[personal_models.Empleado], Optional[str]]:
-    """Valida empresa + empleado + contraseña + permiso remoto. Devuelve (empleado, None) o (None, mensaje_error)."""
+    """Valida empresa + usuario + contraseña + permiso remoto. Devuelve (empleado, None) o (None, mensaje_error)."""
     empresa = db.query(personal_models.Empresa).filter(
         personal_models.Empresa.id == empresa_id,
         personal_models.Empresa.activo == True,
@@ -110,9 +111,13 @@ def _auth_portal_checada(
     if not empresa:
         return None, "Empresa no disponible para checadas remotas."
 
+    user = (username or "").strip().lower()
+    if not user:
+        return None, "Credenciales incorrectas."
+
     empleado = db.query(personal_models.Empleado).filter(
         personal_models.Empleado.empresa_id == empresa_id,
-        personal_models.Empleado.numero_empleado == numero_empleado.strip(),
+        personal_models.Empleado.username == user,
         personal_models.Empleado.estado == personal_models.EstadoEmpleado.ACTIVO,
     ).first()
     if not empleado:
@@ -134,11 +139,11 @@ def _auth_portal_checada(
 def estado_checada_remota(
     db: Session,
     empresa_id: int,
-    numero_empleado: str,
+    username: str,
     password: str,
 ) -> EstadoChecadaRemotaResponse:
     """Consulta cuántas checadas llevas hoy vs las requeridas (sin registrar)."""
-    empleado, err = _auth_portal_checada(db, empresa_id, numero_empleado, password)
+    empleado, err = _auth_portal_checada(db, empresa_id, username, password)
     if err or not empleado:
         return EstadoChecadaRemotaResponse(ok=False, mensaje=err or "Error.")
 
@@ -179,20 +184,58 @@ def estado_checada_remota(
 def registrar_checada_remota(
     db: Session,
     empresa_id: int,
-    numero_empleado: str,
+    username: str,
     password: str,
+    motivo: Optional[str] = None,
+    motivo_detalle: Optional[str] = None,
+    latitud: Optional[float] = None,
+    longitud: Optional[float] = None,
+    geo_precision_m: Optional[float] = None,
 ) -> ChecadaRemotaResponse:
     """
-    Autentica al empleado y registra una checada.
-    No permite más registros cuando ya se alcanzaron las checadas requeridas del día (4 entre semana, 2 sábado).
+    Autentica al empleado y registra una checada remota.
+    Fase D: exige motivo (HO/TFO/OTRO) y ubicación (lat/lng) solo al momento de checar.
+    No permite más registros cuando ya se alcanzaron las checadas requeridas del día.
     """
-    empleado, err = _auth_portal_checada(db, empresa_id, numero_empleado, password)
+    empleado, err = _auth_portal_checada(db, empresa_id, username, password)
     if err or not empleado:
         return ChecadaRemotaResponse(ok=False, mensaje=err or "Error.")
 
     dispositivo = _get_dispositivo_portal(db)
     if not dispositivo:
         return ChecadaRemotaResponse(ok=False, mensaje="Error interno. Intente más tarde.")
+
+    motivo_norm = (motivo or "").strip().upper()
+    if motivo_norm not in MOTIVOS_REMOTOS_VALIDOS:
+        return ChecadaRemotaResponse(
+            ok=False,
+            mensaje="Selecciona el motivo de la checada remota (HO, TFO u Otro).",
+        )
+    detalle = (motivo_detalle or "").strip() or None
+    if motivo_norm == "OTRO" and not detalle:
+        return ChecadaRemotaResponse(ok=False, mensaje="Indica el detalle del motivo «Otro».")
+    if detalle and len(detalle) > 255:
+        detalle = detalle[:255]
+
+    if latitud is None or longitud is None:
+        return ChecadaRemotaResponse(
+            ok=False,
+            mensaje="Se requiere tu ubicación al checar (solo en este momento; no se rastrea después).",
+        )
+    try:
+        lat_f = float(latitud)
+        lng_f = float(longitud)
+    except (TypeError, ValueError):
+        return ChecadaRemotaResponse(ok=False, mensaje="Ubicación inválida.")
+    if not (-90.0 <= lat_f <= 90.0 and -180.0 <= lng_f <= 180.0):
+        return ChecadaRemotaResponse(ok=False, mensaje="Ubicación fuera de rango.")
+
+    prec_f = None
+    if geo_precision_m is not None:
+        try:
+            prec_f = float(geo_precision_m)
+        except (TypeError, ValueError):
+            prec_f = None
 
     timestamp = datetime.now(timezone.utc)
     ts_mex = to_mexico(timestamp) or timestamp
@@ -223,13 +266,13 @@ def registrar_checada_remota(
             "No aplica checada: aún no has iniciado labores según tu fecha de ingreso a la empresa."
         )
 
-    requeridas, motivo = checadas_requeridas_dia(db, empleado, fecha_mex)
+    requeridas, motivo_dia = checadas_requeridas_dia(db, empleado, fecha_mex)
     count = _contar_checadas_dia_mexico(db, empleado.id, fecha_mex)
 
     if requeridas == 0:
         return ChecadaRemotaResponse(
             ok=False,
-            mensaje=_mensaje_dia_no_laboral(motivo),
+            mensaje=_mensaje_dia_no_laboral(motivo_dia),
             nombre_empleado=nombre_emp or None,
             checadas_hoy=count,
             requeridas_hoy=0,
@@ -280,6 +323,11 @@ def registrar_checada_remota(
         tipo=tipo,
         es_tiempo_extra=es_tiempo_extra,
         sincronizado=True,
+        motivo_remoto=motivo_norm,
+        motivo_remoto_detalle=detalle if motivo_norm == "OTRO" else None,
+        latitud=lat_f,
+        longitud=lng_f,
+        geo_precision_m=prec_f,
     )
     db.add(asistencia)
     db.commit()

@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Plan de alineación laboral — detalle · Optiexpress</title>
+  <style>
+    :root { --ink: #1a1a1a; --muted: #555; --line: #ccc; --ok: #1b6b3a; --warn: #8a5a00; --pend: #8b1e1e; --plan: #1a4d7a; }
+    * { box-sizing: border-box; }
+    body { font-family: "Segoe UI", Calibri, Arial, sans-serif; color: var(--ink); line-height: 1.45; max-width: 820px; margin: 0 auto; padding: 28px 32px 48px; font-size: 11pt; }
+    h1 { font-size: 18pt; margin: 0 0 6px; font-weight: 700; }
+    .subtitle { color: var(--muted); font-size: 10pt; margin: 0 0 18px; }
+    h2 { font-size: 13pt; margin: 22px 0 10px; padding-bottom: 4px; border-bottom: 1.5px solid var(--ink); }
+    h3 { font-size: 11.5pt; margin: 16px 0 8px; }
+    p { margin: 0 0 10px; }
+    .box { border: 1px solid var(--line); padding: 12px 14px; margin: 12px 0; background: #f7f7f7; }
+    .box strong { display: block; margin-bottom: 4px; }
+    .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 14px 0 18px; }
+    .stat { border: 1px solid var(--line); padding: 10px 8px; text-align: center; }
+    .stat .v { font-size: 13pt; font-weight: 700; }
+    .stat .l { font-size: 8.5pt; color: var(--muted); margin-top: 2px; }
+    table { width: 100%; border-collapse: collapse; margin: 8px 0 14px; font-size: 10pt; }
+    th, td { border: 1px solid var(--line); padding: 7px 8px; text-align: left; vertical-align: top; }
+    th { background: #eee; font-weight: 650; }
+    .tag { display: inline-block; font-size: 8.5pt; font-weight: 650; padding: 1px 7px; border: 1px solid currentColor; white-space: nowrap; }
+    .tag-ok { color: var(--ok); } .tag-parcial { color: var(--warn); } .tag-pend { color: var(--pend); } .tag-plan { color: var(--plan); }
+    .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 10px 0 14px; }
+    .card { border: 1px solid var(--line); padding: 12px; }
+    .card h4 { margin: 0 0 8px; font-size: 10.5pt; }
+    ul { margin: 0; padding-left: 18px; }
+    li { margin-bottom: 4px; }
+    .footer { margin-top: 28px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 9pt; color: var(--muted); }
+    .no-print { margin-bottom: 16px; padding: 10px 12px; background: #e8f1fb; border: 1px solid #9bb8d9; font-size: 10pt; }
+    .no-print button { margin-top: 8px; padding: 8px 16px; font-size: 11pt; cursor: pointer; font-weight: 600; }
+    @media print {
+      body { padding: 0; max-width: none; font-size: 10pt; }
+      .no-print { display: none !important; }
+      .box, .stat, .card, th { background: #fff !important; }
+      h2 { page-break-after: avoid; }
+      table, .card, .box { page-break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="no-print">
+    <strong>Versión detallada</strong> (la corta está en PLAN-ALINEACION-LABORAL-DIRECCION.html). Ctrl+P o el botón.
+    <br /><button type="button" onclick="window.print()">Imprimir / Guardar PDF</button>
+  </div>
+
+  <h1>Plan de alineación laboral — Optiexpress Online</h1>
+  <p class="subtitle">
+    Documento para Dirección · Versión detallada · Asistencia, vacaciones, recibos, préstamos, portal remoto,
+    checador (huellas / PIN) · Referencia LFT · Julio 2026
+  </p>
+
+  <div class="box">
+    <strong>Para qué sirve este documento</strong>
+    Resume qué ya tenemos bien, qué falta y el plan de cambios en lenguaje de negocio. No es dictamen jurídico;
+    conviene validar con asesoría laboral (y privacidad de datos en geolocalización).
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="v">Bien</div><div class="l">Asistencia digital</div></div>
+    <div class="stat"><div class="v">Bien</div><div class="l">Vacaciones (ley)</div></div>
+    <div class="stat"><div class="v">Parcial</div><div class="l">Recibos / préstamos</div></div>
+    <div class="stat"><div class="v">En plan</div><div class="l">Firma · portal · PIN</div></div>
+  </div>
+
+  <h2>1. Panorama general</h2>
+  <p>
+    Optiexpress ya registra jornada con checadores y gestiona vacaciones según Vacaciones Dignas. Conviene
+    reforzar: recibos, aceptación del colaborador, préstamos dentro de la ley, portal remoto más auditable
+    (motivo y ubicación al checar) y respaldo en el reloj (más huellas; PIN solo con permiso).
+  </p>
+  <table>
+    <thead><tr><th>Área</th><th>Situación hoy</th><th>Riesgo / oportunidad</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>Asistencia (reloj)</td>
+        <td>Reloj biométrico; quién, cuándo y equipo</td>
+        <td>Más huellas; PIN solo con permiso; registrar método</td>
+      </tr>
+      <tr>
+        <td>Portal remoto</td>
+        <td>Permiso especial; sin motivo ni ubicación</td>
+        <td>Motivo + geo solo al checar (no rastreo continuo)</td>
+      </tr>
+      <tr>
+        <td>Vacaciones</td>
+        <td>Días por ley, flujo jefe → RH</td>
+        <td>Aceptación explícita y constancia</td>
+      </tr>
+      <tr>
+        <td>Nómina / recibos</td>
+        <td>Sin “Mis recibos”; timbrado en prueba</td>
+        <td>Entrega del comprobante al trabajador</td>
+      </tr>
+      <tr>
+        <td>Préstamos / descuentos</td>
+        <td>Tope ≈ 1 mes de sueldo</td>
+        <td>Convenio formal y tope del abono periódico</td>
+      </tr>
+      <tr>
+        <td>Contraseña de la app</td>
+        <td>Admin/RH pueden fijarla</td>
+        <td>Solo el colaborador conoce la definitiva</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>2. Lo que ya está bien</h2>
+  <div class="two">
+    <div class="card">
+      <h4>Asistencia <span class="tag tag-ok">En orden</span></h4>
+      <p style="margin:0;font-size:10pt">Reloj, portal remoto con permiso, horarios, incidencias y reportes.</p>
+    </div>
+    <div class="card">
+      <h4>Vacaciones <span class="tag tag-ok">En orden</span></h4>
+      <p style="margin:0;font-size:10pt">Días por antigüedad, plazos de goce y autorización jefe → RH.</p>
+    </div>
+    <div class="card">
+      <h4>Préstamos (base) <span class="tag tag-parcial">Parcial</span></h4>
+      <p style="margin:0;font-size:10pt">Flujo de solicitud y tope ≈ 1 mes de sueldo (cerca del límite legal del monto).</p>
+    </div>
+    <div class="card">
+      <h4>Checado remoto (base) <span class="tag tag-ok">En orden</span></h4>
+      <p style="margin:0;font-size:10pt">Permiso especial por persona. Falta motivo y ubicación al checar.</p>
+    </div>
+  </div>
+
+  <h2>3. Lo que falta o conviene reforzar</h2>
+  <table>
+    <thead><tr><th>Tema</th><th>Qué se espera</th><th>Hoy</th><th>Estado</th></tr></thead>
+    <tbody>
+      <tr><td>Recibo al empleado</td><td>Ver y conservar comprobante</td><td>Sin “Mis recibos”</td><td><span class="tag tag-pend">Pendiente</span></td></tr>
+      <tr><td>Timbrado en producción</td><td>Comprobante fiscal válido</td><td>Ambiente de prueba</td><td><span class="tag tag-pend">Pendiente</span></td></tr>
+      <tr><td>Aceptación de vacaciones</td><td>Quién solicitó y aceptó</td><td>Sin “acepto” explícito</td><td><span class="tag tag-parcial">Parcial</span></td></tr>
+      <tr><td>Contraseña de la app</td><td>Solo el colaborador la conoce</td><td>Admin/RH pueden ponerla</td><td><span class="tag tag-plan">En plan</span></td></tr>
+      <tr><td>Descuento por préstamo</td><td>Convenio + límites LFT</td><td>Tope de monto sí; falta convenio y tope del abono</td><td><span class="tag tag-plan">En plan</span></td></tr>
+      <tr><td>Motivo en checada remota</td><td>RH sabe por qué no usó el reloj</td><td>Portal no pide motivo</td><td><span class="tag tag-plan">En plan</span></td></tr>
+      <tr><td>Ubicación al checar remoto</td><td>Punto al checar (no rastreo 24 h)</td><td>No se captura</td><td><span class="tag tag-plan">En plan</span></td></tr>
+      <tr><td>Varias huellas</td><td>Respaldo si un dedo falla</td><td>Flujo centrado en una huella</td><td><span class="tag tag-plan">En plan</span></td></tr>
+      <tr><td>PIN + clave en reloj</td><td>Solo con permiso especial</td><td>PIN poco visible; reloj sin contraseña</td><td><span class="tag tag-plan">En plan</span></td></tr>
+      <tr><td>Método de checada</td><td>Huella, PIN o portal en reportes</td><td>Solo hora y reloj/portal</td><td><span class="tag tag-plan">En plan</span></td></tr>
+    </tbody>
+  </table>
+
+  <h2>4. Plan propuesto</h2>
+  <div class="box">
+    <strong>Idea central</strong>
+    Contraseña propia + aceptaciones + préstamos dentro de la ley + portal remoto auditable (motivo y ubicación
+    al checar, sin vigilancia continua) + checador con respaldo (más huellas; PIN solo con permiso).
+  </div>
+
+  <h3>Fase A — Contraseña de la app</h3>
+  <table>
+    <thead><tr><th>Paso</th><th>Qué cambia</th><th>Quién</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Cambio de contraseña; solo él conoce la definitiva</td><td>Todos con acceso</td></tr>
+      <tr><td>2</td><td>Olvido: temporal de RH/Admin; al entrar debe cambiarla</td><td>RH · Admin</td></tr>
+      <tr><td>3</td><td>Quitar que Admin/RH escriban la contraseña definitiva</td><td>RH · Admin</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Fase B — Aceptación electrónica (firma simple, no SAT)</h3>
+  <table>
+    <thead><tr><th>Paso</th><th>Qué se acepta</th><th>Beneficio</th></tr></thead>
+    <tbody>
+      <tr><td>4</td><td>Solicitud de vacaciones</td><td>Constancia de que él pidió esas fechas</td></tr>
+      <tr><td>5</td><td>Aprobación jefe / confirmación RH</td><td>Cadena completa</td></tr>
+      <tr><td>6</td><td>Acuse del recibo (después)</td><td>Prueba de entrega</td></tr>
+      <tr><td>7</td><td>Autorización de descuento de préstamo</td><td>Convenio para el abono en nómina</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Fase C — Préstamos y descuentos (LFT)</h3>
+  <p style="font-size:10pt;color:var(--muted)">
+    Descuentos prohibidos salvo casos de ley. Préstamo de la empresa = deuda con el patrón: convenio, monto no
+    mayor a un mes de salario, abono periódico dentro del límite legal (30 % del excedente del salario mínimo).
+  </p>
+  <table>
+    <thead><tr><th>Paso</th><th>Qué hacer</th><th>Nota</th></tr></thead>
+    <tbody>
+      <tr><td>8</td><td>Aceptación formal del descuento</td><td>Monto, plazo, abono quincenal</td></tr>
+      <tr><td>9</td><td>Validar tope de monto y del abono periódico</td><td>Bloquear si no cabe en la ley</td></tr>
+      <tr><td>10</td><td>Ver el descuento en el recibo</td><td>Cuando exista Mis recibos</td></tr>
+      <tr><td>11</td><td>Regla ante baja o liquidación del saldo</td><td>Evitar improvisar</td></tr>
+    </tbody>
+  </table>
+  <div class="box">
+    <strong>Ya se acercan al límite del monto</strong>
+    La política de máximo ≈ 1 mes de sueldo es coherente. Falta el convenio explícito y el control del abono periódico.
+  </div>
+
+  <h3>Fase D — Portal de checadas remotas (más robusto)</h3>
+  <p style="font-size:10pt;color:var(--muted)">
+    La LFT pide registro confiable de jornada; no obliga GPS ni motivo. La ubicación es dato personal: solo al
+    checar, con aviso de privacidad; no rastreo 24 h. Se mantiene el permiso especial (apagado por defecto).
+  </p>
+  <table>
+    <thead><tr><th>Paso</th><th>Qué cambia</th><th>Nota</th></tr></thead>
+    <tbody>
+      <tr><td>12</td><td>Motivo obligatorio (lista + “Otro”)</td><td>Reportes con origen “Portal remoto”</td></tr>
+      <tr><td>13</td><td>Ubicación solo al checar</td><td>Privacidad; política si niega el GPS</td></tr>
+      <tr><td>14</td><td>Opcional: zona autorizada</td><td>Fuera de zona → rechazo o alerta</td></tr>
+      <tr><td>15</td><td>Revisión de quién tiene el permiso remoto</td><td>Misma gobernanza que PIN</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Fase E — Checador: varias huellas + PIN con permiso</h3>
+  <p style="font-size:10pt;color:var(--muted)">
+    Base: huella. PIN + clave = permiso especial (como remoto), apagado por defecto. Clave del reloj ≠ de la app.
+  </p>
+  <table>
+    <thead><tr><th>Paso</th><th>Qué cambia</th><th>Cuidado</th></tr></thead>
+    <tbody>
+      <tr><td>16</td><td>Mostrar el PIN del empleado</td><td>Bajo esfuerzo</td></tr>
+      <tr><td>17</td><td>2 o más huellas y replicarlas</td><td>Actualizar programa en sucursales</td></tr>
+      <tr><td>18</td><td>Permiso “Puede checar por PIN”</td><td>Solo RH/Admin</td></tr>
+      <tr><td>19</td><td>Clave del reloj solo si tiene permiso</td><td>Si no, el reloj no recibe clave</td></tr>
+      <tr><td>20</td><td>Guardar si fue huella, PIN o portal</td><td>Hoy no se guarda el método</td></tr>
+    </tbody>
+  </table>
+  <div class="two">
+    <div class="card"><h4>Empleado normal</h4><p style="margin:0;font-size:10pt">Solo huella(s). Sin PIN.</p></div>
+    <div class="card"><h4>Con permiso PIN</h4><p style="margin:0;font-size:10pt">Huella y respaldo PIN + clave.</p></div>
+  </div>
+
+  <h3>Fase F — Recibos</h3>
+  <table>
+    <thead><tr><th>Paso</th><th>Entregable</th><th>Nota</th></tr></thead>
+    <tbody>
+      <tr><td>21</td><td>Mis recibos</td><td>Prioridad alta</td></tr>
+      <tr><td>22</td><td>Timbrado en producción</td><td>Fiscal válido</td></tr>
+      <tr><td>23</td><td>PDF vacaciones y guarda de historiales</td><td>Exhibición</td></tr>
+    </tbody>
+  </table>
+
+  <h2>5. Admin y RH</h2>
+  <p>Sí pueden operar el sistema. No deben reescribir actos aceptados ni conocer la contraseña definitiva de la app.</p>
+  <div class="two">
+    <div class="card">
+      <h4>Siguen pudiendo</h4>
+      <ul>
+        <li>Restablecer acceso (clave temporal)</li>
+        <li>Otorgar permisos (remoto, PIN en reloj)</li>
+        <li>Aprobar préstamos, vacaciones y ajustes documentados</li>
+        <li>Configurar relojes, horarios y empresas</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4>Dejan de hacer</h4>
+      <ul>
+        <li>Fijar la contraseña definitiva de la app</li>
+        <li>Abrir PIN/clave del reloj o portal remoto a todo el mundo</li>
+        <li>Rastrear ubicación 24 horas (solo punto al checar, si se implementa)</li>
+        <li>Firmar o aceptar en nombre del trabajador</li>
+        <li>Descontar préstamo sin convenio / fuera de límites</li>
+      </ul>
+    </div>
+  </div>
+
+  <h2>6. Orden sugerido para autorizar</h2>
+  <table>
+    <thead><tr><th>#</th><th>Acción</th><th>Por qué importa</th></tr></thead>
+    <tbody>
+      <tr><td>1</td><td>Contraseña de la app solo del colaborador</td><td>Base de cualquier aceptación</td></tr>
+      <tr><td>2</td><td>Quitar “contraseña definitiva” en Personal</td><td>Cierra riesgo Admin/RH</td></tr>
+      <tr><td>3</td><td>Aceptación al pedir vacaciones</td><td>Evidencia clara</td></tr>
+      <tr><td>4</td><td>Aceptación descuento préstamo + topes legales</td><td>Cumplir descuentos LFT</td></tr>
+      <tr><td>5</td><td>Portal remoto: motivo + ubicación al checar + aviso de privacidad</td><td>Remotas auditables; sin rastreo continuo</td></tr>
+      <tr><td>6</td><td>Varias huellas + permiso PIN + registrar método</td><td>Asistencia robusta y controlada</td></tr>
+      <tr><td>7</td><td>Mis recibos + acuse</td><td>Entrega del comprobante</td></tr>
+      <tr><td>8</td><td>Timbrado + constancias / retención</td><td>Fiscal y exhibición</td></tr>
+    </tbody>
+  </table>
+
+  <h2>7. Mensaje para Dirección</h2>
+  <div class="box">
+    Estamos bien en asistencia y vacaciones. El plan refuerza identidad, aceptaciones, préstamos dentro de la ley,
+    un portal remoto más claro (por qué y dónde se checó, sin vigilancia constante) y un checador con respaldo
+    (más huellas; PIN solo con permiso). Admin y RH siguen gobernando; dejan de compartir la “firma” del trabajador
+    y de abrir atajos de checada a cualquiera.
+  </div>
+
+  <p class="footer">
+    Preparado para Dirección · Optiexpress / Grupo Cristal · Validar con asesoría laboral · Julio 2026 · Versión
+    detallada
+  </p>
+</body>
+</html>

@@ -5,6 +5,7 @@ import { Login } from './components/Login';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { DashboardPage } from './modules/dashboard/DashboardPage';
 import { RHPage } from './modules/rh/RHPage';
+import { OrganigramaPage } from './modules/rh/OrganigramaPage';
 import { AsistenciaPage } from './modules/asistencia/AsistenciaPage';
 import { MiAreaPage } from './modules/mi-area/MiAreaPage';
 import ChecadasEspecialesPage from './modules/mi-area/ChecadasEspecialesPage';
@@ -15,6 +16,7 @@ import { MisAsistenciasPage } from './modules/empleado/MisAsistenciasPage';
 import { MisVacacionesPage } from './modules/empleado/MisVacacionesPage';
 import { MisPrestamosPage } from './modules/empleado/MisPrestamosPage';
 import { MisDatosPage } from './modules/empleado/MisDatosPage';
+import { CambiarContrasenaPage } from './modules/empleado/CambiarContrasenaPage';
 import { HomeRedirect } from './components/HomeRedirect';
 import { NominaPage } from './modules/nomina/NominaPage';
 import { isNominaEnabled } from './config/features';
@@ -25,6 +27,14 @@ function App() {
       <Router>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route
+            path="/cambiar-contrasena"
+            element={
+              <ProtectedRoute>
+                <CambiarContrasenaPage forzar />
+              </ProtectedRoute>
+            }
+          />
           <Route path="/" element={<ProtectedRoute><HomeRedirect /></ProtectedRoute>} />
           <Route
             path="/mis-asistencias"
@@ -82,6 +92,16 @@ function App() {
               <ProtectedRoute require="rh">
                 <Layout>
                   <RHPage />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/organigrama"
+            element={
+              <ProtectedRoute require="organigrama">
+                <Layout>
+                  <OrganigramaPage />
                 </Layout>
               </ProtectedRoute>
             }

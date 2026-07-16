@@ -721,7 +721,10 @@ class VacacionesService:
             dias_solicitados=dias_solicitados,
             motivo=solicitud.motivo,
             jefe_aprobador_id=jefe_id,
-            estado=models.EstadoSolicitud.PENDIENTE
+            estado=models.EstadoSolicitud.PENDIENTE,
+            aceptacion_solicitante_at=getattr(solicitud, "aceptacion_solicitante_at", None),
+            aceptacion_solicitante_ip=getattr(solicitud, "aceptacion_solicitante_ip", None),
+            aceptacion_solicitante_texto=getattr(solicitud, "aceptacion_solicitante_texto", None),
         )
         
         db.add(db_solicitud)
@@ -825,7 +828,9 @@ class VacacionesService:
         bypass_permiso: bool = False,
         es_gerente_o_director: bool = False,
         es_gerente_general: bool = False,
-        departamento_ids_que_administro: Optional[list] = None
+        departamento_ids_que_administro: Optional[list] = None,
+        aceptacion_jefe_at=None,
+        aceptacion_jefe_ip: Optional[str] = None,
     ) -> Optional[models.SolicitudVacaciones]:
         """Aprobar o rechazar. Solo Admin aprueba todo. Director y Gerente General aprueban gerentes/supervisores. Gerente General además aprueba empleados de su área."""
         solicitud = db.query(models.SolicitudVacaciones).filter(
@@ -896,6 +901,9 @@ class VacacionesService:
         solicitud.jefe_aprobador_id = jefe_id
         solicitud.fecha_aprobacion = datetime.now(timezone.utc)
         solicitud.comentarios_aprobacion = comentarios
+        if aceptacion_jefe_at is not None:
+            solicitud.aceptacion_jefe_at = aceptacion_jefe_at
+            solicitud.aceptacion_jefe_ip = aceptacion_jefe_ip
         
         VacacionesService._actualizar_balance_pendientes(db, solicitud.empleado_id, do_commit=False)
         db.commit()
@@ -909,6 +917,8 @@ class VacacionesService:
         aprobador_id: int,
         aprobar: bool,
         comentarios: Optional[str] = None,
+        aceptacion_rh_at=None,
+        aceptacion_rh_ip: Optional[str] = None,
     ) -> models.SolicitudVacaciones:
         """
         Registro formal de RH: el saldo ya se descontó al aprobar el jefe.
@@ -925,6 +935,10 @@ class VacacionesService:
             raise ValueError("La solicitud no está en estado 'aprobada por jefe' — no puede ser procesada por RH")
 
         solicitud.estado = models.EstadoSolicitud.APROBADA
+        solicitud.rh_confirmador_id = aprobador_id
+        if aceptacion_rh_at is not None:
+            solicitud.aceptacion_rh_at = aceptacion_rh_at
+            solicitud.aceptacion_rh_ip = aceptacion_rh_ip
 
         if comentarios:
             prev = solicitud.comentarios_aprobacion or ""

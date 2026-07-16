@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import api from '../../services/api';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import type { EmpleadoResponse } from '../../types/api';
+import { CambiarContrasenaPage } from './CambiarContrasenaPage';
 
 const cardBase: React.CSSProperties = {
   backgroundColor: 'white',
@@ -58,6 +59,13 @@ export const MisDatosPage = () => {
     );
   };
 
+  const depto = empleado.departamento;
+  const esSub = !!(depto?.padre_id);
+  const deptoNombre = esSub
+    ? (depto?.padre_nombre || '—')
+    : (depto?.nombre || '—');
+  const subNombre = esSub ? (depto?.nombre || '—') : '—';
+
   const cards: { title: string; rows: { label: string; value: string | number | null | undefined }[] }[] = [
     {
       title: 'Datos personales',
@@ -77,7 +85,8 @@ export const MisDatosPage = () => {
       title: 'Datos laborales',
       rows: [
         { label: 'Empresa', value: empleado.empresa?.nombre },
-        { label: 'Departamento', value: empleado.departamento?.nombre },
+        { label: 'Departamento', value: deptoNombre },
+        { label: 'Subdepartamento', value: subNombre },
         { label: 'Puesto', value: empleado.puesto?.nombre },
         { label: 'Estado', value: empleado.estado },
         { label: 'Fecha de ingreso', value: empleado.fecha_ingreso ? new Date(empleado.fecha_ingreso).toLocaleDateString('es-MX') : undefined },
@@ -115,6 +124,10 @@ export const MisDatosPage = () => {
         {cards.map((c) => (
           <Card key={c.title} title={c.title} rows={c.rows} />
         ))}
+      </div>
+      <div style={{ marginTop: 28 }}>
+        <h2 style={{ margin: '0 0 12px', fontSize: '1.05rem', color: '#1e3a5f' }}>Seguridad</h2>
+        <CambiarContrasenaPage forzar={false} />
       </div>
     </div>
   );

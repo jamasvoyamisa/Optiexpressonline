@@ -1,6 +1,8 @@
 import { ReactNode, useState, useEffect } from 'react';
 import logoSidebar from '../assets/GPO-Cristal-bco.png';
 
+const logoSidebarCollapsed = '/favicon.png';
+
 const MESES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 const formatFechaHora = () => {
   const d = new Date();
@@ -30,6 +32,7 @@ const sidebarIcons: Record<string, JSX.Element> = {
   '/mis-prestamos': <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>,
   '/mis-datos': <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>,
   '/rh': <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>,
+  '/organigrama': <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="2" width="6" height="4" rx="1"/><rect x="2" y="18" width="6" height="4" rx="1"/><rect x="16" y="18" width="6" height="4" rx="1"/><path d="M12 6v4"/><path d="M5 14v4"/><path d="M19 14v4"/><path d="M5 14h14"/><path d="M12 10v4"/></svg>,
   '/asistencia': <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="M8 14l2 2 4-4"/></svg>,
   '/mi-area': <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>,
   '/solicitudes-vacaciones': <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>,
@@ -43,6 +46,60 @@ const NavIcon = ({ path }: { path: string }) => {
   return icon ? <span style={{ display: 'inline-flex', flexShrink: 0, opacity: 0.85 }}>{icon}</span> : null;
 };
 
+/** Icono tipo pestaña: >| para expandir, |< para colapsar. Solo icono + hover. */
+const SidebarTabToggle = ({
+  collapsed,
+  onToggle,
+}: {
+  collapsed: boolean;
+  onToggle: () => void;
+}) => {
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      aria-label={collapsed ? 'Mostrar menú' : 'Ocultar menú'}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: collapsed ? 'center' : 'flex-end',
+        width: '100%',
+        padding: '6px 2px',
+        marginBottom: 4,
+        background: 'none',
+        border: 'none',
+        boxShadow: 'none',
+        outline: 'none',
+        color: hover ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.4)',
+        cursor: 'default',
+        transition: 'color 0.15s ease',
+      }}
+    >
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        {collapsed ? (
+          /* >|  expandir */
+          <>
+            <polyline points="8 6 14 12 8 18" />
+            <line x1="17" y1="4" x2="17" y2="20" />
+          </>
+        ) : (
+          /* |<  colapsar */
+          <>
+            <line x1="7" y1="4" x2="7" y2="20" />
+            <polyline points="16 6 10 12 16 18" />
+          </>
+        )}
+      </svg>
+    </button>
+  );
+};
+
+const SIDEBAR_WIDTH_EXPANDED = 172;
+const SIDEBAR_WIDTH_COLLAPSED = 64;
+
 const empleadoNavItems = [
   { to: '/mis-asistencias', label: 'Mis asistencias' },
   { to: '/mis-vacaciones', label: 'Vacaciones' },
@@ -54,14 +111,10 @@ const dashboardNavItem = { to: '/dashboard', label: 'Dashboard' };
 
 const superAdminNavItems = [
   { to: '/rh', label: 'Recursos Humanos' },
+  { to: '/organigrama', label: 'Organigrama' },
   { to: '/asistencia', label: 'Asistencia' },
   { to: '/mi-area', label: 'Incidencias y solicitudes' },
   { to: '/soporte', label: 'Soporte TI' },
-];
-
-const superAdminItems = [
-  { to: '/nomina', label: 'Nómina' },
-  { to: '/configuracion', label: 'Configuración' },
 ];
 
 const miAreaNavItem = { to: '/mi-area', label: 'Mi Área' };
@@ -74,6 +127,8 @@ export const Layout = ({ children }: LayoutProps) => {
   const location = useLocation();
   const isMobile = useIsMobile();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  /** Desktop: menú expandido o solo iconos; se controla con flecha (arriba de Configuración). */
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [dispositivos, setDispositivos] = useState<Dispositivo[]>([]);
   const [fechaHora, setFechaHora] = useState(formatFechaHora);
   const [mostrarCumple, setMostrarCumple] = useState(false);
@@ -123,10 +178,13 @@ export const Layout = ({ children }: LayoutProps) => {
   const isRH = authMe?.is_rh ?? false;
   const isDirector = authMe?.is_director ?? false;
   const isTI = authMe?.is_ti ?? false;
+  const isGerenteGeneral = authMe?.is_gerente_general === true;
+  const isJefe = authMe?.is_jefe === true;
   const esUsuarioEspecial = authMe?.exento_incidencias === true;
   const puedeVerMiArea = authMe?.puede_ver_mi_area ?? false;
   const puedeVerDashboard = (authMe?.puede_ver_dashboard ?? false) || (authMe?.puede_ver_mi_area ?? false);
-  const puedeVerSolicitudesVacaciones = isSuperuser || (authMe?.is_director === true) || (authMe?.is_gerente_general === true) || isRH;
+  const puedeVerSolicitudesVacaciones = isSuperuser || (authMe?.is_director === true) || isGerenteGeneral || isRH;
+  const puedeVerOrganigrama = isSuperuser || isRH || isDirector || isGerenteGeneral || isJefe;
   const showFullAdmin = isSuperuser;
   const puedeVerPrestamos = (authMe?.anios_empresa ?? 0) >= PRESTAMOS_ANTIGUEDAD_MINIMA_ANIOS;
   /** Director o RH (no admin): ven módulo Recursos Humanos como pestañas empleado + RH */
@@ -157,23 +215,39 @@ export const Layout = ({ children }: LayoutProps) => {
     navigate('/login');
   };
 
-  const linkStyle = (path: string): React.CSSProperties => {
+  const linkStyle = (path: string, collapsed = false): React.CSSProperties => {
     const active = location.pathname === path || location.pathname.startsWith(path + '/');
     return {
       color: 'white',
       textDecoration: 'none',
-      padding: isMobile ? '9px 12px' : '7px 10px',
+      padding: isMobile ? '9px 12px' : collapsed ? '10px 0' : '7px 10px',
       borderRadius: '8px',
       backgroundColor: active ? 'rgba(14,165,233,0.25)' : 'transparent',
-      borderLeft: active ? '3px solid #0ea5e9' : '3px solid transparent',
+      borderLeft: collapsed ? 'none' : (active ? '3px solid #0ea5e9' : '3px solid transparent'),
+      boxShadow: collapsed && active ? 'inset 0 0 0 1.5px rgba(14,165,233,0.7)' : undefined,
       fontWeight: active ? 600 : 400,
       fontSize: isMobile ? '1rem' : '0.84rem',
       transition: 'background-color 0.15s',
       display: 'flex',
       alignItems: 'center',
-      gap: isMobile ? '10px' : '8px',
+      justifyContent: collapsed ? 'center' : 'flex-start',
+      gap: isMobile ? '10px' : collapsed ? 0 : '8px',
+      minHeight: collapsed ? 40 : undefined,
     };
   };
+
+  const renderNavLink = (to: string, label: string, collapsed: boolean) => (
+    <Link
+      key={to}
+      to={to}
+      title={collapsed ? label : undefined}
+      aria-label={label}
+      style={linkStyle(to, collapsed)}
+    >
+      <NavIcon path={to} />
+      {!collapsed && label}
+    </Link>
+  );
 
   if (loading) {
     return (
@@ -187,95 +261,104 @@ export const Layout = ({ children }: LayoutProps) => {
     return <Navigate to="/login" replace />;
   }
 
-  const navContent = (
+  const buildNavContent = (collapsed: boolean) => (
     <>
-      <Link to="/" style={{ display: 'block', marginBottom: isMobile ? '24px' : '18px', textDecoration: 'none' }}>
+      <Link
+        to="/"
+        title={collapsed ? 'Inicio' : undefined}
+        style={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          height: isMobile ? undefined : 52,
+          minHeight: isMobile ? undefined : 52,
+          marginBottom: isMobile ? '24px' : 0,
+          flexShrink: 0,
+          textDecoration: 'none',
+        }}
+      >
         <img
-          src={logoSidebar}
+          src={collapsed ? logoSidebarCollapsed : logoSidebar}
           alt="Grupo Cristal"
-          style={{ width: '100%', maxWidth: isMobile ? '160px' : '128px', height: 'auto', objectFit: 'contain', display: 'block' }}
+          style={{
+            width: collapsed ? '28px' : '100%',
+            maxWidth: isMobile ? '160px' : collapsed ? '28px' : '128px',
+            height: 'auto',
+            maxHeight: isMobile ? undefined : collapsed ? 28 : 36,
+            objectFit: 'contain',
+            display: 'block',
+          }}
         />
       </Link>
 
-      <nav style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1 }}>
-        {puedeVerDashboard && (
-          <Link key={dashboardNavItem.to} to={dashboardNavItem.to} style={linkStyle(dashboardNavItem.to)}>
-            <NavIcon path={dashboardNavItem.to} />{dashboardNavItem.label}
-          </Link>
-        )}
-        {puedeVerSolicitudesVacaciones && (
-          <Link key={solicitudesVacacionesNavItem.to} to={solicitudesVacacionesNavItem.to} style={linkStyle(solicitudesVacacionesNavItem.to)}>
-            <NavIcon path={solicitudesVacacionesNavItem.to} />{solicitudesVacacionesNavItem.label}
-          </Link>
-        )}
+      <nav style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1, paddingTop: isMobile ? 0 : 10 }}>
+        {puedeVerDashboard && renderNavLink(dashboardNavItem.to, dashboardNavItem.label, collapsed)}
+        {puedeVerSolicitudesVacaciones && renderNavLink(solicitudesVacacionesNavItem.to, solicitudesVacacionesNavItem.label, collapsed)}
         {showFullAdmin
-          ? superAdminNavItems.map(item => (
-              <Link key={item.to} to={item.to} style={linkStyle(item.to)}>
-                <NavIcon path={item.to} />{item.label}
-              </Link>
-            ))
+          ? superAdminNavItems.map(item => renderNavLink(item.to, item.label, collapsed))
           : showRHNav
           ? [
-              ...empleadoNavLinks.map(item => (
-                <Link key={item.to} to={item.to} style={linkStyle(item.to)}>
-                  <NavIcon path={item.to} />{item.label}
-                </Link>
-              )),
-              <Link key="/rh" to="/rh" style={linkStyle('/rh')}>
-                <NavIcon path="/rh" />Recursos Humanos
-              </Link>,
+              ...empleadoNavLinks.map(item => renderNavLink(item.to, item.label, collapsed)),
+              renderNavLink('/rh', 'Recursos Humanos', collapsed),
+              renderNavLink('/organigrama', 'Organigrama', collapsed),
             ]
           : [
-              ...empleadoNavLinks.map(item => (
-                <Link key={item.to} to={item.to} style={linkStyle(item.to)}>
-                  <NavIcon path={item.to} />{item.label}
-                </Link>
-              )),
-              ...(showMiAreaOnly ? [
-                <Link key={miAreaNavItem.to} to={miAreaNavItem.to} style={linkStyle(miAreaNavItem.to)}>
-                  <NavIcon path={miAreaNavItem.to} />{miAreaNavItem.label}
-                </Link>
-              ] : []),
-              ...(isTI ? [
-                <Link key="/soporte" to="/soporte" style={linkStyle('/soporte')}>
-                  <NavIcon path="/soporte" />Soporte TI
-                </Link>
-              ] : []),
+              ...empleadoNavLinks.map(item => renderNavLink(item.to, item.label, collapsed)),
+              ...(showMiAreaOnly ? [renderNavLink(miAreaNavItem.to, miAreaNavItem.label, collapsed)] : []),
+              ...((puedeVerOrganigrama && !showFullAdmin) ? [renderNavLink('/organigrama', 'Organigrama', collapsed)] : []),
+              ...(isTI ? [renderNavLink('/soporte', 'Soporte TI', collapsed)] : []),
             ]
         }
       </nav>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-        {showFullAdmin && superAdminItems.filter((i) => i.to !== '/nomina' || canAccessNomina(isSuperuser)).map(item => (
-          <Link key={item.to} to={item.to} style={linkStyle(item.to)}>
-            <NavIcon path={item.to} />{item.label}
-          </Link>
-        ))}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: 'auto' }}>
+        {showFullAdmin && canAccessNomina(isSuperuser) && renderNavLink('/nomina', 'Nómina', collapsed)}
+        {/* Flecha tipo pestaña (>| / |<) justo arriba de Configuración. */}
+        {!isMobile && (
+          <SidebarTabToggle
+            collapsed={collapsed}
+            onToggle={() => setSidebarCollapsed(c => !c)}
+          />
+        )}
+        {showFullAdmin && renderNavLink('/configuracion', 'Configuración', collapsed)}
       </div>
-      <div style={{ marginTop: 'auto', paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.2)', fontSize: '0.7rem', color: 'rgba(255,255,255,0.5)' }}>
-        v1.5.1
-      </div>
+      {!collapsed && (
+        <div style={{ paddingTop: '16px', borderTop: '1px solid rgba(255,255,255,0.2)', fontSize: '0.7rem', color: 'rgba(255,255,255,0.5)' }}>
+          v1.5.1
+        </div>
+      )}
     </>
   );
 
+  const navContent = buildNavContent(false);
+
   return (
     <>
-    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
+    <div style={{
+      display: 'flex',
+      height: '100vh',
+      overflow: 'hidden',
+      backgroundColor: '#1e3a5f',
+    }}>
 
-      {/* ── Sidebar desktop ── */}
+      {/* ── Sidebar desktop (misma pieza que el header; sin sombra ni z-index) ── */}
       {!isMobile && (
-        <aside style={{
-          width: '172px',
-          flexShrink: 0,
-          backgroundColor: '#1e3a5f',
-          color: 'white',
-          padding: '14px 12px',
-          display: 'flex',
-          flexDirection: 'column',
-          overflowY: 'auto',
-          boxShadow: '4px 0 12px rgba(0,0,0,0.22)',
-        }}>
-          {navContent}
+        <aside
+          style={{
+            width: sidebarCollapsed ? SIDEBAR_WIDTH_COLLAPSED : SIDEBAR_WIDTH_EXPANDED,
+            flexShrink: 0,
+            backgroundColor: 'transparent',
+            color: 'white',
+            padding: sidebarCollapsed ? '0 6px 14px' : '0 12px 14px',
+            display: 'flex',
+            flexDirection: 'column',
+            overflowY: 'auto',
+            overflowX: 'hidden',
+            boxShadow: 'none',
+            transition: 'width 0.2s ease, padding 0.2s ease',
+          }}
+        >
+          {buildNavContent(sidebarCollapsed)}
         </aside>
       )}
 
@@ -320,10 +403,10 @@ export const Layout = ({ children }: LayoutProps) => {
       )}
 
       {/* ── Columna derecha: header + contenido ── */}
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        {/* Header superior */}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden', backgroundColor: 'transparent' }}>
+        {/* Header superior — fundido con el sidebar (misma franja) */}
         <header style={{
-          backgroundColor: '#1e3a5f',
+          backgroundColor: 'transparent',
           padding: '0 16px',
           height: '52px',
           flexShrink: 0,
@@ -331,7 +414,7 @@ export const Layout = ({ children }: LayoutProps) => {
           alignItems: 'center',
           justifyContent: 'space-between',
           gap: '10px',
-          boxShadow: '0 4px 10px rgba(0,0,0,0.18)',
+          boxShadow: 'none',
         }}>
           {/* Hamburguesa (solo móvil) */}
           {isMobile && (
@@ -412,7 +495,13 @@ export const Layout = ({ children }: LayoutProps) => {
           </div>
         </header>
 
-        <main style={{ flex: 1, minHeight: 0, backgroundColor: '#f0f4f8', overflow: 'auto' }}>
+        <main style={{
+          flex: 1,
+          minHeight: 0,
+          backgroundColor: '#f0f4f8',
+          overflow: 'auto',
+          boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.06)',
+        }}>
           {children}
         </main>
       </div>

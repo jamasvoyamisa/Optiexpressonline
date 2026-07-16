@@ -6,6 +6,7 @@ import calendar
 from . import models, schemas
 from .biometric.sync_service import SyncService
 from .checada_especial_resolver import obtener_checada_especial_vigente
+from .motivo_remoto import label_motivo_remoto
 from app.modules.personal import models as personal_models
 from app.modules.personal import service as personal_service
 
@@ -608,6 +609,10 @@ class AsistenciaService:
             a.empleado_numero = numero
             a.empresa_nombre = empresa_nombre
             a.departamento_nombre = departamento_nombre
+            a.motivo_remoto_label = label_motivo_remoto(
+                getattr(a, "motivo_remoto", None),
+                getattr(a, "motivo_remoto_detalle", None),
+            )
             result.append(a)
 
         return result

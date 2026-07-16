@@ -1,6 +1,9 @@
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, model_validator, field_serializer
 from typing import Optional, Any, List, Literal
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+_TZ_MX = ZoneInfo("America/Mexico_City")
 
 
 class ActividadLogResponse(BaseModel):
@@ -14,11 +17,21 @@ class ActividadLogResponse(BaseModel):
     empleado_numero: Optional[str] = None
     empleado_nombre: Optional[str] = None
     empleado_username: Optional[str] = None
+    empleado_empresa: Optional[str] = None
     ip_cliente: Optional[str] = None
     metodo_http: Optional[str] = None
     ruta: Optional[str] = None
     codigo_http: Optional[int] = None
     duracion_ms: Optional[int] = None
+
+    @field_serializer("created_at")
+    def serialize_created_at(self, v: datetime) -> str:
+        # Los DATETIME naive en actividad_log son hora de muro México.
+        if v.tzinfo is None:
+            v = v.replace(tzinfo=_TZ_MX)
+        else:
+            v = v.astimezone(_TZ_MX)
+        return v.isoformat()
 
     class Config:
         from_attributes = True
@@ -30,11 +43,14 @@ class ActividadLogListResponse(BaseModel):
 
 
 class ActividadPurgeRequest(BaseModel):
-    """Purgar registros de actividad (solo administrador)."""
+    """
+    Purgar registros de actividad (solo administrador).
+    Retención mínima: 2 años (730 días). No se admite vaciar todo el historial.
+    """
 
-    modo: Literal["categoria", "antiguos", "todo"]
+    modo: Literal["categoria", "antiguos"]
     categoria: Optional[str] = Field(None, max_length=40)
-    dias: Optional[int] = Field(None, ge=1, le=3650)
+    dias: Optional[int] = Field(None, ge=730, le=3650)
     confirmacion: Optional[str] = Field(None, max_length=80)
 
     @model_validator(mode="after")
@@ -44,10 +60,9 @@ class ActividadPurgeRequest(BaseModel):
                 raise ValueError("Para modo 'categoria' indique categoria")
         elif self.modo == "antiguos":
             if self.dias is None:
-                raise ValueError("Para modo 'antiguos' indique dias (1-3650)")
-        elif self.modo == "todo":
-            if (self.confirmacion or "").strip() != "BORRAR_TODO":
-                raise ValueError("Para vaciar todo el historial envíe confirmacion: BORRAR_TODO")
+                raise ValueError("Para modo 'antiguos' indique dias (mínimo 730 = 2 años)")
+            if int(self.dias) < 730:
+                raise ValueError("Solo se pueden eliminar registros con más de 730 días (2 años)")
         return self
 
 

@@ -61,4 +61,13 @@ export interface SolicitudVacaciones {
   fecha_aprobacion?: string | null;
   comentarios_aprobacion?: string | null;
   created_at?: string;
+  /** Fase B — aceptación electrónica (FES) */
+  aceptacion_solicitante_at?: string | null;
+  aceptacion_solicitante_ip?: string | null;
+  aceptacion_solicitante_texto?: string | null;
+  aceptacion_jefe_at?: string | null;
+  aceptacion_jefe_ip?: string | null;
+  aceptacion_rh_at?: string | null;
+  aceptacion_rh_ip?: string | null;
+  rh_confirmador_id?: number | null;
 }

@@ -108,6 +108,8 @@ export const MisVacacionesPage = () => {
   const [rangeStart, setRangeStart] = useState<string | null>(null);
   const [rangeEnd, setRangeEnd] = useState<string | null>(null);
   const [motivo, setMotivo] = useState('');
+  const [aceptoSolicitud, setAceptoSolicitud] = useState(false);
+  const [passwordSolicitud, setPasswordSolicitud] = useState('');
   const [modalSolicitar, setModalSolicitar] = useState(false);
   const [modalRechazo, setModalRechazo] = useState<{ motivo: string | null; comentario: string | null } | null>(null);
   const [modalCancelar, setModalCancelar] = useState<Solicitud | null>(null);
@@ -277,18 +279,30 @@ export const MisVacacionesPage = () => {
       );
       return;
     }
+    if (!aceptoSolicitud) {
+      alert('Debes marcar la casilla de aceptación para enviar la solicitud.');
+      return;
+    }
+    if (!passwordSolicitud.trim()) {
+      alert('Indica tu contraseña para confirmar la solicitud.');
+      return;
+    }
     setSending(true);
     api
       .post('/vacaciones/mis-solicitudes', {
         fecha_inicio: new Date(start + 'T12:00:00').toISOString(),
         fecha_fin: new Date(end + 'T12:00:00').toISOString(),
         motivo: motivo.trim() || null,
+        acepto: true,
+        password: passwordSolicitud,
       })
       .then(() => {
         setModalSolicitar(false);
         setRangeStart(null);
         setRangeEnd(null);
         setMotivo('');
+        setAceptoSolicitud(false);
+        setPasswordSolicitud('');
         load();
         setActiveTab('pendientes');
       })
@@ -650,7 +664,7 @@ export const MisVacacionesPage = () => {
               </span>
             )}
             {!isMobile && rangeStart && diasDisponiblesParaSolicitar > 0 && (
-              <button type="button" onClick={() => setModalSolicitar(true)}
+              <button type="button" onClick={() => { setAceptoSolicitud(false); setPasswordSolicitud(''); setModalSolicitar(true); }}
                 style={{ padding: '12px 24px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 700, fontSize: '1rem' }}>
                 Solicitar
               </button>
@@ -820,7 +834,7 @@ export const MisVacacionesPage = () => {
       {/* FAB "Solicitar" en móvil cuando hay rango seleccionado */}
       {isMobile && activeTab === 'nueva' && rangeStart && diasDisponiblesParaSolicitar > 0 && (
         <div style={{ position: 'fixed', bottom: 'calc(24px + env(safe-area-inset-bottom, 0px))', left: '50%', transform: 'translateX(-50%)', zIndex: 60 }}>
-          <button type="button" onClick={() => setModalSolicitar(true)}
+          <button type="button" onClick={() => { setAceptoSolicitud(false); setPasswordSolicitud(''); setModalSolicitar(true); }}
             style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '14px 28px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: 50, cursor: 'pointer', fontWeight: 800, fontSize: '1rem', boxShadow: '0 6px 24px rgba(22,163,74,0.45)', whiteSpace: 'nowrap' }}>
             ✅ Solicitar {selectedCount} día{selectedCount !== 1 ? 's' : ''}
           </button>
@@ -855,13 +869,37 @@ export const MisVacacionesPage = () => {
               <textarea value={motivo} onChange={(e) => setMotivo(e.target.value)} rows={2} placeholder="Ej. vacaciones familiares"
                 style={{ width: '100%', padding: '10px', border: '1px solid #ddd', borderRadius: '8px', resize: 'vertical', fontSize: '0.9rem', boxSizing: 'border-box' }} />
             </div>
+            <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginBottom: 12, fontSize: '0.85rem', color: '#374151', cursor: 'pointer' }}>
+              <input type="checkbox" checked={aceptoSolicitud} onChange={(e) => setAceptoSolicitud(e.target.checked)}
+                style={{ marginTop: 3, width: 16, height: 16, flexShrink: 0 }} />
+              <span>
+                Declaro que solicito estas vacaciones de forma voluntaria, acepto las fechas indicadas y confirmo con mi contraseña.
+              </span>
+            </label>
+            <div style={{ marginBottom: '14px' }}>
+              <label style={{ display: 'block', fontWeight: 600, marginBottom: '6px', fontSize: '0.88rem' }}>Contraseña</label>
+              <input
+                type="password"
+                value={passwordSolicitud}
+                onChange={(e) => setPasswordSolicitud(e.target.value)}
+                autoComplete="current-password"
+                placeholder="Tu contraseña de acceso"
+                style={{ width: '100%', padding: '10px', border: '1px solid #ddd', borderRadius: '8px', fontSize: '0.9rem', boxSizing: 'border-box' }}
+              />
+            </div>
             <div style={{ display: 'flex', gap: 10 }}>
-              <button type="button" onClick={() => !sending && setModalSolicitar(false)}
+              <button type="button" onClick={() => {
+                if (sending) return;
+                setModalSolicitar(false);
+                setAceptoSolicitud(false);
+                setPasswordSolicitud('');
+              }}
                 style={{ flex: 1, padding: '13px', backgroundColor: '#f3f4f6', color: '#374151', border: 'none', borderRadius: 10, cursor: 'pointer', fontWeight: 600, fontSize: '0.95rem' }}>
                 Cancelar
               </button>
-              <button type="button" onClick={submitDesdeModal} disabled={sending || (!!balance && selectedCount > diasDisponiblesParaSolicitar)}
-                style={{ flex: 2, padding: '13px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: 10, cursor: sending ? 'not-allowed' : 'pointer', fontWeight: 700, fontSize: '0.95rem', opacity: (!!balance && selectedCount > diasDisponiblesParaSolicitar) ? 0.6 : 1 }}>
+              <button type="button" onClick={submitDesdeModal}
+                disabled={sending || !aceptoSolicitud || !passwordSolicitud.trim() || (!!balance && selectedCount > diasDisponiblesParaSolicitar)}
+                style={{ flex: 2, padding: '13px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: 10, cursor: sending ? 'not-allowed' : 'pointer', fontWeight: 700, fontSize: '0.95rem', opacity: (!aceptoSolicitud || !passwordSolicitud.trim() || (!!balance && selectedCount > diasDisponiblesParaSolicitar)) ? 0.6 : 1 }}>
                 {sending ? 'Enviando...' : 'Confirmar solicitud'}
               </button>
             </div>

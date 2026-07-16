@@ -14,11 +14,16 @@ class SolicitudVacacionesBase(BaseModel):
 
 class SolicitudVacacionesCreate(SolicitudVacacionesBase):
     empleado_id: int
+    # Rellenados por la ruta /mis-solicitudes tras validar FES (no vienen del cliente admin genérico).
+    aceptacion_solicitante_at: Optional[datetime] = None
+    aceptacion_solicitante_ip: Optional[str] = None
+    aceptacion_solicitante_texto: Optional[str] = None
 
 
 class SolicitudVacacionesCreateMine(SolicitudVacacionesBase):
     """Para POST /mis-solicitudes: el empleado_id se toma del token."""
-    pass
+    acepto: bool = False
+    password: str = ""
 
 
 class SolicitudVacacionesUpdate(BaseModel):
@@ -31,6 +36,9 @@ class SolicitudVacacionesUpdate(BaseModel):
 class SolicitudVacacionesAprobar(BaseModel):
     aprobar: bool
     comentarios: Optional[str] = None
+    # Fase B: confirmación con contraseña del aprobador/confirmador
+    password: str = ""
+    acepto: bool = False
 
 
 class SolicitudVacacionesResponse(SolicitudVacacionesBase):
@@ -46,6 +54,15 @@ class SolicitudVacacionesResponse(SolicitudVacacionesBase):
     comentarios_aprobacion: Optional[str] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
+    # Fase B — constancia de aceptación
+    aceptacion_solicitante_at: Optional[datetime] = None
+    aceptacion_solicitante_ip: Optional[str] = None
+    aceptacion_solicitante_texto: Optional[str] = None
+    aceptacion_jefe_at: Optional[datetime] = None
+    aceptacion_jefe_ip: Optional[str] = None
+    aceptacion_rh_at: Optional[datetime] = None
+    aceptacion_rh_ip: Optional[str] = None
+    rh_confirmador_id: Optional[int] = None
 
     class Config:
         from_attributes = True

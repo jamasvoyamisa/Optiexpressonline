@@ -16,7 +16,7 @@ from app.modules.audit.schemas import (
 )
 from app.modules.audit.service import ActividadService
 from app.modules.audit.models import ActividadLog
-from app.modules.personal.models import Empleado
+from app.modules.personal.models import Empleado, Empresa
 
 router = APIRouter(prefix=f"{settings.API_V1_PREFIX}/audit", tags=["actividad"])
 
@@ -61,7 +61,9 @@ def listar_actividad(
                 Empleado.apellido_paterno,
                 Empleado.apellido_materno,
                 Empleado.username,
+                Empresa.nombre.label("empresa_nombre"),
             )
+            .outerjoin(Empresa, Empresa.id == Empleado.empresa_id)
             .filter(Empleado.id.in_(empleado_ids))
             .all()
         )
@@ -72,6 +74,7 @@ def listar_actividad(
                 "empleado_numero": e.numero_empleado,
                 "empleado_nombre": nombre_completo,
                 "empleado_username": e.username,
+                "empleado_empresa": (e.empresa_nombre or "").strip() or None,
             }
 
     items = []
@@ -192,7 +195,8 @@ def get_metricas(
     top_empleados = [
         {
             "empleado_id": r.empleado_id,
-            "nombre": " ".join(filter(None, [r.nombre, r.apellido_paterno])) or f"ID {r.empleado_id}",
+            "nombre": " ".join(filter(None, [r.nombre, r.apellido_paterno]))
+            or (f"No. {r.numero_empleado}" if r.numero_empleado else f"Empleado {r.empleado_id}"),
             "numero": r.numero_empleado,
             "n": r.n,
         }

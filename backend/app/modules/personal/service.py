@@ -103,8 +103,48 @@ class PersonalService:
     # ========== DEPARTAMENTOS ==========
 
     @staticmethod
+    def _validar_padre_departamento(
+        db: Session,
+        *,
+        empresa_id: int,
+        padre_id: Optional[int],
+        depto_id: Optional[int] = None,
+    ) -> None:
+        """Valida que el padre exista, sea de la misma empresa y no genere ciclos."""
+        if padre_id is None:
+            return
+        if depto_id is not None and int(padre_id) == int(depto_id):
+            raise ValueError("Un departamento no puede ser padre de sí mismo.")
+        padre = (
+            db.query(models.Departamento)
+            .filter(models.Departamento.id == padre_id)
+            .first()
+        )
+        if not padre:
+            raise ValueError("El departamento padre no existe.")
+        if int(padre.empresa_id) != int(empresa_id):
+            raise ValueError("El departamento padre debe pertenecer a la misma empresa.")
+        # Evitar ciclos: subir por la cadena de padres
+        visto = set()
+        cur_id: Optional[int] = padre_id
+        while cur_id is not None:
+            if depto_id is not None and int(cur_id) == int(depto_id):
+                raise ValueError("No se puede asignar un subdepartamento (o descendiente) como padre.")
+            if cur_id in visto:
+                break
+            visto.add(cur_id)
+            row = db.query(models.Departamento.padre_id).filter(models.Departamento.id == cur_id).first()
+            cur_id = row[0] if row else None
+
+    @staticmethod
     def create_departamento(db: Session, depto: schemas.DepartamentoCreate) -> models.Departamento:
-        db_depto = models.Departamento(**depto.dict())
+        data = depto.dict()
+        PersonalService._validar_padre_departamento(
+            db,
+            empresa_id=data["empresa_id"],
+            padre_id=data.get("padre_id"),
+        )
+        db_depto = models.Departamento(**data)
         db.add(db_depto)
         db.commit()
         db.refresh(db_depto)
@@ -115,6 +155,7 @@ class PersonalService:
         return db.query(models.Departamento).options(
             joinedload(models.Departamento.empresa),
             joinedload(models.Departamento.jefe),
+            joinedload(models.Departamento.padre),
         ).filter(models.Departamento.id == depto_id).first()
 
     @staticmethod
@@ -125,6 +166,7 @@ class PersonalService:
         query = db.query(models.Departamento).options(
             joinedload(models.Departamento.empresa),
             joinedload(models.Departamento.jefe),
+            joinedload(models.Departamento.padre),
         )
         if empresa_id is not None:
             query = query.filter(models.Departamento.empresa_id == empresa_id)
@@ -137,7 +179,17 @@ class PersonalService:
         db_depto = db.query(models.Departamento).filter(models.Departamento.id == depto_id).first()
         if not db_depto:
             return None
-        for field, value in depto.dict(exclude_unset=True).items():
+        data = depto.dict(exclude_unset=True)
+        empresa_id = data.get("empresa_id", db_depto.empresa_id)
+        if "padre_id" in data or "empresa_id" in data:
+            padre_id = data["padre_id"] if "padre_id" in data else db_depto.padre_id
+            PersonalService._validar_padre_departamento(
+                db,
+                empresa_id=int(empresa_id),
+                padre_id=padre_id,
+                depto_id=depto_id,
+            )
+        for field, value in data.items():
             setattr(db_depto, field, value)
         db.commit()
         db.refresh(db_depto)
@@ -180,13 +232,14 @@ class PersonalService:
             joinedload(models.Puesto.departamento),
         ).filter(models.Puesto.id == puesto_id).first()
 
-    PUESTOS_RESERVADOS = {"director", "gerente general", "rh", "gerente", "supervisor"}
+    PUESTOS_RESERVADOS = {"director", "subdirector", "gerente general", "rh", "gerente", "supervisor"}
     PUESTOS_RESERVADOS_ORDEN = [
         ("director", 1),
-        ("gerente general", 2),
-        ("rh", 3),
-        ("gerente", 4),
-        ("supervisor", 5),
+        ("subdirector", 2),
+        ("gerente general", 3),
+        ("rh", 4),
+        ("gerente", 5),
+        ("supervisor", 6),
     ]
 
     @staticmethod
@@ -208,10 +261,16 @@ class PersonalService:
         for nombre, orden in PersonalService.PUESTOS_RESERVADOS_ORDEN:
             if nombre in existentes:
                 continue
+            if nombre == "rh":
+                display = "RH"
+            elif nombre == "gerente general":
+                display = "Gerente General"
+            else:
+                display = nombre.title()
             db.add(models.Puesto(
                 empresa_id=None,
                 departamento_id=None,
-                nombre=nombre.title() if nombre != "rh" else "RH",
+                nombre=display,
                 orden=orden,
                 activo=True,
             ))
@@ -404,7 +463,10 @@ class PersonalService:
     @staticmethod
     def create_empleado(db: Session, empleado: schemas.EmpleadoCreate) -> models.Empleado:
         """Crear nuevo empleado y usuario del sistema (acceso con número de empleado/username y contraseña)."""
-        data = empleado.dict(exclude={"registrar_en_checador", "dispositivo_ids", "password", "horario_id", "horario_sabado_id"})
+        data = empleado.dict(exclude={
+            "registrar_en_checador", "dispositivo_ids", "password",
+            "horario_id", "horario_sabado_id", "empresas_supervision_ids",
+        })
         # Resolver username único
         if not data.get("username") or not str(data["username"]).strip():
             data["username"] = _generate_unique_username(
@@ -435,6 +497,8 @@ class PersonalService:
         for intento in range(2):
             db_empleado = models.Empleado(**data)
             db_empleado.password_hash = get_password_hash(password_plain)
+            # Alta: clave temporal (RFC/número o la indicada); debe cambiarla el colaborador.
+            db_empleado.must_change_password = True
             db.add(db_empleado)
             try:
                 db.commit()
@@ -478,6 +542,21 @@ class PersonalService:
         if empleado.horario_sabado_id is not None:
             db_empleado.horario_sabado_id = empleado.horario_sabado_id
             db.commit()
+        # Director / Subdirector / GG: empresas visibles en organigrama
+        if PersonalService._puesto_usa_supervision_empresas(db, db_empleado.puesto_id):
+            ids = set(empleado.empresas_supervision_ids or [])
+            if db_empleado.empresa_id:
+                ids.add(db_empleado.empresa_id)
+            if not ids and db_empleado.empresa_id:
+                ids = {db_empleado.empresa_id}
+            for eid in ids:
+                if not PersonalService.get_empresa(db, eid):
+                    raise ValueError(f"La empresa {eid} no existe")
+                db.add(models.EmpleadoSupervisionEmpresa(
+                    empleado_id=db_empleado.id, empresa_id=eid,
+                ))
+            db.commit()
+            db.refresh(db_empleado)
         return db_empleado
 
     @staticmethod
@@ -503,6 +582,17 @@ class PersonalService:
         p = db.query(models.Puesto).filter(models.Puesto.id == puesto_id).first()
         return bool(p and (p.nombre or "").strip().lower() == "director")
 
+    PUESTOS_CON_SUPERVISION_EMPRESAS = frozenset({"director", "subdirector", "gerente general"})
+
+    @staticmethod
+    def _puesto_usa_supervision_empresas(db: Session, puesto_id: Optional[int]) -> bool:
+        """Director, Subdirector y Gerente General pueden tener alcance multi-empresa."""
+        if not puesto_id:
+            return False
+        p = db.query(models.Puesto).filter(models.Puesto.id == puesto_id).first()
+        n = (p.nombre or "").strip().lower() if p else ""
+        return n in PersonalService.PUESTOS_CON_SUPERVISION_EMPRESAS
+
     @staticmethod
     def create_usuario_especial(db: Session, data: schemas.UsuarioEspecialCreate) -> models.Empleado:
         """Crea un usuario especial exento de incidencias con alta simplificada."""
@@ -523,16 +613,10 @@ class PersonalService:
             puede_checar_remoto=False,
             fecha_ingreso=data.fecha_ingreso,
             password=(data.password or "").strip() or None,
+            # create_empleado persiste el alcance multi-empresa (evitar insertar dos veces).
+            empresas_supervision_ids=data.empresas_supervision_ids,
         )
-        db_empleado = PersonalService.create_empleado(db, empleado)
-        if PersonalService._puesto_es_director(db, data.puesto_id):
-            ids = set(data.empresas_supervision_ids or [data.empresa_id])
-            ids.add(data.empresa_id)
-            for eid in ids:
-                db.add(models.EmpleadoSupervisionEmpresa(empleado_id=db_empleado.id, empresa_id=eid))
-            db.commit()
-            db.refresh(db_empleado)
-        return db_empleado
+        return PersonalService.create_empleado(db, empleado)
     
     @staticmethod
     def get_empleado(db: Session, empleado_id: int) -> Optional[models.Empleado]:
@@ -541,6 +625,7 @@ class PersonalService:
             joinedload(models.Empleado.empresa),
             joinedload(models.Empleado.departamento_rel).joinedload(models.Departamento.empresa),
             joinedload(models.Empleado.departamento_rel).joinedload(models.Departamento.jefe),
+            joinedload(models.Empleado.departamento_rel).joinedload(models.Departamento.padre),
             joinedload(models.Empleado.puesto_rel),
             joinedload(models.Empleado.jefe).joinedload(models.Empleado.puesto_rel),
             joinedload(models.Empleado.horarios_asignados),
@@ -626,6 +711,7 @@ class PersonalService:
         query = db.query(models.Empleado).options(
             joinedload(models.Empleado.empresa),
             joinedload(models.Empleado.departamento_rel).joinedload(models.Departamento.jefe),
+            joinedload(models.Empleado.departamento_rel).joinedload(models.Departamento.padre),
             joinedload(models.Empleado.puesto_rel),
             selectinload(models.Empleado.jefe).selectinload(models.Empleado.puesto_rel),
             joinedload(models.Empleado.horarios_asignados),
@@ -703,10 +789,8 @@ class PersonalService:
             return None
 
         update_data = empleado.dict(exclude_unset=True)
-        if "password" in update_data:
-            password = update_data.pop("password")
-            if password and str(password).strip():
-                db_empleado.password_hash = get_password_hash(password)
+        # Fase A: Admin/RH no pueden fijar la contraseña definitiva por este endpoint.
+        update_data.pop("password", None)
 
         empresas_supervision_ids = update_data.pop("empresas_supervision_ids", None)
 
@@ -724,7 +808,7 @@ class PersonalService:
 
         puesto = db.query(models.Puesto).filter(models.Puesto.id == db_empleado.puesto_id).first()
         puesto_n = (puesto.nombre or "").strip().lower() if puesto else ""
-        if puesto_n != "director":
+        if puesto_n not in PersonalService.PUESTOS_CON_SUPERVISION_EMPRESAS:
             db.query(models.EmpleadoSupervisionEmpresa).filter(
                 models.EmpleadoSupervisionEmpresa.empleado_id == empleado_id
             ).delete()
@@ -797,6 +881,31 @@ class PersonalService:
 
         db.commit()
         return True
+
+    @staticmethod
+    def generar_password_temporal() -> str:
+        """Contraseña temporal legible (10 caracteres alfanuméricos)."""
+        import secrets
+        import string
+        alphabet = string.ascii_letters + string.digits
+        return "".join(secrets.choice(alphabet) for _ in range(10))
+
+    @staticmethod
+    def restablecer_password_temporal(db: Session, empleado_id: int) -> Optional[str]:
+        """
+        Asigna contraseña temporal aleatoria y marca must_change_password.
+        Devuelve la clave en claro una sola vez, o None si no existe el empleado.
+        """
+        db_empleado = db.query(models.Empleado).filter(models.Empleado.id == empleado_id).first()
+        if not db_empleado:
+            return None
+        temporal = PersonalService.generar_password_temporal()
+        db_empleado.password_hash = get_password_hash(temporal)
+        db_empleado.must_change_password = True
+        # Invalida sesión activa: debe volver a entrar con la temporal.
+        db_empleado.session_id = None
+        db.commit()
+        return temporal
     
     @staticmethod
     def get_subordinados(db: Session, jefe_id: int) -> List[models.Empleado]:
@@ -843,10 +952,30 @@ class PersonalService:
         return PersonalService.get_es_gerente_general(db, empleado_id) or PersonalService.get_es_director(db, empleado_id)
 
     @staticmethod
+    def _jefe_ids_en_cadena_departamento(db: Session, departamento_id: int) -> List[int]:
+        """Jefes del departamento y de sus padres (p. ej. gerente de Ópticas aplica a sucursales)."""
+        ids: List[int] = []
+        cur_id: Optional[int] = departamento_id
+        vistos: set = set()
+        while cur_id is not None and cur_id not in vistos:
+            vistos.add(cur_id)
+            row = (
+                db.query(models.Departamento.jefe_id, models.Departamento.padre_id)
+                .filter(models.Departamento.id == cur_id)
+                .first()
+            )
+            if not row:
+                break
+            if row[0] and row[0] not in ids:
+                ids.append(int(row[0]))
+            cur_id = int(row[1]) if row[1] is not None else None
+        return ids
+
+    @staticmethod
     def get_ids_gerentes_area(db: Session, departamento_id: Optional[int]) -> List[int]:
         """
         IDs de empleados que tienen rango de GERENTE en el área: jefe del departamento
-        + empleados con 'gerente' en el puesto (excluye supervisores puros).
+        (y del padre si es subdepartamento) + empleados con 'gerente' en el puesto.
         Usado para aprobar vacaciones de supervisores y justificar sus incidencias.
         """
         if not departamento_id:
@@ -854,9 +983,7 @@ class PersonalService:
         depto = db.query(models.Departamento).filter(models.Departamento.id == departamento_id).first()
         if not depto:
             return []
-        ids = []
-        if depto.jefe_id:
-            ids.append(depto.jefe_id)
+        ids = PersonalService._jefe_ids_en_cadena_departamento(db, departamento_id)
         gerentes = (
             db.query(models.Empleado)
             .join(models.Puesto, models.Empleado.puesto_id == models.Puesto.id)
@@ -873,15 +1000,13 @@ class PersonalService:
 
     @staticmethod
     def get_ids_aprobadores_area(db: Session, departamento_id: Optional[int]) -> List[int]:
-        """IDs de empleados que pueden aprobar vacaciones/justificar del área: jefe del departamento, gerentes y supervisores del mismo."""
+        """IDs de empleados que pueden aprobar vacaciones/justificar del área: jefe del departamento (y padre), gerentes y supervisores del mismo."""
         if not departamento_id:
             return []
         depto = db.query(models.Departamento).filter(models.Departamento.id == departamento_id).first()
         if not depto:
             return []
-        ids = []
-        if depto.jefe_id:
-            ids.append(depto.jefe_id)
+        ids = PersonalService._jefe_ids_en_cadena_departamento(db, departamento_id)
         # Gerentes y supervisores del departamento (por nombre de puesto)
         gerentes_supervisores = db.query(models.Empleado).join(models.Puesto, models.Empleado.puesto_id == models.Puesto.id).filter(
             models.Empleado.departamento_id == departamento_id,
@@ -897,11 +1022,23 @@ class PersonalService:
 
     @staticmethod
     def get_departamento_ids_que_administro(db: Session, empleado_id: int) -> List[int]:
-        """Departamentos que este empleado administra: donde es jefe, o donde es supervisor/gerente (por puesto) en ese departamento."""
-        deptos_como_jefe = db.query(models.Departamento.id).filter(
+        """Departamentos que este empleado administra: donde es jefe (incluye hijos/sucursales), o donde es supervisor/gerente por puesto."""
+        deptos_como_jefe = db.query(models.Departamento).filter(
             models.Departamento.jefe_id == empleado_id
         ).all()
-        ids = [r[0] for r in deptos_como_jefe]
+        ids: List[int] = []
+        for d in deptos_como_jefe:
+            if d.id not in ids:
+                ids.append(d.id)
+            # Si administra el padre, también las sucursales hijas
+            hijos = (
+                db.query(models.Departamento.id)
+                .filter(models.Departamento.padre_id == d.id)
+                .all()
+            )
+            for (hid,) in hijos:
+                if hid not in ids:
+                    ids.append(hid)
         emp = db.query(models.Empleado).options(joinedload(models.Empleado.puesto_rel)).filter(
             models.Empleado.id == empleado_id
         ).first()

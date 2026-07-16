@@ -20,8 +20,40 @@ import {
   rhMobileTabPill,
   rhMobileTabScroll,
 } from '../rh/rhMobileStyles';
-const toLocalDate = (iso: string) =>
-  new Date(iso.endsWith('Z') || iso.includes('+') ? iso : iso + 'Z');
+
+/** Fecha/hora de actividad: siempre en zona México. */
+const fmtDate = (iso: string) => {
+  const s = String(iso);
+  const hasTz = s.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(s);
+  const d = new Date(hasTz ? s : s);
+  return d.toLocaleString('es-MX', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZone: 'America/Mexico_City',
+  });
+};
+
+const toLocalDate = (iso: string) => {
+  const s = String(iso);
+  const hasTz = s.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(s);
+  return new Date(hasTz ? s : s);
+};
+
+/** Extrae la empresa del empleado afectado desde el contexto (JSON) del log, si existe. */
+const extraerEmpresaContexto = (contexto?: string | null): string | null => {
+  if (!contexto) return null;
+  try {
+    const obj = JSON.parse(contexto);
+    const empresa = obj?.empleado_afectado_empresa;
+    return typeof empresa === 'string' && empresa.trim() ? empresa.trim() : null;
+  } catch {
+    return null;
+  }
+};
 
 const ACTIVIDAD_PAGE_SIZE = 50;
 
@@ -49,12 +81,6 @@ function filtrarDispositivosConfiguracion(list: Dispositivo[]): Dispositivo[] {
     (d) => (d.nombre || '').trim() !== NOMBRE_DISPOSITIVO_IMPORTACION_HISTORICA,
   );
 }
-
-const fmtDate = (iso: string) =>
-  toLocalDate(iso).toLocaleString('es-MX', {
-    day: '2-digit', month: '2-digit', year: 'numeric',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-  });
 
 type ConfigTab = 'dispositivos' | 'empresas' | 'horarios' | 'eventos_especiales' | 'usuarios_especiales' | 'soporte' | 'actividad';
 type EventosEspecialesTab = 'festivos' | 'vacaciones_generales' | 'checadas_especiales';
@@ -334,6 +360,12 @@ export const ConfiguracionPage = () => {
   const [loadingUsuarioEspecialDetalle, setLoadingUsuarioEspecialDetalle] = useState(false);
   /** Copia inicial al abrir «Ver» (evita perder empresa/depto/puesto al desmarcar director). */
   const [usuarioEspecialEditSnapshot, setUsuarioEspecialEditSnapshot] = useState<UsuarioEspecialFormState | null>(null);
+  const [passwordTemporalInfo, setPasswordTemporalInfo] = useState<{
+    nombre: string;
+    password: string;
+    mensaje: string;
+  } | null>(null);
+  const [passwordCopiada, setPasswordCopiada] = useState(false);
   const [usuarioEspecialForm, setUsuarioEspecialForm] = useState<UsuarioEspecialFormState>(emptyUsuarioEspecialForm());
   const [togglingEspecial, setTogglingEspecial] = useState<number | null>(null);
 
@@ -345,10 +377,8 @@ export const ConfiguracionPage = () => {
   const [loadingActividad, setLoadingActividad] = useState(false);
   const [purgingActividad, setPurgingActividad] = useState(false);
   const [limpiezaCategoria, setLimpiezaCategoria] = useState('');
-  const [limpiezaDias, setLimpiezaDias] = useState(30);
+  const [limpiezaDias, setLimpiezaDias] = useState(730);
   const [limpiezaAntiguosSoloCat, setLimpiezaAntiguosSoloCat] = useState('');
-  const [showActividadVaciarModal, setShowActividadVaciarModal] = useState(false);
-  const [vaciarConfirmInput, setVaciarConfirmInput] = useState('');
 
   // ── Métricas (dentro de Actividad) ───────────────────────────────────────────
   interface MetricasData {
@@ -544,11 +574,13 @@ export const ConfiguracionPage = () => {
   };
 
   const populateUsuarioEspecialFormFromEmpleado = (emp: EmpleadoResponse): UsuarioEspecialFormState => {
-    const esDir = (emp.puesto?.nombre || '').trim().toLowerCase() === 'director';
+    const puestoN = (emp.puesto?.nombre || '').trim().toLowerCase();
+    const esDir = puestoN === 'director';
+    const usaSupervision = esDir || puestoN === 'subdirector' || puestoN === 'gerente general';
     const sup =
       emp.empresas_supervisadas_ids && emp.empresas_supervisadas_ids.length > 0
         ? [...emp.empresas_supervisadas_ids]
-        : esDir && emp.empresa_id
+        : usaSupervision && emp.empresa_id
           ? [emp.empresa_id]
           : [];
     return {
@@ -640,7 +672,6 @@ export const ConfiguracionPage = () => {
         const deptId = primerDepartamentoActivoEmpresa(empresaPrimaria)!;
         const payload: UsuarioEspecialCreate = {
           ...base,
-          password: usuarioEspecialForm.password.trim() || undefined,
           empresa_id: empresaPrimaria,
           departamento_id: deptId,
           puesto_id: pid,
@@ -648,7 +679,7 @@ export const ConfiguracionPage = () => {
         };
         if (usuarioEspecialModalMode === 'create') {
           await api.post('/personal/usuarios-especiales', payload);
-          alert('Usuario especial creado');
+          alert('Usuario especial creado. Debe cambiar la contraseña temporal al primer ingreso.');
         } else {
           const putBody: Record<string, unknown> = {
             ...base,
@@ -657,7 +688,6 @@ export const ConfiguracionPage = () => {
             puesto_id: pid,
             empresas_supervision_ids: [...ids],
           };
-          if (usuarioEspecialForm.password.trim()) putBody.password = usuarioEspecialForm.password.trim();
           await api.put(`/personal/empleados/${editingUsuarioEspecialId}`, putBody);
           alert('Usuario especial actualizado');
         }
@@ -668,19 +698,26 @@ export const ConfiguracionPage = () => {
           return;
         }
         const pr = puestos.find((x) => x.id === Number(usuarioEspecialForm.puesto_id));
+        const puestoN = (pr?.nombre || '').trim().toLowerCase();
+        const usaSupervision = puestoN === 'director' || puestoN === 'subdirector' || puestoN === 'gerente general';
         const payload: UsuarioEspecialCreate = {
           ...base,
-          password: usuarioEspecialForm.password.trim() || undefined,
           empresa_id: Number(usuarioEspecialForm.empresa_id),
           departamento_id: Number(usuarioEspecialForm.departamento_id),
           puesto_id: Number(usuarioEspecialForm.puesto_id),
         };
-        if (pr && (pr.nombre || '').trim().toLowerCase() === 'director') {
-          payload.empresas_supervision_ids = [Number(usuarioEspecialForm.empresa_id)];
+        if (usaSupervision) {
+          const ids = usuarioEspecialForm.empresas_supervision_ids.length > 0
+            ? [...usuarioEspecialForm.empresas_supervision_ids]
+            : [Number(usuarioEspecialForm.empresa_id)];
+          if (!ids.includes(Number(usuarioEspecialForm.empresa_id))) {
+            ids.push(Number(usuarioEspecialForm.empresa_id));
+          }
+          payload.empresas_supervision_ids = ids;
         }
         if (usuarioEspecialModalMode === 'create') {
           await api.post('/personal/usuarios-especiales', payload);
-          alert('Usuario especial creado');
+          alert('Usuario especial creado. Debe cambiar la contraseña temporal al primer ingreso.');
         } else {
           const putBody: Record<string, unknown> = {
             ...base,
@@ -688,10 +725,15 @@ export const ConfiguracionPage = () => {
             departamento_id: Number(usuarioEspecialForm.departamento_id),
             puesto_id: Number(usuarioEspecialForm.puesto_id),
           };
-          if (pr && (pr.nombre || '').trim().toLowerCase() === 'director') {
-            putBody.empresas_supervision_ids = [Number(usuarioEspecialForm.empresa_id)];
+          if (usaSupervision) {
+            const ids = usuarioEspecialForm.empresas_supervision_ids.length > 0
+              ? [...usuarioEspecialForm.empresas_supervision_ids]
+              : [Number(usuarioEspecialForm.empresa_id)];
+            if (!ids.includes(Number(usuarioEspecialForm.empresa_id))) {
+              ids.push(Number(usuarioEspecialForm.empresa_id));
+            }
+            putBody.empresas_supervision_ids = ids;
           }
-          if (usuarioEspecialForm.password.trim()) putBody.password = usuarioEspecialForm.password.trim();
           await api.put(`/personal/empleados/${editingUsuarioEspecialId}`, putBody);
           alert('Usuario especial actualizado');
         }
@@ -2303,14 +2345,41 @@ export const ConfiguracionPage = () => {
                       <input style={inputStyle} value={usuarioEspecialForm.username} onChange={e => setUsuarioEspecialForm(p => ({ ...p, username: e.target.value.toLowerCase() }))} placeholder="Se autogenera si se deja vacío" />
                     </div>
                     <div>
-                      <label style={labelStyle}>Contraseña (opcional)</label>
-                      <input
-                        style={inputStyle}
-                        type="password"
-                        value={usuarioEspecialForm.password}
-                        onChange={e => setUsuarioEspecialForm(p => ({ ...p, password: e.target.value }))}
-                        placeholder={usuarioEspecialModalMode === 'edit' ? 'Dejar vacío para no cambiar' : 'Si se omite, se usa un valor interno'}
-                      />
+                      <label style={labelStyle}>Acceso (contraseña)</label>
+                      {usuarioEspecialModalMode === 'edit' && editingUsuarioEspecialId != null ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (!window.confirm('¿Generar contraseña temporal? El usuario deberá cambiarla al entrar.')) return;
+                              try {
+                                const res = await api.post<{ password_temporal: string; mensaje: string }>(
+                                  `/personal/empleados/${editingUsuarioEspecialId}/restablecer-password`,
+                                );
+                                setPasswordCopiada(false);
+                                setPasswordTemporalInfo({
+                                  nombre: `${usuarioEspecialForm.nombre} ${usuarioEspecialForm.apellido_paterno || ''}`.trim(),
+                                  password: res.data.password_temporal,
+                                  mensaje: res.data.mensaje,
+                                });
+                              } catch (err: unknown) {
+                                const e2 = err as { response?: { data?: { detail?: string } } };
+                                alert(e2.response?.data?.detail || 'No se pudo restablecer');
+                              }
+                            }}
+                            style={{ ...btnSecondary, width: '100%', height: 38 }}
+                          >
+                            Restablecer temporal
+                          </button>
+                          <p style={{ margin: '6px 0 0', fontSize: '0.75rem', color: '#6b7280' }}>
+                            No se fija la clave definitiva desde aquí.
+                          </p>
+                        </>
+                      ) : (
+                        <p style={{ margin: 0, fontSize: '0.82rem', color: '#6b7280', lineHeight: 1.4 }}>
+                          Al crear se asigna contraseña temporal interna; el usuario debe cambiarla al entrar.
+                        </p>
+                      )}
                     </div>
                     <div style={{ gridColumn: '1 / -1' }}>
                       <label style={{ display: 'flex', alignItems: 'flex-start', gap: '10px', cursor: 'pointer', fontSize: '0.9rem', fontWeight: 500, color: '#374151' }}>
@@ -2413,7 +2482,19 @@ export const ConfiguracionPage = () => {
                           <select
                             style={inputStyle}
                             value={usuarioEspecialForm.puesto_id}
-                            onChange={e => setUsuarioEspecialForm(p => ({ ...p, puesto_id: e.target.value ? Number(e.target.value) : '' }))}
+                            onChange={e => {
+                              const pid = e.target.value ? Number(e.target.value) : '';
+                              const pr = puestos.find((x) => x.id === pid);
+                              const pn = (pr?.nombre || '').trim().toLowerCase();
+                              const usaSup = pn === 'subdirector' || pn === 'gerente general' || pn === 'director';
+                              setUsuarioEspecialForm(p => ({
+                                ...p,
+                                puesto_id: pid,
+                                empresas_supervision_ids: usaSup && p.empresa_id
+                                  ? (p.empresas_supervision_ids.length ? p.empresas_supervision_ids : [Number(p.empresa_id)])
+                                  : [],
+                              }));
+                            }}
                             required
                             disabled={usuarioEspecialForm.empresa_id === '' || usuarioEspecialForm.departamento_id === ''}
                           >
@@ -2421,6 +2502,32 @@ export const ConfiguracionPage = () => {
                             {puestosPorEmpresaDeptoEspecial.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
                           </select>
                         </div>
+                        {(() => {
+                          const pr = puestos.find((x) => x.id === Number(usuarioEspecialForm.puesto_id));
+                          const pn = (pr?.nombre || '').trim().toLowerCase();
+                          const showSup = pn === 'subdirector' || pn === 'gerente general';
+                          if (!showSup) return null;
+                          return (
+                            <div style={{ gridColumn: '1 / -1' }}>
+                              <label style={labelStyle}>Empresas que gerencia / supervisa *</label>
+                              <p style={{ margin: '0 0 8px', fontSize: '0.82rem', color: '#6b7280' }}>
+                                Marca las razones sociales bajo su alcance (igual que Directores). La empresa de registro siempre se incluye.
+                              </p>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: 220, overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: 8, padding: '10px 12px', background: '#fafafa' }}>
+                                {empresas.filter((em) => em.activo).map((em) => (
+                                  <label key={em.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '0.88rem' }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={usuarioEspecialForm.empresas_supervision_ids.includes(em.id)}
+                                      onChange={() => toggleEmpresaSupervision(em.id)}
+                                    />
+                                    <span>{em.nombre}</span>
+                                  </label>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </>
                     )}
                   </div>
@@ -2437,6 +2544,68 @@ export const ConfiguracionPage = () => {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {passwordTemporalInfo && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={() => setPasswordTemporalInfo(null)}
+        >
+          <div
+            style={{ background: '#fff', borderRadius: 12, padding: 24, width: '100%', maxWidth: 420, boxShadow: '0 8px 30px rgba(0,0,0,0.18)' }}
+            onClick={e => e.stopPropagation()}
+          >
+            <h3 style={{ margin: '0 0 8px', fontSize: '1.1rem', color: '#1e3a5f' }}>Contraseña temporal</h3>
+            <p style={{ margin: '0 0 6px', fontSize: '0.88rem', color: '#374151' }}>
+              Usuario: <strong>{passwordTemporalInfo.nombre}</strong>
+            </p>
+            <p style={{ margin: '0 0 14px', fontSize: '0.82rem', color: '#6b7280', lineHeight: 1.4 }}>
+              {passwordTemporalInfo.mensaje} Cópiala ahora; no se volverá a mostrar.
+            </p>
+            <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#374151', marginBottom: 4 }}>
+              Clave temporal
+            </label>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+              <input
+                id="password-temporal-input-cfg"
+                readOnly
+                value={passwordTemporalInfo.password}
+                onFocus={e => e.currentTarget.select()}
+                style={{
+                  flex: 1,
+                  height: 40,
+                  padding: '0 12px',
+                  fontSize: '1.05rem',
+                  fontFamily: 'ui-monospace, Consolas, monospace',
+                  letterSpacing: '0.04em',
+                  border: '1px solid #93c5fd',
+                  borderRadius: 8,
+                  background: '#f0f9ff',
+                  color: '#0f172a',
+                }}
+              />
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(passwordTemporalInfo.password);
+                    setPasswordCopiada(true);
+                  } catch {
+                    const el = document.getElementById('password-temporal-input-cfg') as HTMLInputElement | null;
+                    el?.focus();
+                    el?.select();
+                  }
+                }}
+                style={{ ...btnSuccess, whiteSpace: 'nowrap', height: 40, padding: '0 14px' }}
+              >
+                {passwordCopiada ? 'Copiada' : 'Copiar'}
+              </button>
+            </div>
+            <button type="button" onClick={() => setPasswordTemporalInfo(null)} style={{ ...btnSecondary, width: '100%' }}>
+              Cerrar
+            </button>
+          </div>
         </div>
       )}
 
@@ -2717,11 +2886,11 @@ export const ConfiguracionPage = () => {
           <div style={{ padding: '14px 16px', backgroundColor: '#fffbeb', borderRadius: '8px', marginBottom: '18px', border: '1px solid #fcd34d' }}>
             <p style={{ margin: '0 0 10px', fontSize: '0.88rem', fontWeight: 600, color: '#92400e' }}>Limpieza de registros</p>
             <p style={{ margin: '0 0 12px', fontSize: '0.82rem', color: '#78350f' }}>
-              Quita datos que ya no necesites (por ejemplo registros antiguos). Las acciones no se pueden deshacer.
+              Se conserva evidencia mínima de <strong>2 años</strong>. Solo se pueden eliminar registros con más de 730 días. No es posible vaciar todo el historial.
             </p>
             <div style={actividadToolbarScroll}>
               <div style={actividadToolbarRow}>
-                <span style={actividadToolbarLabel}>Borrar categoría</span>
+                <span style={actividadToolbarLabel}>Borrar categoría (&gt;2 años)</span>
                 <select
                   style={{ ...actividadSelectInline, minWidth: '140px' }}
                   value={limpiezaCategoria}
@@ -2737,25 +2906,23 @@ export const ConfiguracionPage = () => {
                   disabled={purgingActividad || !limpiezaCategoria}
                   onClick={() => {
                     if (!limpiezaCategoria) return;
-                    if (!confirm(`¿Eliminar todos los registros con categoría «${limpiezaCategoria}»?`)) return;
+                    if (!confirm(`¿Eliminar de la categoría «${limpiezaCategoria}» solo los registros con más de 2 años? Los más recientes se conservan.`)) return;
                     void ejecutarPurgarActividad({ modo: 'categoria', categoria: limpiezaCategoria });
                   }}
                   style={{ padding: '9px 14px', backgroundColor: '#ea580c', color: 'white', border: 'none', borderRadius: '7px', cursor: purgingActividad || !limpiezaCategoria ? 'not-allowed' : 'pointer', fontWeight: 600, fontSize: '0.88rem', opacity: purgingActividad || !limpiezaCategoria ? 0.55 : 1, whiteSpace: 'nowrap' }}
                 >
-                  {purgingActividad ? '…' : 'Eliminar categoría'}
+                  {purgingActividad ? '…' : 'Eliminar antiguos de categoría'}
                 </button>
                 <span aria-hidden style={{ width: 1, height: 26, background: '#fcd34d', flexShrink: 0, margin: '0 4px' }} />
                 <span style={actividadToolbarLabel}>Antigüedad</span>
                 <select
-                  style={{ ...actividadSelectInline, minWidth: '108px' }}
+                  style={{ ...actividadSelectInline, minWidth: '140px' }}
                   value={String(limpiezaDias)}
                   onChange={(e) => setLimpiezaDias(Number(e.target.value))}
                 >
-                  <option value="7">7 días</option>
-                  <option value="30">30 días</option>
-                  <option value="90">90 días</option>
-                  <option value="180">180 días</option>
-                  <option value="365">365 días</option>
+                  <option value="730">2 años (730 días)</option>
+                  <option value="1095">3 años</option>
+                  <option value="1825">5 años</option>
                 </select>
                 <span style={actividadToolbarLabel}>Solo cat.</span>
                 <select
@@ -2775,7 +2942,7 @@ export const ConfiguracionPage = () => {
                     const solo = limpiezaAntiguosSoloCat
                       ? ` y categoría «${limpiezaAntiguosSoloCat}»`
                       : '';
-                    if (!confirm(`¿Eliminar registros con más de ${limpiezaDias} días${solo}?`)) return;
+                    if (!confirm(`¿Eliminar registros con más de ${limpiezaDias} días${solo}? Los de menos de 2 años nunca se borran.`)) return;
                     void ejecutarPurgarActividad({
                       modo: 'antiguos',
                       dias: limpiezaDias,
@@ -2787,19 +2954,6 @@ export const ConfiguracionPage = () => {
                   {purgingActividad ? '…' : 'Eliminar antiguos'}
                 </button>
               </div>
-            </div>
-            <div style={{ marginTop: '14px', paddingTop: '12px', borderTop: '1px solid #fde68a' }}>
-              <button
-                type="button"
-                disabled={purgingActividad}
-                onClick={() => {
-                  setVaciarConfirmInput('');
-                  setShowActividadVaciarModal(true);
-                }}
-                style={{ padding: '8px 14px', backgroundColor: '#b91c1c', color: 'white', border: 'none', borderRadius: '6px', cursor: purgingActividad ? 'not-allowed' : 'pointer', fontSize: '0.85rem', fontWeight: 600 }}
-              >
-                Vaciar historial completo…
-              </button>
             </div>
           </div>
           {loadingActividad && actividadItems.length === 0 ? (
@@ -2816,6 +2970,7 @@ export const ConfiguracionPage = () => {
                 const displayEmpleado = row.empleado_nombre
                   ? `${row.empleado_nombre}${row.empleado_numero ? ` (${row.empleado_numero})` : ''}`
                   : row.empleado_username || (row.empleado_id != null ? `ID ${row.empleado_id}` : '—');
+                const empresaContexto = extraerEmpresaContexto(row.contexto);
                 return (
                   <div key={row.id} style={rhMobileCard}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
@@ -2823,6 +2978,9 @@ export const ConfiguracionPage = () => {
                       <span style={{ fontSize: '0.72rem', color: '#64748b' }}>{row.categoria}</span>
                     </div>
                     <div style={{ fontSize: '0.82rem', color: '#1f2937', lineHeight: 1.35, marginBottom: 6 }}>{row.mensaje}</div>
+                    {empresaContexto ? (
+                      <div style={{ fontSize: '0.72rem', color: '#6b7280', marginBottom: 6 }}>{empresaContexto}</div>
+                    ) : null}
                     <div style={rhMobileCardSub}>{fmtDate(row.created_at)}</div>
                     <div style={rhMobileCardRow}><span>Empleado</span><span style={{ textAlign: 'right', maxWidth: '55%' }}>{displayEmpleado}</span></div>
                     {(row.ruta || row.metodo_http) && (
@@ -2861,6 +3019,7 @@ export const ConfiguracionPage = () => {
                         : row.empleado_id != null
                           ? `ID ${row.empleado_id}`
                           : '—';
+                    const empresaContexto = extraerEmpresaContexto(row.contexto);
                     return (
                       <tr key={row.id} style={{ borderBottom: '1px solid #eee', verticalAlign: 'top' }}>
                         <td style={{ padding: '9px 12px', whiteSpace: 'nowrap' }}>{fmtDate(row.created_at)}</td>
@@ -2870,7 +3029,12 @@ export const ConfiguracionPage = () => {
                           </span>
                         </td>
                         <td style={{ padding: '9px 12px', color: '#444' }}>{row.categoria}</td>
-                        <td style={{ padding: '9px 12px', maxWidth: '420px', wordBreak: 'break-word' }}>{row.mensaje}</td>
+                        <td style={{ padding: '9px 12px', maxWidth: '420px', wordBreak: 'break-word' }}>
+                          <div>{row.mensaje}</div>
+                          {empresaContexto ? (
+                            <div style={{ fontSize: '0.75rem', color: '#6b7280', marginTop: 2 }}>{empresaContexto}</div>
+                          ) : null}
+                        </td>
                         <td style={{ padding: '9px 12px' }}>
                           <div style={{ fontWeight: 600, color: '#1f2937' }}>{displayEmpleado}</div>
                           {(row.empleado_username || row.empleado_id != null) && (
@@ -2918,52 +3082,6 @@ export const ConfiguracionPage = () => {
             </div>
           </div>
 
-          {showActividadVaciarModal && (
-            <div style={modalOverlay} onClick={() => { setShowActividadVaciarModal(false); setVaciarConfirmInput(''); }}>
-              <div style={{ ...modalSmall, maxWidth: '440px' }} onClick={(e) => e.stopPropagation()}>
-                <h3 style={{ margin: '0 0 8px', fontSize: '1.1rem', color: '#991b1b' }}>Vaciar todo el historial</h3>
-                <p style={{ margin: '0 0 12px', fontSize: '0.88rem', color: '#444' }}>
-                  Se borrarán <strong>todos</strong> los registros de actividad. Escriba <strong>BORRAR_TODO</strong> para confirmar.
-                </p>
-                <input
-                  type="text"
-                  value={vaciarConfirmInput}
-                  onChange={(e) => setVaciarConfirmInput(e.target.value)}
-                  placeholder="BORRAR_TODO"
-                  style={{ ...inputStyle, marginBottom: '16px' }}
-                  autoComplete="off"
-                />
-                <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-                  <button type="button" onClick={() => { setShowActividadVaciarModal(false); setVaciarConfirmInput(''); }} style={btnSecondary}>
-                    Cancelar
-                  </button>
-                  <button
-                    type="button"
-                    disabled={purgingActividad || vaciarConfirmInput.trim() !== 'BORRAR_TODO'}
-                    onClick={async () => {
-                      if (vaciarConfirmInput.trim() !== 'BORRAR_TODO') return;
-                      const ok = await ejecutarPurgarActividad({ modo: 'todo', confirmacion: 'BORRAR_TODO' });
-                      if (ok) {
-                        setShowActividadVaciarModal(false);
-                        setVaciarConfirmInput('');
-                      }
-                    }}
-                    style={{
-                      padding: '9px 18px',
-                      backgroundColor: vaciarConfirmInput.trim() === 'BORRAR_TODO' && !purgingActividad ? '#b91c1c' : '#9ca3af',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '7px',
-                      cursor: vaciarConfirmInput.trim() === 'BORRAR_TODO' && !purgingActividad ? 'pointer' : 'not-allowed',
-                      fontWeight: 600,
-                    }}
-                  >
-                    {purgingActividad ? '…' : 'Eliminar todo'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
           {/* cierre del bloque logs */}
           </>}
 

@@ -39,6 +39,62 @@ def on_startup():
 
     Base.metadata.create_all(bind=engine)
 
+    # Columnas nuevas en tablas ya existentes (create_all no las agrega).
+    try:
+        from sqlalchemy import text, inspect as sa_inspect
+        insp = sa_inspect(engine)
+        emp_cols = {c["name"] for c in insp.get_columns("empleados")} if insp.has_table("empleados") else set()
+        if "must_change_password" not in emp_cols:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE empleados ADD COLUMN must_change_password TINYINT(1) NOT NULL DEFAULT 0"
+                ))
+        vac_cols = (
+            {c["name"] for c in insp.get_columns("solicitudes_vacaciones")}
+            if insp.has_table("solicitudes_vacaciones") else set()
+        )
+        for col, ddl in (
+            ("aceptacion_solicitante_at", "DATETIME NULL"),
+            ("aceptacion_solicitante_ip", "VARCHAR(64) NULL"),
+            ("aceptacion_solicitante_texto", "TEXT NULL"),
+            ("aceptacion_jefe_at", "DATETIME NULL"),
+            ("aceptacion_jefe_ip", "VARCHAR(64) NULL"),
+            ("aceptacion_rh_at", "DATETIME NULL"),
+            ("aceptacion_rh_ip", "VARCHAR(64) NULL"),
+            ("rh_confirmador_id", "INT NULL"),
+        ):
+            if col not in vac_cols:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE solicitudes_vacaciones ADD COLUMN {col} {ddl}"))
+        asis_cols = (
+            {c["name"] for c in insp.get_columns("asistencias")}
+            if insp.has_table("asistencias") else set()
+        )
+        for col, ddl in (
+            ("motivo_remoto", "VARCHAR(20) NULL"),
+            ("motivo_remoto_detalle", "VARCHAR(255) NULL"),
+            ("latitud", "DOUBLE NULL"),
+            ("longitud", "DOUBLE NULL"),
+            ("geo_precision_m", "DOUBLE NULL"),
+        ):
+            if col not in asis_cols:
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE asistencias ADD COLUMN {col} {ddl}"))
+        depto_cols = (
+            {c["name"] for c in insp.get_columns("departamentos")}
+            if insp.has_table("departamentos") else set()
+        )
+        if "padre_id" not in depto_cols:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE departamentos ADD COLUMN padre_id INT NULL, "
+                    "ADD INDEX ix_departamentos_padre_id (padre_id), "
+                    "ADD CONSTRAINT fk_departamentos_padre_id "
+                    "FOREIGN KEY (padre_id) REFERENCES departamentos(id)"
+                ))
+    except Exception:
+        pass
+
     db = SessionLocal()
     try:
         rol = db.query(pm.Rol).filter(pm.Rol.nombre == "Administrador").first()

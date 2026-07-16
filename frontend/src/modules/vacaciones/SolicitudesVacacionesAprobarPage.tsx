@@ -82,6 +82,8 @@ export const SolicitudesVacacionesAprobarPage = ({ embeddedRh = false }: { embed
   const [modalDepositarPrestamo, setModalDepositarPrestamo] = useState<SolicitudPrestamo | null>(null);
   const [referenciaBancaria, setReferenciaBancaria] = useState('');
   const [aprobacionComentarios, setAprobacionComentarios] = useState('');
+  const [aprobacionAcepto, setAprobacionAcepto] = useState(false);
+  const [aprobacionPassword, setAprobacionPassword] = useState('');
   const [aprobando, setAprobando] = useState(false);
 
   const cargarDatos = useCallback(async () => {
@@ -146,15 +148,27 @@ export const SolicitudesVacacionesAprobarPage = ({ embeddedRh = false }: { embed
 
   const handleAprobarRechazar = (aprobar: boolean) => {
     if (!modalAprobar || !authMe) return;
+    if (!aprobacionAcepto) {
+      alert('Debes marcar la casilla de aceptación para continuar.');
+      return;
+    }
+    if (!aprobacionPassword.trim()) {
+      alert('Indica tu contraseña para confirmar la decisión.');
+      return;
+    }
     setAprobando(true);
     api.put(`/vacaciones/solicitudes/${modalAprobar.id}/aprobar?jefe_id=${authMe.id}`, {
       aprobar,
       comentarios: aprobacionComentarios.trim() || null,
+      acepto: true,
+      password: aprobacionPassword,
     })
       .then(() => {
         cargarDatos();
         setModalAprobar(null);
         setAprobacionComentarios('');
+        setAprobacionAcepto(false);
+        setAprobacionPassword('');
       })
       .catch((err) => {
         const detail = err.response?.data?.detail;
@@ -319,7 +333,7 @@ export const SolicitudesVacacionesAprobarPage = ({ embeddedRh = false }: { embed
             )}
             <button
               type="button"
-              onClick={() => { setModalAprobar(s); setAprobacionComentarios(''); }}
+              onClick={() => { setModalAprobar(s); setAprobacionComentarios(''); setAprobacionAcepto(false); setAprobacionPassword(''); }}
               style={{ ...rhMobileBtnPrimary, marginTop: 12, backgroundColor: '#0d9488' }}
             >
               Aprobar / Rechazar
@@ -507,7 +521,7 @@ export const SolicitudesVacacionesAprobarPage = ({ embeddedRh = false }: { embed
                     <td style={{ ...td, maxWidth: 180 }}>{s.motivo || '—'}</td>
                     <td style={{ ...td, textAlign: 'center' }}>
                       <button
-                        onClick={() => { setModalAprobar(s); setAprobacionComentarios(''); }}
+                        onClick={() => { setModalAprobar(s); setAprobacionComentarios(''); setAprobacionAcepto(false); setAprobacionPassword(''); }}
                         style={{
                           padding: '6px 14px',
                           backgroundColor: '#0d9488',
@@ -688,7 +702,7 @@ export const SolicitudesVacacionesAprobarPage = ({ embeddedRh = false }: { embed
       {modalAprobar && (
         <div
           style={rhMobileSheetOverlay(isMobile)}
-          onClick={() => setModalAprobar(null)}
+          onClick={() => { setModalAprobar(null); setAprobacionAcepto(false); setAprobacionPassword(''); }}
           role="presentation"
         >
           <div
@@ -713,10 +727,28 @@ export const SolicitudesVacacionesAprobarPage = ({ embeddedRh = false }: { embed
                 style={{ width: '100%', padding: 10, border: '1px solid #ddd', borderRadius: 6, resize: 'vertical', fontSize: '0.9rem' }}
               />
             </div>
+            <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginBottom: 12, fontSize: '0.85rem', color: '#374151', cursor: 'pointer' }}>
+              <input type="checkbox" checked={aprobacionAcepto} onChange={(e) => setAprobacionAcepto(e.target.checked)}
+                style={{ marginTop: 3, width: 16, height: 16, flexShrink: 0 }} />
+              <span>
+                Confirmo mi decisión sobre esta solicitud de vacaciones y la autentico con mi contraseña.
+              </span>
+            </label>
+            <div style={{ marginBottom: 14 }}>
+              <label style={{ display: 'block', fontWeight: 600, marginBottom: 6, fontSize: '0.9rem' }}>Contraseña</label>
+              <input
+                type="password"
+                value={aprobacionPassword}
+                onChange={(e) => setAprobacionPassword(e.target.value)}
+                autoComplete="current-password"
+                placeholder="Tu contraseña de acceso"
+                style={{ width: '100%', padding: 10, border: '1px solid #ddd', borderRadius: 6, fontSize: '0.9rem', boxSizing: 'border-box' }}
+              />
+            </div>
             <div style={{ display: 'flex', gap: 10, justifyContent: isMobile ? 'stretch' : 'flex-end', flexDirection: isMobile ? 'column-reverse' : 'row' }}>
               <button
                 type="button"
-                onClick={() => setModalAprobar(null)}
+                onClick={() => { setModalAprobar(null); setAprobacionAcepto(false); setAprobacionPassword(''); }}
                 style={isMobile ? { ...rhMobileBtnSecondary, minHeight: 44, width: '100%' } : { padding: '9px 18px', backgroundColor: '#e5e7eb', color: '#374151', border: 'none', borderRadius: 6, cursor: 'pointer' }}
               >
                 Cancelar
@@ -725,16 +757,16 @@ export const SolicitudesVacacionesAprobarPage = ({ embeddedRh = false }: { embed
                 <button
                   type="button"
                   onClick={() => handleAprobarRechazar(false)}
-                  disabled={aprobando}
-                  style={isMobile ? { ...rhMobileBtnPrimary, backgroundColor: '#dc2626' } : { padding: '9px 18px', backgroundColor: '#dc2626', color: 'white', border: 'none', borderRadius: 6, cursor: aprobando ? 'not-allowed' : 'pointer' }}
+                  disabled={aprobando || !aprobacionAcepto || !aprobacionPassword.trim()}
+                  style={isMobile ? { ...rhMobileBtnPrimary, backgroundColor: '#dc2626', opacity: (!aprobacionAcepto || !aprobacionPassword.trim()) ? 0.6 : 1 } : { padding: '9px 18px', backgroundColor: '#dc2626', color: 'white', border: 'none', borderRadius: 6, cursor: aprobando ? 'not-allowed' : 'pointer', opacity: (!aprobacionAcepto || !aprobacionPassword.trim()) ? 0.6 : 1 }}
                 >
                   {aprobando ? '...' : 'Rechazar'}
                 </button>
                 <button
                   type="button"
                   onClick={() => handleAprobarRechazar(true)}
-                  disabled={aprobando}
-                  style={isMobile ? { ...rhMobileBtnPrimary, backgroundColor: '#16a34a' } : { padding: '9px 18px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: 6, cursor: aprobando ? 'not-allowed' : 'pointer' }}
+                  disabled={aprobando || !aprobacionAcepto || !aprobacionPassword.trim()}
+                  style={isMobile ? { ...rhMobileBtnPrimary, backgroundColor: '#16a34a', opacity: (!aprobacionAcepto || !aprobacionPassword.trim()) ? 0.6 : 1 } : { padding: '9px 18px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: 6, cursor: aprobando ? 'not-allowed' : 'pointer', opacity: (!aprobacionAcepto || !aprobacionPassword.trim()) ? 0.6 : 1 }}
                 >
                   {aprobando ? '...' : 'Aprobar'}
                 </button>

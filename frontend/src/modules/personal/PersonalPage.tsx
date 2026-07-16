@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, type Dispatch, type SetStateAction } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, type Dispatch, type SetStateAction } from 'react';
 import api from '../../services/api';
 import { descargarArchivo, XLSX_MIME } from '../../utils/download';
 import { parseTimestampForMexico, toMexicoDateString } from '../../utils/date';
@@ -285,6 +285,13 @@ const emptyForm: FormData = {
   email: '', telefono: '', telefono_empresa_asignado: '', username: '', empresa_id: undefined, departamento_id: undefined, puesto_id: undefined, curp: '', rfc: '', nss: '',
   direccion: '', colonia: '', cp: '', ciudad: '', fecha_nacimiento: '', contacto_emergencia: '', telefono_emergencia: '',
   fecha_ingreso: '', registrar_en_checador: false, dispositivo_ids: [], password: '', horario_id: undefined, horario_sabado_id: null,
+  empresas_supervision_ids: [],
+};
+
+/** Director / Subdirector / Gerente General: eligen en qué empresas aparecen en el organigrama. */
+const puestoUsaEmpresasOrganigrama = (nombre?: string | null) => {
+  const n = (nombre || '').trim().toLowerCase();
+  return n === 'director' || n === 'subdirector' || n === 'gerente general';
 };
 
 const normalizeStr = (s: string) =>
@@ -504,9 +511,29 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
   const [importResult, setImportResult] = useState<any>(null);
 
   // Modal departamento (crear / editar)
+  // Jerarquía: Empresa → Departamento → Subdepartamentos (hijos). El padre del depto es la empresa.
   const [showDeptoModal, setShowDeptoModal] = useState(false);
   const [editingDeptoId, setEditingDeptoId] = useState<number | null>(null);
-  const [deptoForm, setDeptoForm] = useState({ nombre: '', empresa_id: 0 as number | undefined, jefe_id: null as number | null });
+  const [deptoForm, setDeptoForm] = useState({
+    nombre: '',
+    empresa_id: 0 as number | undefined,
+    jefe_id: null as number | null,
+    /** Solo si se edita un subdepartamento: a qué departamento pertenece. */
+    padre_id: null as number | null,
+  });
+  /** Nombres de subdeptos a crear junto con un departamento nuevo (aún sin id). */
+  const [subdeptosPendientes, setSubdeptosPendientes] = useState<string[]>([]);
+  const [nuevoSubNombre, setNuevoSubNombre] = useState('');
+  const [guardandoSub, setGuardandoSub] = useState(false);
+  /** Edición inline de un subdepartamento dentro del modal del departamento. */
+  const [editSubId, setEditSubId] = useState<number | null>(null);
+  const [editSubNombre, setEditSubNombre] = useState('');
+  const [passwordTemporalInfo, setPasswordTemporalInfo] = useState<{
+    nombre: string;
+    password: string;
+    mensaje: string;
+  } | null>(null);
+  const [passwordCopiada, setPasswordCopiada] = useState(false);
 
   // Modal puesto (crear / editar)
   const [showPuestoModal, setShowPuestoModal] = useState(false);
@@ -559,6 +586,9 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
   const [replicando, setReplicando] = useState(false);
   const [replicaOk, setReplicaOk] = useState<string | null>(null);
   const [, setEnrollId] = useState<number | null>(null);
+  // Re-enrolar huella: aviso cuando el agente termina de borrar la huella anterior
+  const [avisoReRegistro, setAvisoReRegistro] = useState<string | null>(null);
+  const prevBorradoPendiente = useRef(false);
 
   const loadData = useCallback(async () => {
     try {
@@ -678,9 +708,70 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
     if (replicaDevice != null && dispositivoYaTieneHuella(replicaDevice)) setReplicaDevice(null);
   }, [empleadoDispositivos, enrollDevice, replicaDevice, dispositivoYaTieneHuella]);
 
+  // Re-enrolar huella: mientras el agente no haya borrado la huella anterior
+  // (pending_delete_id != null), refrescar el estado cada 15 s. Al terminar el
+  // borrado, avisar que ya se puede capturar el nuevo dedo.
+  useEffect(() => {
+    if (!showDetalle || detalleTab !== 'huella' || !selectedEmpleado) return;
+    const hayBorradoPendiente = empleadoDispositivos.some(d => d.pending_delete_id != null);
+    if (!hayBorradoPendiente) {
+      if (prevBorradoPendiente.current) {
+        setAvisoReRegistro('La huella anterior ya se borró del checador. Ahora el empleado puede capturar el nuevo dedo en "Iniciar Registro de Huella".');
+        prevBorradoPendiente.current = false;
+      }
+      return;
+    }
+    prevBorradoPendiente.current = true;
+    setAvisoReRegistro(null);
+    const emp = selectedEmpleado;
+    const timer = setInterval(() => {
+      loadEmpleadoDispositivos(emp);
+      loadHuellaTemplates(emp);
+    }, 15000);
+    return () => clearInterval(timer);
+    // loadEmpleadoDispositivos/loadHuellaTemplates se declaran más abajo (no en deps para evitar TDZ)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showDetalle, detalleTab, selectedEmpleado, empleadoDispositivos]);
+
   const handleChange = (field: keyof FormData, value: string | boolean | number | number[] | null | undefined) => {
     const sanitized = typeof value === 'string' ? sanitizeText(value) : value;
-    setForm(prev => ({ ...prev, [field]: sanitized }));
+    setForm(prev => {
+      const next = { ...prev, [field]: sanitized };
+      if (field === 'empresa_id' && typeof sanitized === 'number') {
+        const puestoNombre = puestos.find(p => p.id === prev.puesto_id)?.nombre;
+        if (puestoUsaEmpresasOrganigrama(puestoNombre)) {
+          const s = new Set(prev.empresas_supervision_ids || []);
+          s.add(sanitized);
+          next.empresas_supervision_ids = [...s];
+        }
+      }
+      if (field === 'puesto_id') {
+        const puestoNombre = puestos.find(p => p.id === sanitized)?.nombre;
+        if (puestoUsaEmpresasOrganigrama(puestoNombre)) {
+          const actuales = prev.empresas_supervision_ids || [];
+          next.empresas_supervision_ids = actuales.length
+            ? actuales
+            : (prev.empresa_id ? [prev.empresa_id] : []);
+        } else {
+          next.empresas_supervision_ids = [];
+        }
+      }
+      return next;
+    });
+  };
+
+  const toggleEmpresaOrganigrama = (empresaId: number) => {
+    setForm(prev => {
+      const s = new Set(prev.empresas_supervision_ids || []);
+      if (s.has(empresaId)) {
+        // La empresa de registro no se puede quitar: siempre aparece ahí.
+        if (empresaId === prev.empresa_id) return prev;
+        s.delete(empresaId);
+      } else {
+        s.add(empresaId);
+      }
+      return { ...prev, empresas_supervision_ids: [...s] };
+    });
   };
 
   const toggleDeviceInForm = (deviceId: number) => {
@@ -767,9 +858,12 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
     }
     setSaving(true);
     try {
+      const puestoNombre = puestos.find(p => p.id === form.puesto_id)?.nombre;
+      const usaOrganigramaEmpresas = puestoUsaEmpresasOrganigrama(puestoNombre);
       const payload: Record<string, unknown> = {};
       for (const [key, val] of Object.entries(form)) {
         if (key === 'telefono_empresa_asignado') continue;
+        if (key === 'empresas_supervision_ids') continue;
         if (key === 'dispositivo_ids') {
           if (Array.isArray(val) && val.length > 0) payload[key] = val;
         } else if (key === 'horario_id' || key === 'horario_sabado_id') {
@@ -779,6 +873,19 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
         } else if (key === 'registrar_en_checador') {
           payload[key] = val;
         }
+      }
+      if (usaOrganigramaEmpresas) {
+        const ids = new Set(form.empresas_supervision_ids || []);
+        if (form.empresa_id) ids.add(form.empresa_id);
+        if (ids.size === 0) {
+          alert('Seleccione al menos una empresa donde deba aparecer en el organigrama.');
+          setSaving(false);
+          return;
+        }
+        payload.empresas_supervision_ids = [...ids];
+      } else if (editingId) {
+        // Si deja de ser Director/Subdirector/GG, limpia el alcance multi-empresa.
+        payload.empresas_supervision_ids = [];
       }
 
       if (isAdmin) {
@@ -791,6 +898,8 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
       }
 
       let savedEmpleadoId: number | null = editingId;
+      // Fase A: Admin/RH no fijan contraseña definitiva por este formulario.
+      delete payload.password;
       if (editingId) {
         delete payload.numero_empleado;
         delete payload.registrar_en_checador;
@@ -799,13 +908,15 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
       } else {
         const res = await api.post('/personal/empleados', payload);
         savedEmpleadoId = res.data?.id ?? null;
-        const devCount = form.dispositivo_ids.length;
         const usuario = (form.username || form.numero_empleado || '').trim() || form.numero_empleado;
-        const msgLogin = form.password?.trim()
-          ? `Ya puede hacer login con usuario "${usuario}" (o número de empleado) y la contraseña indicada.`
-          : `Ya puede hacer login con usuario y contraseña: ${form.numero_empleado}`;
+        const rfcHint = (form.rfc || '').trim().slice(0, 8);
+        const tempHint = rfcHint || form.numero_empleado;
         alert(
-          (form.registrar_en_checador && devCount > 0 ? `Empleado creado y agregado a ${devCount} checador(es). ` : 'Empleado creado. ') + msgLogin
+          (form.registrar_en_checador && form.dispositivo_ids.length > 0
+            ? `Empleado creado y agregado a ${form.dispositivo_ids.length} checador(es). `
+            : 'Empleado creado. ') +
+          `Usuario: "${usuario}". Contraseña temporal: ${tempHint}. ` +
+          'Debe cambiarla al primer inicio de sesión.'
         );
       }
       if (savedEmpleadoId && canEditNomina) {
@@ -817,7 +928,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
         }
       }
       if (editingId) {
-        alert(payload.password ? 'Empleado y contraseña actualizados' : 'Empleado actualizado');
+        alert('Empleado actualizado');
         if (showDetalle) {
           setShowDetalle(false);
           loadData();
@@ -919,17 +1030,155 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
     return d ? d.nombre : '-';
   };
 
+  /** Empresa → Departamento → Subdepartamento (si el empleado está en un hijo). */
+  const jerarquiaDepto = (deptoId?: number | null) => {
+    if (!deptoId) {
+      return { deptoNombre: '—', subNombre: null as string | null, deptoId: null as number | null, subId: null as number | null };
+    }
+    const actual = departamentos.find(d => d.id === deptoId);
+    if (!actual) {
+      return { deptoNombre: '—', subNombre: null, deptoId, subId: null };
+    }
+    if (actual.padre_id) {
+      const padre = departamentos.find(d => d.id === actual.padre_id);
+      return {
+        deptoId: actual.padre_id,
+        deptoNombre: padre?.nombre || actual.padre_nombre || '—',
+        subId: actual.id,
+        subNombre: actual.nombre,
+      };
+    }
+    return {
+      deptoId: actual.id,
+      deptoNombre: actual.nombre,
+      subId: null,
+      subNombre: null,
+    };
+  };
+
+  const textoDeptoEmpleado = (deptoId?: number | null) => jerarquiaDepto(deptoId).deptoNombre;
+  const textoSubDeptoEmpleado = (deptoId?: number | null) => jerarquiaDepto(deptoId).subNombre || '—';
+
   // ---- Departamento CRUD ----
+  const restablecerPasswordTemporal = async (empleadoId: number, nombreLabel: string) => {
+    if (!window.confirm(`¿Generar contraseña temporal para ${nombreLabel}?\nDeberá cambiarla al iniciar sesión.`)) return;
+    try {
+      const res = await api.post<{ password_temporal: string; mensaje: string }>(
+        `/personal/empleados/${empleadoId}/restablecer-password`,
+      );
+      setPasswordCopiada(false);
+      setPasswordTemporalInfo({
+        nombre: nombreLabel,
+        password: res.data.password_temporal,
+        mensaje: res.data.mensaje,
+      });
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { detail?: string } } };
+      alert(err.response?.data?.detail || 'No se pudo restablecer la contraseña');
+    }
+  };
+
+  const copiarPasswordTemporal = async () => {
+    if (!passwordTemporalInfo?.password) return;
+    try {
+      await navigator.clipboard.writeText(passwordTemporalInfo.password);
+      setPasswordCopiada(true);
+    } catch {
+      // Fallback: seleccionar el input
+      const el = document.getElementById('password-temporal-input') as HTMLInputElement | null;
+      if (el) {
+        el.focus();
+        el.select();
+      }
+    }
+  };
+
   const openNewDepto = () => {
-    setDeptoForm({ nombre: '', empresa_id: undefined, jefe_id: null });
+    setDeptoForm({ nombre: '', empresa_id: undefined, jefe_id: null, padre_id: null });
+    setSubdeptosPendientes([]);
+    setNuevoSubNombre('');
+    setEditSubId(null);
+    setEditSubNombre('');
     setEditingDeptoId(null);
     setShowDeptoModal(true);
   };
 
   const startEditDepto = (d: DepartamentoResponse) => {
-    setDeptoForm({ nombre: d.nombre, empresa_id: d.empresa_id, jefe_id: d.jefe_id ?? null });
+    // Solo se editan departamentos de la empresa desde el listado; los hijos se gestionan en este mismo modal.
+    setDeptoForm({
+      nombre: d.nombre,
+      empresa_id: d.empresa_id,
+      jefe_id: d.jefe_id ?? null,
+      padre_id: d.padre_id ?? null,
+    });
+    setSubdeptosPendientes([]);
+    setNuevoSubNombre('');
+    setEditSubId(null);
+    setEditSubNombre('');
     setEditingDeptoId(d.id);
     setShowDeptoModal(true);
+  };
+
+  const agregarSubPendiente = () => {
+    const n = nuevoSubNombre.trim();
+    if (!n) return;
+    if (subdeptosPendientes.some(s => s.toLowerCase() === n.toLowerCase())) {
+      alert('Ese subdepartamento ya está en la lista');
+      return;
+    }
+    setSubdeptosPendientes(prev => [...prev, n]);
+    setNuevoSubNombre('');
+  };
+
+  /** Al editar un departamento (raíz), crea un hijo al instante. */
+  const agregarSubdeptoAlEditado = async () => {
+    const n = nuevoSubNombre.trim();
+    if (!n || !editingDeptoId || !deptoForm.empresa_id) return;
+    if (deptoForm.padre_id) {
+      alert('Un subdepartamento no puede tener más niveles debajo.');
+      return;
+    }
+    const yaExiste = subdeptosDe(editingDeptoId, false).some(d => d.nombre.toLowerCase() === n.toLowerCase());
+    if (yaExiste) {
+      alert('Ya existe un subdepartamento con ese nombre');
+      return;
+    }
+    setGuardandoSub(true);
+    try {
+      await api.post('/personal/departamentos', {
+        nombre: n,
+        empresa_id: deptoForm.empresa_id,
+        padre_id: editingDeptoId,
+        jefe_id: null,
+      });
+      setNuevoSubNombre('');
+      await loadData();
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { detail?: string } } };
+      alert(err.response?.data?.detail || 'Error al agregar subdepartamento');
+    } finally {
+      setGuardandoSub(false);
+    }
+  };
+
+  const guardarSubInline = async (subId: number) => {
+    const n = editSubNombre.trim();
+    if (!n) {
+      alert('El nombre es obligatorio');
+      return;
+    }
+    setGuardandoSub(true);
+    try {
+      await api.put(`/personal/departamentos/${subId}`, { nombre: n });
+      setEditSubId(null);
+      setEditSubNombre('');
+      await loadData();
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { detail?: string } } };
+      alert(err.response?.data?.detail || 'Error al guardar subdepartamento');
+    } finally {
+      setGuardandoSub(false);
+    }
   };
 
   const handleDeptoSubmit = async (e: React.FormEvent) => {
@@ -937,16 +1186,38 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
     if (!deptoForm.nombre.trim() || !deptoForm.empresa_id) { alert('Nombre y empresa son obligatorios'); return; }
     setSaving(true);
     try {
-      const payload: Record<string, unknown> = { nombre: deptoForm.nombre, empresa_id: deptoForm.empresa_id };
-      if (deptoForm.jefe_id) payload.jefe_id = deptoForm.jefe_id;
+      // Departamento de la empresa: padre_id null. Solo se conserva si se edita un hijo ya existente.
+      const payload: Record<string, unknown> = {
+        nombre: deptoForm.nombre,
+        empresa_id: deptoForm.empresa_id,
+        jefe_id: deptoForm.jefe_id ?? null,
+        padre_id: deptoForm.padre_id ?? null,
+      };
       if (editingDeptoId) {
         await api.put(`/personal/departamentos/${editingDeptoId}`, payload);
         alert('Departamento actualizado');
       } else {
-        await api.post('/personal/departamentos', payload);
-        alert('Departamento creado');
+        const { data: creado } = await api.post<DepartamentoResponse>('/personal/departamentos', {
+          ...payload,
+          padre_id: null, // siempre cuelga de la empresa
+        });
+        for (const nombreSub of subdeptosPendientes) {
+          await api.post('/personal/departamentos', {
+            nombre: nombreSub,
+            empresa_id: deptoForm.empresa_id,
+            padre_id: creado.id,
+            jefe_id: null,
+          });
+        }
+        alert(
+          subdeptosPendientes.length > 0
+            ? `Departamento creado con ${subdeptosPendientes.length} subdepartamento(s)`
+            : 'Departamento creado'
+        );
       }
       setShowDeptoModal(false);
+      setSubdeptosPendientes([]);
+      setNuevoSubNombre('');
       loadData();
     } catch (error: unknown) {
       const err = error as { response?: { data?: { detail?: string } } };
@@ -965,13 +1236,13 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
   };
 
   // ---- Puesto CRUD ----
-  const PUESTOS_RESERVADOS = ['director', 'gerente general', 'rh', 'gerente', 'supervisor'];
+  const PUESTOS_RESERVADOS = ['director', 'subdirector', 'gerente general', 'rh', 'gerente', 'supervisor'];
   const isPuestoReservado = (nombre: string) => PUESTOS_RESERVADOS.includes((nombre || '').trim().toLowerCase());
 
   const openNewPuesto = () => {
     const maxOrden = puestos.length > 0 ? Math.max(...puestos.map(p => p.orden), 0) + 1 : 0;
     const primeraEmpresa = activeEmpresas[0]?.id;
-    const primerDepto = primeraEmpresa ? deptosForEmpresa(primeraEmpresa)[0]?.id : undefined;
+    const primerDepto = primeraEmpresa ? deptosRaizForEmpresa(primeraEmpresa)[0]?.id : undefined;
     setPuestoForm({ empresa_id: primeraEmpresa, departamento_id: primerDepto, nombre: '', orden: maxOrden, activo: true });
     setEditingPuestoId(null);
     setShowPuestoModal(true);
@@ -1053,27 +1324,84 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
     return departamentos.filter(d => d.empresa_id === empresaId && d.activo);
   };
 
-  const directorRelacionadoConEmpresa = (emp: Empleado, empresaId: number) => {
-    const pn = (emp.puesto?.nombre || '').trim().toLowerCase();
-    if (pn !== 'director') return false;
-    if (emp.empresa_id === empresaId) return true;
-    return (emp.empresas_supervisadas_ids || []).includes(empresaId);
+  /** Departamentos de la empresa (cuelgan de la empresa; no son subdepartamentos). */
+  const deptosRaizForEmpresa = (empresaId?: number) =>
+    deptosForEmpresa(empresaId).filter(d => !d.padre_id);
+
+  const subdeptosDe = (padreId?: number | null, soloActivos = true) => {
+    if (!padreId) return [];
+    return departamentos
+      .filter(d => d.padre_id === padreId && (!soloActivos || d.activo))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  };
+
+  /** Padre mostrado en UI: si el empleado está en un subdepto, el padre; si no, el propio. */
+  const deptoPadreUiId = (() => {
+    if (!form.departamento_id) return undefined;
+    const actual = departamentos.find(d => d.id === form.departamento_id);
+    if (!actual) return form.departamento_id;
+    return actual.padre_id ?? actual.id;
+  })();
+
+  const subdeptosDisponibles = subdeptosDe(deptoPadreUiId);
+  const mostrarSelectorSubdepto = subdeptosDisponibles.length > 0;
+  const subdeptoUiId =
+    form.departamento_id && departamentos.find(d => d.id === form.departamento_id)?.padre_id
+      ? form.departamento_id
+      : undefined;
+
+  const onChangeDeptoPadreEmpleado = (padreId: number | undefined) => {
+    handleChange('departamento_id', padreId);
+    handleChange('puesto_id', undefined);
+  };
+
+  const onChangeSubdeptoEmpleado = (subId: number | undefined) => {
+    // Sin sub: queda en el departamento; con sub: en la sucursal.
+    // No se limpia el puesto: los puestos son del departamento de la empresa, no del sub.
+    handleChange('departamento_id', subId ?? deptoPadreUiId);
+  };
+
+  const esPuestoElegibleGerenteDepto = (emp: Empleado) => {
+    const n = (emp.puesto?.nombre || '').trim().toLowerCase();
+    return (
+      n === 'gerente' ||
+      n === 'director' ||
+      n === 'subdirector' ||
+      n === 'gerente general'
+    );
   };
 
   const empleadosParaGerenteDepto = (empresaId: number | undefined) => {
     const activos = empleadosCandidatosGerente.filter(e => e.estado === 'activo');
-    if (!empresaId) return activos;
-    const dirs = activos.filter(e => directorRelacionadoConEmpresa(e, empresaId));
-    const dirIds = new Set(dirs.map(d => d.id));
-    const rest = activos.filter(e => !dirIds.has(e.id));
-    dirs.sort(cmpNombreEmpleado);
-    return [...dirs, ...rest];
+    let lista = activos.filter(esPuestoElegibleGerenteDepto);
+    // Si el jefe actual no está en la lista (dato viejo), mantenerlo para poder verlo/quitarlo.
+    if (deptoForm.jefe_id) {
+      const actual = activos.find(e => e.id === deptoForm.jefe_id);
+      if (actual && !lista.some(e => e.id === actual.id)) {
+        lista = [actual, ...lista];
+      }
+    }
+    if (empresaId) {
+      const deLaEmpresa = lista.filter(e => e.empresa_id === empresaId);
+      const otros = lista.filter(e => e.empresa_id !== empresaId);
+      deLaEmpresa.sort(cmpNombreEmpleado);
+      otros.sort(cmpNombreEmpleado);
+      return [...deLaEmpresa, ...otros];
+    }
+    return [...lista].sort(cmpNombreEmpleado);
   };
 
   const filtrarPorEmpresaDepto = (lista: Empleado[]) =>
     lista.filter(e => {
       if (filtroEmpresa && String(e.empresa_id) !== filtroEmpresa) return false;
-      if (filtroDepto && String(e.departamento_id) !== filtroDepto) return false;
+      if (filtroDepto) {
+        const fid = Number(filtroDepto);
+        const idsFiltro = new Set<number>([
+          fid,
+          ...departamentos.filter(d => d.padre_id === fid).map(d => d.id),
+        ]);
+        if (!e.departamento_id || !idsFiltro.has(e.departamento_id)) return false;
+      }
       return true;
     });
 
@@ -1225,6 +1553,38 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
     }
   };
 
+  // Re-enrolar huella: borra la huella actual del checador (queue-delete) para que
+  // el empleado pueda registrar OTRO dedo. Flujo en 2 pasos porque el agente procesa
+  // el borrado al final de su ciclo: primero se borra y, tras ~1-2 min, se captura el
+  // nuevo dedo desde "Iniciar Registro de Huella".
+  const reRegistrarHuella = async (emp: Empleado, dispositivoId: number, dispositivoNombre: string) => {
+    if (!confirm(
+      `Se borrará la huella actual de ${nombreCompleto(emp)} en "${dispositivoNombre}".\n\n` +
+      `El agente la eliminará del checador en ~1-2 minutos. Después, en la sección ` +
+      `"Iniciar Registro de Huella", el empleado podrá capturar OTRO dedo.\n\n¿Continuar?`
+    )) {
+      return;
+    }
+    setBorrandoCheckador(dispositivoId);
+    try {
+      await api.post(`/asistencia/devices/${dispositivoId}/queue-delete`, {
+        empleado_id: emp.id,
+      });
+      await loadEmpleadoDispositivos(emp);
+      await loadHuellaTemplates(emp);
+      alert(
+        `Huella marcada para borrado en "${dispositivoNombre}".\n\n` +
+        `Espera 1-2 minutos a que el agente la elimine y luego usa ` +
+        `"Iniciar Registro de Huella" para capturar el nuevo dedo.`
+      );
+    } catch (error) {
+      const err = error as { response?: { data?: { detail?: string } } };
+      alert(err.response?.data?.detail || 'Error al reiniciar el registro de huella');
+    } finally {
+      setBorrandoCheckador(null);
+    }
+  };
+
   const loadHuellaTemplates = async (emp: Empleado) => {
     setHuellaTemplates([]);
     setTieneHuella(false);
@@ -1255,6 +1615,9 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
     setVacMigracionEdit('');
     setLoadingVacaciones(false);
     // Pre-poblar formulario de edición
+    const supIds = (emp.empresas_supervisadas_ids && emp.empresas_supervisadas_ids.length > 0)
+      ? [...emp.empresas_supervisadas_ids]
+      : (emp.empresa_id ? [emp.empresa_id] : []);
     setForm({
       numero_empleado: emp.numero_empleado,
       nombre: emp.nombre,
@@ -1283,6 +1646,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
       username: emp.username || '',
       horario_id: emp.horario_id ?? undefined,
       horario_sabado_id: emp.horario_sabado_id ?? null,
+      empresas_supervision_ids: puestoUsaEmpresasOrganigrama(emp.puesto?.nombre) ? supIds : [],
     });
     setEditingId(emp.id);
     setUsernameManual(false);
@@ -1327,15 +1691,32 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
 
   const nombreCompleto = (emp: Empleado) => fmtNombreEmpleado(emp);
 
-  /** Jefe directo (empleado.jefe) o, si no hay, gerente del departamento (incluye usuarios especiales). */
+  /** Jefe directo (empleado.jefe) o gerente del departamento; si es subdepto, hereda el del padre. */
   const nombreJefeInmediato = (emp: Empleado) => {
     if (emp.jefe) {
       return fmtNombreEmpleado(emp.jefe);
     }
     const desdeApi = emp.departamento?.jefe_nombre?.trim();
     if (desdeApi) return desdeApi;
-    const d = departamentos.find(x => x.id === emp.departamento_id);
-    return (d?.jefe_nombre && d.jefe_nombre.trim()) || '—';
+
+    let d = departamentos.find(x => x.id === emp.departamento_id) || null;
+    // Subir por la cadena: sucursal → departamento → … hasta encontrar gerente
+    const vistos = new Set<number>();
+    while (d && !vistos.has(d.id)) {
+      vistos.add(d.id);
+      const nombre = d.jefe_nombre?.trim();
+      if (nombre) return nombre;
+      if (!d.padre_id) break;
+      d = departamentos.find(x => x.id === d!.padre_id) || null;
+    }
+    // Fallback por padre_id del API si el catálogo local no trae la cadena
+    const padreIdApi = emp.departamento?.padre_id;
+    if (padreIdApi) {
+      const padre = departamentos.find(x => x.id === padreIdApi);
+      const nombrePadre = padre?.jefe_nombre?.trim();
+      if (nombrePadre) return nombrePadre;
+    }
+    return '—';
   };
 
   if (loading && empleados.length === 0) return <div style={{ padding: '20px' }}>Cargando...</div>;
@@ -1349,12 +1730,19 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
 
   const activeDevices = dispositivos.filter(d => d.activo);
   const activeEmpresas = empresas.filter(e => e.activo);
-  // Puestos para el formulario de empleado: globales (Director, Gerente General, RH) + los del departamento seleccionado
+  // Puestos: globales (Director, Gerente, etc.) + los del departamento de la empresa.
+  // Si el empleado está en un subdepartamento, los puestos son los del departamento padre.
+  const deptoIdParaPuestos = (() => {
+    if (!form.departamento_id) return undefined;
+    const actual = departamentos.find(d => d.id === form.departamento_id);
+    return actual?.padre_id ?? form.departamento_id;
+  })();
+
   const activePuestos = puestos.filter(p => {
     if (!p.activo) return false;
     const esGlobal = p.empresa_id == null && p.departamento_id == null;
-    const esDelDepto = form.empresa_id && form.departamento_id &&
-      p.empresa_id === form.empresa_id && p.departamento_id === form.departamento_id;
+    const esDelDepto = form.empresa_id && deptoIdParaPuestos &&
+      p.empresa_id === form.empresa_id && p.departamento_id === deptoIdParaPuestos;
     if (esGlobal || esDelDepto) {
       if (isAdmin) return true;
       if (editingId && form.puesto_id === p.id && isPuestoReservado(p.nombre)) return true;
@@ -1363,6 +1751,8 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
     return false;
   });
   const filteredDepartamentos = departamentos.filter(d => {
+    // Solo departamentos de la empresa; los subdepartamentos se gestionan en el modal.
+    if (d.padre_id) return false;
     if (filtroEmpresaDepto && d.empresa_id !== Number(filtroEmpresaDepto)) return false;
     if (filtroEstadoDepto === 'activos' && !d.activo) return false;
     if (filtroEstadoDepto === 'inactivos' && d.activo) return false;
@@ -1371,10 +1761,17 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
       const nombre = (d.nombre || '').toLowerCase();
       const empresa = (d.empresa?.nombre || getEmpresaNombre(d.empresa_id) || '').toLowerCase();
       const gerente = (d.jefe_nombre || '').toLowerCase();
-      if (!nombre.includes(q) && !empresa.includes(q) && !gerente.includes(q)) return false;
+      const coincideDepto = nombre.includes(q) || empresa.includes(q) || gerente.includes(q);
+      const coincideSub = departamentos.some(
+        h => h.padre_id === d.id && (h.nombre || '').toLowerCase().includes(q)
+      );
+      if (!coincideDepto && !coincideSub) return false;
     }
     return true;
   });
+
+  const countSubdeptos = (deptoId: number) =>
+    departamentos.filter(h => h.padre_id === deptoId).length;
 
   const mainTabStyle = (active: boolean): React.CSSProperties => ({
     padding: '10px 28px', cursor: 'pointer', border: 'none',
@@ -1456,18 +1853,25 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
               <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '10px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
                 <thead>
                   <tr style={{ backgroundColor: '#f8f9fa' }}>
-                    {['Nombre', 'Empresa', 'Gerente', 'Empleados', 'Estado', 'Acciones'].map(h => (
+                    {['Nombre', 'Empresa', 'Subdepartamentos', 'Gerente', 'Empleados', 'Estado', 'Acciones'].map(h => (
                       <th key={h} style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {filteredDepartamentos.map(d => {
-                    const count = empleados.filter(e => e.departamento_id === d.id).length;
+                    const hijoIds = new Set(
+                      departamentos.filter(h => h.padre_id === d.id).map(h => h.id)
+                    );
+                    const count = empleados.filter(
+                      e => e.departamento_id === d.id || (e.departamento_id != null && hijoIds.has(e.departamento_id))
+                    ).length;
+                    const nSubs = countSubdeptos(d.id);
                     return (
                       <tr key={d.id} style={{ borderBottom: '1px solid #eee' }}>
                         <td style={{ padding: '11px 14px', fontWeight: 500 }}>{d.nombre}</td>
                         <td style={{ padding: '11px 14px', color: '#555' }}>{d.empresa?.nombre || getEmpresaNombre(d.empresa_id)}</td>
+                        <td style={{ padding: '11px 14px', fontWeight: 600, color: nSubs > 0 ? '#0f766e' : '#6b7280' }}>{nSubs}</td>
                         <td style={{ padding: '11px 14px', color: '#555' }}>{d.jefe_nombre || '-'}</td>
                         <td style={{ padding: '11px 14px', fontWeight: 600 }}>{count}</td>
                         <td style={{ padding: '11px 14px' }}>
@@ -1635,7 +2039,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
               >
                 <option value="">Departamento</option>
                 {departamentos
-                  .filter(d => !filtroEmpresa || String(d.empresa_id) === filtroEmpresa)
+                  .filter(d => !d.padre_id && (!filtroEmpresa || String(d.empresa_id) === filtroEmpresa))
                   .map(d => (
                     <option key={d.id} value={String(d.id)}>{d.nombre}</option>
                   ))
@@ -1669,7 +2073,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
             >
               <option value="">Todos los departamentos</option>
               {departamentos
-                .filter(d => !filtroEmpresa || String(d.empresa_id) === filtroEmpresa)
+                .filter(d => !d.padre_id && (!filtroEmpresa || String(d.empresa_id) === filtroEmpresa))
                 .map(d => (
                   <option key={d.id} value={String(d.id)}>{d.nombre}</option>
                 ))
@@ -1698,7 +2102,9 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
             ) : isMobile ? (
               <>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {empPagina.map(emp => (
+                  {empPagina.map(emp => {
+                    const jer = jerarquiaDepto(emp.departamento_id);
+                    return (
                     <div key={emp.id} style={rhMobileCard} onClick={() => viewDetail(emp)}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
                         <div style={{ minWidth: 0 }}>
@@ -1708,7 +2114,10 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                         {estadoBadge(emp.estado)}
                       </div>
                       <div style={rhMobileCardRow}>
-                        <span>{emp.departamento?.nombre || getDeptoNombre(emp.departamento_id)}</span>
+                        <span>
+                          {jer.deptoNombre}
+                          {jer.subNombre ? ` · ${jer.subNombre}` : ''}
+                        </span>
                         <span>{emp.puesto?.nombre || '—'}</span>
                       </div>
                       <div style={{ ...rhMobileCardSub, marginTop: 6 }}>
@@ -1722,7 +2131,8 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                         Ver detalle
                       </button>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '14px', flexWrap: 'wrap', gap: '8px' }}>
                   <span style={{ fontSize: '0.82rem', color: '#6b7280' }}>
@@ -1741,7 +2151,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                   <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '10px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
                     <thead>
                       <tr style={{ backgroundColor: '#f8f9fa' }}>
-                        {['No.', 'Nombre completo', 'Empresa', 'Depto.', 'Puesto', 'Jefe inmediato', 'Telefono', 'Estado', 'Acciones'].map(h => (
+                        {['No.', 'Nombre completo', 'Empresa', 'Departamento', 'Subdepartamento', 'Puesto', 'Jefe inmediato', 'Telefono', 'Estado', 'Acciones'].map(h => (
                           <th key={h} style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>{h}</th>
                         ))}
                       </tr>
@@ -1752,7 +2162,8 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                           <td style={{ padding: '11px 14px', fontWeight: 500 }}>{emp.numero_empleado}</td>
                           <td style={{ padding: '11px 14px' }}>{nombreCompleto(emp)}</td>
                           <td style={{ padding: '11px 14px', color: '#555' }}>{emp.empresa?.nombre || getEmpresaNombre(emp.empresa_id)}</td>
-                          <td style={{ padding: '11px 14px', color: '#555' }}>{emp.departamento?.nombre || getDeptoNombre(emp.departamento_id)}</td>
+                          <td style={{ padding: '11px 14px', color: '#555' }}>{textoDeptoEmpleado(emp.departamento_id)}</td>
+                          <td style={{ padding: '11px 14px', color: '#555' }}>{textoSubDeptoEmpleado(emp.departamento_id)}</td>
                           <td style={{ padding: '11px 14px', color: '#555' }}>{emp.puesto?.nombre || '-'}</td>
                           <td style={{ padding: '11px 14px', color: '#555' }}>{nombreJefeInmediato(emp)}</td>
                           <td style={{ padding: '11px 14px', color: '#555' }}>{emp.telefono || '-'}</td>
@@ -1894,7 +2305,10 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                         value={form.empresa_id ?? ''}
                         onChange={e => {
                           setNumeroManual(false);
-                          handleChange('empresa_id', e.target.value ? Number(e.target.value) : undefined);
+                          const eid = e.target.value ? Number(e.target.value) : undefined;
+                          handleChange('empresa_id', eid);
+                          handleChange('departamento_id', undefined);
+                          handleChange('puesto_id', undefined);
                         }}
                         required>
                         <option value="">-- Seleccione empresa --</option>
@@ -1922,14 +2336,35 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                     <div>
                       <label style={labelStyle}>Departamento *</label>
                       <select style={inputStyle}
-                        value={form.departamento_id ?? ''}
-                        onChange={e => handleChange('departamento_id', e.target.value ? Number(e.target.value) : undefined)}
+                        value={deptoPadreUiId ?? ''}
+                        onChange={e => onChangeDeptoPadreEmpleado(e.target.value ? Number(e.target.value) : undefined)}
                         required>
                         <option value="">-- Seleccione departamento --</option>
-                        {deptosForEmpresa(form.empresa_id).map(d => (
+                        {deptosRaizForEmpresa(form.empresa_id).map(d => (
                           <option key={d.id} value={d.id}>{d.nombre}</option>
                         ))}
                       </select>
+                    </div>
+                    <div>
+                      <label style={labelStyle}>Subdepartamento / sucursal</label>
+                      <select
+                        style={inputStyle}
+                        value={subdeptoUiId ?? ''}
+                        disabled={!mostrarSelectorSubdepto}
+                        onChange={e => onChangeSubdeptoEmpleado(e.target.value ? Number(e.target.value) : undefined)}
+                      >
+                        <option value="">
+                          {mostrarSelectorSubdepto
+                            ? '-- En el departamento (sin subdepartamento) --'
+                            : '-- Sin subdepartamentos --'}
+                        </option>
+                        {subdeptosDisponibles.map(d => (
+                          <option key={d.id} value={d.id}>{d.nombre}</option>
+                        ))}
+                      </select>
+                      <p style={{ margin: '6px 0 0', fontSize: '0.75rem', color: '#6b7280' }}>
+                        Empresa → departamento → subdepartamento (opcional).
+                      </p>
                     </div>
                     <div>
                       <label style={labelStyle}>Puesto *</label>
@@ -1943,6 +2378,27 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                         ))}
                       </select>
                     </div>
+                    {puestoUsaEmpresasOrganigrama(puestos.find(p => p.id === form.puesto_id)?.nombre) && (
+                      <div style={{ gridColumn: '1 / -1' }}>
+                        <label style={labelStyle}>Empresas en organigrama *</label>
+                        <p style={{ margin: '0 0 8px', fontSize: '0.82rem', color: '#6b7280' }}>
+                          Marca en qué razones sociales debe aparecer este puesto. La empresa de registro siempre queda incluida.
+                        </p>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: 220, overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: 8, padding: '10px 12px', background: '#fafafa' }}>
+                          {activeEmpresas.map(em => (
+                            <label key={em.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: em.id === form.empresa_id ? 'default' : 'pointer', fontSize: '0.88rem' }}>
+                              <input
+                                type="checkbox"
+                                checked={(form.empresas_supervision_ids || []).includes(em.id) || em.id === form.empresa_id}
+                                disabled={em.id === form.empresa_id}
+                                onChange={() => toggleEmpresaOrganigrama(em.id)}
+                              />
+                              <span>{em.nombre}{em.id === form.empresa_id ? ' (registro)' : ''}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     {isAdmin && (
                     <div>
                       <label style={labelStyle}>Teléfono asignado por la empresa (WhatsApp)</label>
@@ -2058,17 +2514,30 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                         </p>
                       </div>
                       <div>
-                        <label style={labelStyle}>
-                          {editingId ? 'Nueva contraseña' : 'Contraseña inicial'}
-                        </label>
-                        <input
-                          type="password"
-                          style={inputStyle}
-                          value={form.password || ''}
-                          onChange={e => handleChange('password', e.target.value)}
-                          placeholder={editingId ? 'Dejar vacio para no cambiar' : 'Por defecto: primeros 8 del RFC'}
-                          autoComplete="new-password"
-                        />
+                        <label style={labelStyle}>Acceso</label>
+                        {editingId ? (
+                          <>
+                            {(isAdmin || isRH) && (
+                              <button
+                                type="button"
+                                onClick={() => restablecerPasswordTemporal(
+                                  editingId,
+                                  `${form.nombre} ${form.apellido_paterno || ''}`.trim(),
+                                )}
+                                style={{ ...btnSecondary, width: '100%', height: 38 }}
+                              >
+                                Restablecer temporal
+                              </button>
+                            )}
+                            <p style={{ margin: '6px 0 0', fontSize: '0.75rem', color: '#6b7280' }}>
+                              RH/Admin no fijan la clave definitiva. Solo restablecen una temporal.
+                            </p>
+                          </>
+                        ) : (
+                          <p style={{ margin: 0, fontSize: '0.82rem', color: '#6b7280', lineHeight: 1.4 }}>
+                            Se generará una contraseña temporal (RFC o número de empleado). El colaborador debe cambiarla al entrar.
+                          </p>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -2165,7 +2634,8 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
             title: 'Datos Laborales',
             rows: [
               ['Empresa', emp.empresa?.nombre || getEmpresaNombre(emp.empresa_id)],
-              ['Departamento', emp.departamento?.nombre || getDeptoNombre(emp.departamento_id)],
+              ['Departamento', textoDeptoEmpleado(emp.departamento_id)],
+              ['Subdepartamento', textoSubDeptoEmpleado(emp.departamento_id)],
               ['Jefe inmediato', nombreJefeInmediato(emp)],
               ['Puesto', emp.puesto?.nombre],
               ...(isAdmin ? [['Tel. empresa (WhatsApp)', emp.telefono_empresa_asignado || '—']] as [string, string | undefined | null][] : []),
@@ -2228,7 +2698,19 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                   <div style={{ flex: '1 1 220px', minWidth: 0 }}>
                     <h2 style={{ margin: '0 0 3px 0', fontSize: '1.2rem' }}>{nombreCompleto(emp)}</h2>
                     <p style={{ margin: 0, color: '#666', fontSize: '0.88rem' }}>
-                      No. {emp.numero_empleado} &middot; {emp.departamento?.nombre || 'Sin departamento'} &middot; {emp.puesto?.nombre || 'Sin puesto'}
+                      {(() => {
+                        const jer = jerarquiaDepto(emp.departamento_id);
+                        return (
+                          <>
+                            No. {emp.numero_empleado}
+                            {' · '}
+                            {jer.deptoNombre}
+                            {jer.subNombre ? ` / ${jer.subNombre}` : ''}
+                            {' · '}
+                            {emp.puesto?.nombre || 'Sin puesto'}
+                          </>
+                        );
+                      })()}
                     </p>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0, marginLeft: 'auto' }}>
@@ -2311,6 +2793,8 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                 )}
                 <button style={detTabStyle(detalleTab === 'huella')} onClick={() => {
                   setDetalleTab('huella');
+                  setAvisoReRegistro(null);
+                  prevBorradoPendiente.current = false;
                   loadHuellaTemplates(emp);
                   loadEmpleadoDispositivos(emp);
                 }}>
@@ -2776,17 +3260,44 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '14px', marginBottom: '20px' }}>
                         <div>
                           <label style={labelStyle}>Empresa *</label>
-                          <select style={inputStyle} value={form.empresa_id ?? ''} onChange={e => { setNumeroManual(false); handleChange('empresa_id', e.target.value ? Number(e.target.value) : undefined); }} required>
+                          <select style={inputStyle} value={form.empresa_id ?? ''} onChange={e => {
+                            setNumeroManual(false);
+                            const eid = e.target.value ? Number(e.target.value) : undefined;
+                            handleChange('empresa_id', eid);
+                            handleChange('departamento_id', undefined);
+                            handleChange('puesto_id', undefined);
+                          }} required>
                             <option value="">-- Seleccione empresa --</option>
                             {activeEmpresas.map(e2 => <option key={e2.id} value={e2.id}>{e2.nombre}</option>)}
                           </select>
                         </div>
                         <div>
                           <label style={labelStyle}>Departamento *</label>
-                          <select style={inputStyle} value={form.departamento_id ?? ''} onChange={e => handleChange('departamento_id', e.target.value ? Number(e.target.value) : undefined)} required>
+                          <select style={inputStyle} value={deptoPadreUiId ?? ''} onChange={e => onChangeDeptoPadreEmpleado(e.target.value ? Number(e.target.value) : undefined)} required>
                             <option value="">-- Seleccione departamento --</option>
-                            {deptosForEmpresa(form.empresa_id).map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}
+                            {deptosRaizForEmpresa(form.empresa_id).map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}
                           </select>
+                        </div>
+                        <div>
+                          <label style={labelStyle}>Subdepartamento / sucursal</label>
+                          <select
+                            style={inputStyle}
+                            value={subdeptoUiId ?? ''}
+                            disabled={!mostrarSelectorSubdepto}
+                            onChange={e => onChangeSubdeptoEmpleado(e.target.value ? Number(e.target.value) : undefined)}
+                          >
+                            <option value="">
+                              {mostrarSelectorSubdepto
+                                ? '-- En el departamento (sin subdepartamento) --'
+                                : '-- Sin subdepartamentos --'}
+                            </option>
+                            {subdeptosDisponibles.map(d => (
+                              <option key={d.id} value={d.id}>{d.nombre}</option>
+                            ))}
+                          </select>
+                          <p style={{ margin: '6px 0 0', fontSize: '0.75rem', color: '#6b7280' }}>
+                            Empresa → departamento → subdepartamento (opcional).
+                          </p>
                         </div>
                         <div>
                           <label style={labelStyle}>Puesto *</label>
@@ -2795,6 +3306,27 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                             {activePuestos.map(p => <option key={p.id} value={p.id}>{p.nombre}</option>)}
                           </select>
                         </div>
+                        {puestoUsaEmpresasOrganigrama(puestos.find(p => p.id === form.puesto_id)?.nombre) && (
+                          <div style={{ gridColumn: '1 / -1' }}>
+                            <label style={labelStyle}>Empresas en organigrama *</label>
+                            <p style={{ margin: '0 0 8px', fontSize: '0.82rem', color: '#6b7280' }}>
+                              Marca en qué razones sociales debe aparecer este puesto. La empresa de registro siempre queda incluida.
+                            </p>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: 220, overflowY: 'auto', border: '1px solid #e5e7eb', borderRadius: 8, padding: '10px 12px', background: '#fafafa' }}>
+                              {activeEmpresas.map(em => (
+                                <label key={em.id} style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: em.id === form.empresa_id ? 'default' : 'pointer', fontSize: '0.88rem' }}>
+                                  <input
+                                    type="checkbox"
+                                    checked={(form.empresas_supervision_ids || []).includes(em.id) || em.id === form.empresa_id}
+                                    disabled={em.id === form.empresa_id}
+                                    onChange={() => toggleEmpresaOrganigrama(em.id)}
+                                  />
+                                  <span>{em.nombre}{em.id === form.empresa_id ? ' (registro)' : ''}</span>
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                         {isAdmin && (
                         <div>
                           <label style={labelStyle}>Teléfono asignado por la empresa</label>
@@ -2865,8 +3397,23 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                             {usernameStatus === 'taken' && <p style={{ margin: '4px 0 0', fontSize: '0.78rem', color: '#dc3545' }}>Usuario ya en uso</p>}
                           </div>
                           <div>
-                            <label style={labelStyle}>Nueva contraseña</label>
-                            <input type="password" style={inputStyle} value={form.password || ''} onChange={e => handleChange('password', e.target.value)} placeholder="Dejar vacio para no cambiar" autoComplete="new-password" />
+                            <label style={labelStyle}>Contraseña</label>
+                            {(isAdmin || isRH) ? (
+                              <button
+                                type="button"
+                                onClick={() => restablecerPasswordTemporal(
+                                  emp.id,
+                                  `${emp.nombre} ${emp.apellido_paterno || ''}`.trim(),
+                                )}
+                                style={{ ...btnSecondary, width: '100%', height: 38 }}
+                              >
+                                Restablecer temporal
+                              </button>
+                            ) : (
+                              <p style={{ margin: 0, fontSize: '0.82rem', color: '#6b7280' }}>
+                                Solo el colaborador define su contraseña definitiva.
+                              </p>
+                            )}
                           </div>
                           {isAdmin && (
                             <div style={{ display: 'flex', alignItems: 'flex-start', paddingTop: '2px' }}>
@@ -2937,6 +3484,20 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
               {/* ── TAB: HUELLA ── */}
               {detalleTab === 'huella' && (
                 <div>
+                  {empleadoDispositivos.some(d => d.pending_delete_id != null) && (
+                    <div style={{ padding: '12px 14px', borderRadius: '8px', marginBottom: '16px', backgroundColor: '#fef3c7', border: '1px solid #fde68a', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <span style={{ fontSize: '1.1rem' }}>⏳</span>
+                      <span style={{ fontSize: '0.85rem', color: '#92400e' }}>
+                        Esperando a que el agente borre la huella anterior del checador… Esta pantalla se actualiza sola cada 15 segundos.
+                      </span>
+                    </div>
+                  )}
+                  {avisoReRegistro && (
+                    <div style={{ padding: '12px 14px', borderRadius: '8px', marginBottom: '16px', backgroundColor: '#d4edda', border: '1px solid #c3e6cb', display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <span style={{ color: '#155724', fontWeight: 700, fontSize: '1rem' }}>&#10003;</span>
+                      <span style={{ fontSize: '0.85rem', color: '#155724' }}>{avisoReRegistro}</span>
+                    </div>
+                  )}
                   {tieneHuella ? (
                     <div style={{ padding: '12px 14px', borderRadius: '8px', marginBottom: '16px', backgroundColor: '#d4edda', border: '1px solid #c3e6cb' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: huellaTemplates.length > 0 ? '8px' : 0 }}>
@@ -3046,22 +3607,45 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                                     </td>
                                     <td style={{ padding: '8px', verticalAlign: 'top', textAlign: 'right' }}>
                                       {tieneActividad && d.pending_delete_id == null && (
-                                        <button
-                                          onClick={() => borrarDelChecador(emp, d.dispositivo_id, d.dispositivo_nombre)}
-                                          disabled={borrandoCheckador === d.dispositivo_id}
-                                          style={{
-                                            padding: '4px 10px',
-                                            borderRadius: '6px',
-                                            border: '1px solid #fecaca',
-                                            backgroundColor: '#fef2f2',
-                                            color: '#991b1b',
-                                            fontSize: '0.78rem',
-                                            cursor: borrandoCheckador === d.dispositivo_id ? 'not-allowed' : 'pointer',
-                                            opacity: borrandoCheckador === d.dispositivo_id ? 0.6 : 1,
-                                          }}
-                                        >
-                                          {borrandoCheckador === d.dispositivo_id ? 'Encolando…' : 'Borrar del checador'}
-                                        </button>
+                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'flex-end' }}>
+                                          {(d.tiene_huella_en_bd || d.replicacion_completada) && (
+                                            <button
+                                              onClick={() => reRegistrarHuella(emp, d.dispositivo_id, d.dispositivo_nombre)}
+                                              disabled={borrandoCheckador === d.dispositivo_id}
+                                              title="Borra la huella actual para que el empleado pueda registrar otro dedo"
+                                              style={{
+                                                padding: '4px 10px',
+                                                borderRadius: '6px',
+                                                border: '1px solid #bfdbfe',
+                                                backgroundColor: '#eff6ff',
+                                                color: '#1e40af',
+                                                fontSize: '0.78rem',
+                                                whiteSpace: 'nowrap',
+                                                cursor: borrandoCheckador === d.dispositivo_id ? 'not-allowed' : 'pointer',
+                                                opacity: borrandoCheckador === d.dispositivo_id ? 0.6 : 1,
+                                              }}
+                                            >
+                                              {borrandoCheckador === d.dispositivo_id ? 'Procesando…' : 'Volver a registrar huella'}
+                                            </button>
+                                          )}
+                                          <button
+                                            onClick={() => borrarDelChecador(emp, d.dispositivo_id, d.dispositivo_nombre)}
+                                            disabled={borrandoCheckador === d.dispositivo_id}
+                                            style={{
+                                              padding: '4px 10px',
+                                              borderRadius: '6px',
+                                              border: '1px solid #fecaca',
+                                              backgroundColor: '#fef2f2',
+                                              color: '#991b1b',
+                                              fontSize: '0.78rem',
+                                              whiteSpace: 'nowrap',
+                                              cursor: borrandoCheckador === d.dispositivo_id ? 'not-allowed' : 'pointer',
+                                              opacity: borrandoCheckador === d.dispositivo_id ? 0.6 : 1,
+                                            }}
+                                          >
+                                            {borrandoCheckador === d.dispositivo_id ? 'Encolando…' : 'Borrar del checador'}
+                                          </button>
+                                        </div>
                                       )}
                                     </td>
                                   </tr>
@@ -3322,45 +3906,221 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
       })()}
 
       {/* ========== MODAL: CREAR/EDITAR DEPARTAMENTO ========== */}
-      {showDeptoModal && (
+      {showDeptoModal && (() => {
+        const esSub = !!deptoForm.padre_id;
+        const padreNombre = esSub
+          ? (departamentos.find(d => d.id === deptoForm.padre_id)?.nombre || '—')
+          : null;
+        const hijosExistentes = editingDeptoId && !esSub ? subdeptosDe(editingDeptoId, false) : [];
+        const puedeAgregarSubs = !esSub;
+        return (
         <div style={subModalOverlay} onClick={() => setShowDeptoModal(false)}>
-          <div style={modalSmall} onClick={e => e.stopPropagation()}>
+          <div style={{ ...modalSmall, maxWidth: 520 }} onClick={e => e.stopPropagation()}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
-              <h3 style={{ margin: 0 }}>{editingDeptoId ? 'Editar Departamento' : 'Nuevo Departamento'}</h3>
+              <h3 style={{ margin: 0 }}>
+                {editingDeptoId
+                  ? (esSub ? 'Editar Subdepartamento' : 'Editar Departamento')
+                  : 'Nuevo Departamento'}
+              </h3>
               <button onClick={() => setShowDeptoModal(false)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#999', lineHeight: 1 }}>&times;</button>
             </div>
             <form onSubmit={handleDeptoSubmit}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '20px' }}>
                 <div>
-                  <label style={labelStyle}>Nombre del departamento *</label>
+                  <label style={labelStyle}>{esSub ? 'Nombre del subdepartamento *' : 'Nombre del departamento *'}</label>
                   <input style={inputStyle} value={deptoForm.nombre}
                     onChange={e => setDeptoForm(p => ({ ...p, nombre: e.target.value }))} required />
                 </div>
                 <div>
                   <label style={labelStyle}>Empresa *</label>
-                  <select style={inputStyle} value={deptoForm.empresa_id ?? ''}
-                    onChange={e => setDeptoForm(p => ({ ...p, empresa_id: e.target.value ? Number(e.target.value) : undefined, jefe_id: null }))} required>
+                  <select
+                    style={inputStyle}
+                    value={deptoForm.empresa_id ?? ''}
+                    disabled={esSub}
+                    onChange={e => setDeptoForm(p => ({
+                      ...p,
+                      empresa_id: e.target.value ? Number(e.target.value) : undefined,
+                      jefe_id: null,
+                    }))}
+                    required
+                  >
                     <option value="">-- Seleccionar empresa --</option>
                     {activeEmpresas.map(emp => (
                       <option key={emp.id} value={emp.id}>{emp.nombre}</option>
                     ))}
                   </select>
+                  <p style={{ margin: '6px 0 0', fontSize: '0.78rem', color: '#6b7280' }}>
+                    El departamento pertenece a la empresa (la empresa es su padre).
+                  </p>
                 </div>
+                {esSub && (
+                  <div style={{ padding: '10px 12px', background: '#f8fafc', borderRadius: 8, border: '1px solid #e5e7eb' }}>
+                    <div style={{ fontSize: '0.78rem', color: '#6b7280', marginBottom: 2 }}>Subdepartamento de</div>
+                    <div style={{ fontWeight: 600 }}>{padreNombre}</div>
+                  </div>
+                )}
                 <div>
-                  <label style={labelStyle}>Gerente del departamento</label>
+                  <label style={labelStyle}>{esSub ? 'Gerente del subdepartamento' : 'Gerente del departamento'}</label>
                   <select style={inputStyle} value={deptoForm.jefe_id ?? ''}
                     onChange={e => setDeptoForm(p => ({ ...p, jefe_id: e.target.value ? Number(e.target.value) : null }))}>
                     <option value="">-- Sin gerente asignado --</option>
                     {empleadosParaGerenteDepto(deptoForm.empresa_id).map(emp => (
                       <option key={emp.id} value={emp.id}>
-                        {(deptoForm.empresa_id && directorRelacionadoConEmpresa(emp, deptoForm.empresa_id) ? '★ Director — ' : '')}{emp.numero_empleado} - {emp.nombre} {emp.apellido_paterno || ''} ({getEmpresaNombre(emp.empresa_id)} / {getDeptoNombre(emp.departamento_id)})
+                        {emp.numero_empleado} - {emp.nombre} {emp.apellido_paterno || ''}
+                        {emp.puesto?.nombre ? ` · ${emp.puesto.nombre}` : ''}
+                        {' '}({getEmpresaNombre(emp.empresa_id)} / {getDeptoNombre(emp.departamento_id)})
                       </option>
                     ))}
                   </select>
                   <p style={{ margin: '6px 0 0', fontSize: '0.78rem', color: '#6b7280' }}>
-                    Los directores con alcance en esta empresa aparecen primero (★). Puedes asignar gerente de cualquier empresa.
+                    Pueden asignarse Gerentes, Directores, Subdirectores y Gerentes Generales. Primero los de la empresa seleccionada.
                   </p>
                 </div>
+
+                {puedeAgregarSubs && (
+                  <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 14 }}>
+                    <label style={labelStyle}>Subdepartamentos / sucursales</label>
+                    <p style={{ margin: '0 0 10px', fontSize: '0.78rem', color: '#6b7280' }}>
+                      Puedes agregar uno o varios (p. ej. sucursales bajo este departamento).
+                    </p>
+
+                    {editingDeptoId && hijosExistentes.length > 0 && (
+                      <ul style={{ margin: '0 0 10px', padding: 0, listStyle: 'none', fontSize: '0.9rem' }}>
+                        {hijosExistentes.map(h => (
+                          <li
+                            key={h.id}
+                            style={{
+                              marginBottom: 8,
+                              padding: '8px 10px',
+                              background: '#f8fafc',
+                              borderRadius: 8,
+                              border: '1px solid #e5e7eb',
+                            }}
+                          >
+                            {editSubId === h.id ? (
+                              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                                <input
+                                  style={{ ...inputStyle, flex: 1, margin: 0, minWidth: 140 }}
+                                  value={editSubNombre}
+                                  onChange={e => setEditSubNombre(e.target.value)}
+                                  autoFocus
+                                  onKeyDown={e => {
+                                    if (e.key === 'Enter') {
+                                      e.preventDefault();
+                                      void guardarSubInline(h.id);
+                                    }
+                                    if (e.key === 'Escape') {
+                                      setEditSubId(null);
+                                      setEditSubNombre('');
+                                    }
+                                  }}
+                                />
+                                <button
+                                  type="button"
+                                  disabled={guardandoSub || !editSubNombre.trim()}
+                                  onClick={() => void guardarSubInline(h.id)}
+                                  style={{ ...btnSuccess, padding: '6px 12px', fontSize: '0.8rem' }}
+                                >
+                                  Guardar
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => { setEditSubId(null); setEditSubNombre(''); }}
+                                  style={{ ...btnSecondary, padding: '6px 12px', fontSize: '0.8rem' }}
+                                >
+                                  Cancelar
+                                </button>
+                              </div>
+                            ) : (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                                <span style={{ flex: 1, fontWeight: 500 }}>{h.nombre}</span>
+                                {!h.activo && (
+                                  <span style={{ fontSize: '0.72rem', color: '#991b1b' }}>Inactivo</span>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => { setEditSubId(h.id); setEditSubNombre(h.nombre); }}
+                                  style={{ padding: '4px 10px', fontSize: '0.75rem', cursor: 'pointer', backgroundColor: '#ffc107', color: '#000', border: 'none', borderRadius: 4 }}
+                                >
+                                  Editar
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void toggleDeptoActivo(h)}
+                                  style={{
+                                    padding: '4px 10px',
+                                    fontSize: '0.75rem',
+                                    cursor: 'pointer',
+                                    backgroundColor: h.activo ? '#dc3545' : '#28a745',
+                                    color: 'white',
+                                    border: 'none',
+                                    borderRadius: 4,
+                                  }}
+                                >
+                                  {h.activo ? 'Desactivar' : 'Activar'}
+                                </button>
+                              </div>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+
+                    {!editingDeptoId && subdeptosPendientes.length > 0 && (
+                      <ul style={{ margin: '0 0 10px', paddingLeft: 18, fontSize: '0.9rem' }}>
+                        {subdeptosPendientes.map((nombre, i) => (
+                          <li key={`${nombre}-${i}`} style={{ marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
+                            <span>{nombre}</span>
+                            <button
+                              type="button"
+                              onClick={() => setSubdeptosPendientes(prev => prev.filter((_, j) => j !== i))}
+                              style={{ fontSize: '0.75rem', padding: '2px 8px', cursor: 'pointer', background: '#fee2e2', color: '#991b1b', border: 'none', borderRadius: 4 }}
+                            >
+                              Quitar
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <input
+                        style={{ ...inputStyle, flex: 1, margin: 0 }}
+                        value={nuevoSubNombre}
+                        onChange={e => setNuevoSubNombre(e.target.value)}
+                        placeholder="Nombre del subdepartamento"
+                        onKeyDown={e => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            if (editingDeptoId) void agregarSubdeptoAlEditado();
+                            else agregarSubPendiente();
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        disabled={!nuevoSubNombre.trim() || guardandoSub}
+                        onClick={() => {
+                          if (editingDeptoId) void agregarSubdeptoAlEditado();
+                          else agregarSubPendiente();
+                        }}
+                        style={{
+                          ...btnSuccess,
+                          whiteSpace: 'nowrap',
+                          opacity: (!nuevoSubNombre.trim() || guardandoSub) ? 0.6 : 1,
+                          cursor: (!nuevoSubNombre.trim() || guardandoSub) ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        {guardandoSub ? 'Agregando...' : '+ Agregar'}
+                      </button>
+                    </div>
+                    {!editingDeptoId && (
+                      <p style={{ margin: '6px 0 0', fontSize: '0.75rem', color: '#6b7280' }}>
+                        Se crearán al guardar el departamento.
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
                 <button type="button" onClick={() => setShowDeptoModal(false)} style={btnSecondary}>Cancelar</button>
@@ -3371,7 +4131,8 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
             </form>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* ========== MODAL: CREAR/EDITAR PUESTO ========== */}
       {showPuestoModal && (
@@ -3401,7 +4162,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                         onChange={e => setPuestoForm(p => ({ ...p, departamento_id: e.target.value ? Number(e.target.value) : undefined }))}
                         required disabled={!puestoForm.empresa_id}>
                         <option value="">-- Seleccionar departamento --</option>
-                        {deptosForEmpresa(puestoForm.empresa_id).map(d => (
+                        {deptosRaizForEmpresa(puestoForm.empresa_id).map(d => (
                           <option key={d.id} value={d.id}>{d.nombre}</option>
                         ))}
                       </select>
@@ -3444,6 +4205,60 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
           </div>
         </div>
       )}
+      {/* Modal contraseña temporal (copiable) */}
+      {passwordTemporalInfo && (
+        <div
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+          onClick={() => setPasswordTemporalInfo(null)}
+        >
+          <div
+            style={{ background: '#fff', borderRadius: 12, padding: 24, width: '100%', maxWidth: 420, boxShadow: '0 8px 30px rgba(0,0,0,0.18)' }}
+            onClick={e => e.stopPropagation()}
+          >
+            <h3 style={{ margin: '0 0 8px', fontSize: '1.1rem', color: '#1e3a5f' }}>Contraseña temporal</h3>
+            <p style={{ margin: '0 0 6px', fontSize: '0.88rem', color: '#374151' }}>
+              Empleado: <strong>{passwordTemporalInfo.nombre}</strong>
+            </p>
+            <p style={{ margin: '0 0 14px', fontSize: '0.82rem', color: '#6b7280', lineHeight: 1.4 }}>
+              {passwordTemporalInfo.mensaje} Cópiala ahora; no se volverá a mostrar.
+            </p>
+            <label style={{ display: 'block', fontSize: '0.8rem', fontWeight: 600, color: '#374151', marginBottom: 4 }}>
+              Clave temporal
+            </label>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+              <input
+                id="password-temporal-input"
+                readOnly
+                value={passwordTemporalInfo.password}
+                onFocus={e => e.currentTarget.select()}
+                style={{
+                  flex: 1,
+                  height: 40,
+                  padding: '0 12px',
+                  fontSize: '1.05rem',
+                  fontFamily: 'ui-monospace, Consolas, monospace',
+                  letterSpacing: '0.04em',
+                  border: '1px solid #93c5fd',
+                  borderRadius: 8,
+                  background: '#f0f9ff',
+                  color: '#0f172a',
+                }}
+              />
+              <button type="button" onClick={copiarPasswordTemporal} style={{ ...btnPrimary, whiteSpace: 'nowrap', height: 40 }}>
+                {passwordCopiada ? 'Copiada' : 'Copiar'}
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => setPasswordTemporalInfo(null)}
+              style={{ ...btnSecondary, width: '100%' }}
+            >
+              Cerrar
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ── Modal Importar XLSX (solo admin) ── */}
       {isAdmin && !hideImport && showImport && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}

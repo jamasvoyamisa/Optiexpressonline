@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form, Request
 from sqlalchemy.orm import Session
 from typing import Dict, List, Optional, Tuple
 from decimal import Decimal, InvalidOperation
@@ -7,6 +7,8 @@ from app.core.database import get_db
 from app.core.config import settings
 from app.core.security import get_current_user
 from app.core.deps import get_current_empleado_with_rol, require_superuser, require_superuser_or_rh, require_superuser_download
+from app.modules.audit.middleware import _client_ip
+from app.modules.audit.service import ActividadService
 from . import schemas, service, models
 from .regimen_fiscal_sat import REGIMENES_FISCALES_SAT
 
@@ -45,10 +47,12 @@ EMPLEADOS_IMPORT_XLSX_COLUMNAS: List[Tuple[str, str, int]] = [
 def _depto_to_response(depto: models.Departamento) -> dict:
     data = {
         "id": depto.id, "nombre": depto.nombre, "empresa_id": depto.empresa_id,
-        "jefe_id": depto.jefe_id, "activo": depto.activo,
+        "jefe_id": depto.jefe_id, "padre_id": getattr(depto, "padre_id", None),
+        "activo": depto.activo,
         "created_at": depto.created_at, "updated_at": depto.updated_at,
         "empresa": depto.empresa,
         "jefe_nombre": depto.jefe_nombre,
+        "padre_nombre": getattr(depto, "padre_nombre", None),
     }
     return data
 
@@ -118,7 +122,10 @@ def create_departamento(depto: schemas.DepartamentoCreate, db: Session = Depends
         jefe = service.PersonalService.get_empleado(db, depto.jefe_id)
         if not jefe:
             raise HTTPException(status_code=400, detail="El jefe especificado no existe")
-    db_depto = service.PersonalService.create_departamento(db, depto)
+    try:
+        db_depto = service.PersonalService.create_departamento(db, depto)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     loaded = service.PersonalService.get_departamento(db, db_depto.id)
     return _depto_to_response(loaded)
 
@@ -145,7 +152,10 @@ def get_departamento(depto_id: int, db: Session = Depends(get_db)):
 
 @router.put("/departamentos/{depto_id}", response_model=schemas.DepartamentoResponse)
 def update_departamento(depto_id: int, depto: schemas.DepartamentoUpdate, db: Session = Depends(get_db)):
-    updated = service.PersonalService.update_departamento(db, depto_id, depto)
+    try:
+        updated = service.PersonalService.update_departamento(db, depto_id, depto)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if not updated:
         raise HTTPException(status_code=404, detail="Departamento no encontrado")
     loaded = service.PersonalService.get_departamento(db, depto_id)
@@ -574,6 +584,69 @@ def update_empleado(
     return db_empleado
 
 
+@router.post("/empleados/{empleado_id}/restablecer-password")
+def restablecer_password_empleado(
+    empleado_id: int,
+    request: Request,
+    current_extra: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db),
+):
+    """
+    RH o Admin genera una contraseña temporal aleatoria.
+    El colaborador debe cambiarla al entrar (must_change_password).
+    La clave se muestra una sola vez en la respuesta.
+    """
+    if not (current_extra.get("is_superuser") or current_extra.get("is_rh")):
+        raise HTTPException(
+            status_code=403,
+            detail="Solo Administrador o RH pueden restablecer contraseñas temporales.",
+        )
+    temporal = service.PersonalService.restablecer_password_temporal(db, empleado_id)
+    if temporal is None:
+        raise HTTPException(status_code=404, detail="Empleado no encontrado")
+    actor_id = int(current_extra["user_id"])
+    afectado = (
+        db.query(models.Empleado)
+        .filter(models.Empleado.id == empleado_id)
+        .first()
+    )
+    num_afectado = (afectado.numero_empleado if afectado else None) or str(empleado_id)
+    nombre_afectado = (
+        " ".join(
+            p for p in [
+                afectado.nombre if afectado else None,
+                afectado.apellido_paterno if afectado else None,
+                afectado.apellido_materno if afectado else None,
+            ] if p and str(p).strip()
+        ) or None
+    )
+    empresa_afectado = (afectado.empresa.nombre if afectado and afectado.empresa else None)
+    ActividadService.registrar(
+        db,
+        nivel="info",
+        categoria="auth",
+        mensaje=f"Contraseña temporal restablecida para No. empleado {num_afectado}",
+        empleado_id=actor_id,
+        ip_cliente=_client_ip(request) or None,
+        metodo_http="POST",
+        ruta=(f"{settings.API_V1_PREFIX}/personal/empleados/{empleado_id}/restablecer-password")[:500],
+        codigo_http=200,
+        contexto={
+            "empleado_afectado_id": empleado_id,
+            "empleado_afectado_numero": num_afectado,
+            "empleado_afectado_nombre": nombre_afectado,
+            "empleado_afectado_empresa": empresa_afectado,
+            "accion": "restablecer_password_temporal",
+            "actor_rol": "admin" if current_extra.get("is_superuser") else "rh",
+        },
+    )
+    return {
+        "empleado_id": empleado_id,
+        "password_temporal": temporal,
+        "mensaje": "Contraseña temporal generada. Entrégala al colaborador; deberá cambiarla al iniciar sesión.",
+    }
+
+
 @router.patch("/empleados/{empleado_id}/permisos-especiales", response_model=schemas.EmpleadoResponse)
 def set_permisos_especiales(
     empleado_id: int,
@@ -636,7 +709,7 @@ def create_usuario_especial(
     if puesto.departamento_id is not None and puesto.departamento_id != data.departamento_id:
         raise HTTPException(status_code=400, detail="El puesto no pertenece al departamento seleccionado")
 
-    if (puesto.nombre or "").strip().lower() == "director":
+    if (puesto.nombre or "").strip().lower() in ("director", "subdirector", "gerente general"):
         ids = set(data.empresas_supervision_ids or [data.empresa_id])
         ids.add(data.empresa_id)
         for eid in ids:
@@ -1002,6 +1075,7 @@ async def importar_empleados_xlsx(
             password_raw = get_cell(row_data, "password")
             if password_raw and _vac(existing.password_hash):
                 existing.password_hash = get_password_hash(password_raw)
+                existing.must_change_password = True
                 cambios.append("password_hash")
 
             if cambios:

@@ -64,11 +64,16 @@ api.interceptors.response.use(
       const isLoginRequest = url.includes('/auth/login');
       const alreadyRetried = Boolean(originalRequest._retry);
 
+      // Login fallido (credenciales incorrectas): no redirigir como «sesión expirada».
+      if (isLoginRequest) {
+        return Promise.reject(error);
+      }
+
       // Mensaje específico cuando el backend informa sesión desplazada
       const detail: string = error.response?.data?.detail ?? '';
       const isKicked = detail.toLowerCase().includes('otro dispositivo');
 
-      if (!isLoginRequest && !isRefreshRequest && !alreadyRetried && !isKicked) {
+      if (!isRefreshRequest && !alreadyRetried && !isKicked) {
         originalRequest._retry = true;
         if (!isRefreshing) {
           isRefreshing = true;

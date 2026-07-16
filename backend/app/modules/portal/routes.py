@@ -109,12 +109,17 @@ def listar_empresas_checadas_remotas(db: Session = Depends(get_db)):
 
 @router.post("/checadas", response_model=schemas.ChecadaRemotaResponse)
 def registrar_checada(data: schemas.ChecadaRemotaRequest, db: Session = Depends(get_db)):
-    """Registra una checada remota. Autentica con empresa + número de empleado + contraseña de la app."""
+    """Registra una checada remota. Autentica con empresa + usuario + contraseña de la app."""
     return service.registrar_checada_remota(
         db,
         empresa_id=data.empresa_id,
-        numero_empleado=data.numero_empleado,
+        username=data.username,
         password=data.password,
+        motivo=data.motivo,
+        motivo_detalle=data.motivo_detalle,
+        latitud=data.latitud,
+        longitud=data.longitud,
+        geo_precision_m=data.geo_precision_m,
     )
 
 
@@ -124,6 +129,6 @@ def estado_hoy(data: schemas.ChecadaRemotaRequest, db: Session = Depends(get_db)
     return service.estado_checada_remota(
         db,
         empresa_id=data.empresa_id,
-        numero_empleado=data.numero_empleado,
+        username=data.username,
         password=data.password,
     )

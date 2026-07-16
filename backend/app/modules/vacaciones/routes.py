@@ -1,15 +1,21 @@
 from datetime import datetime as dt
 from decimal import Decimal
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from app.core.database import get_db
 from app.core.config import settings
-from app.core.security import get_current_user
+from app.core.security import get_current_user, verify_empleado_password
 from app.core.deps import get_current_empleado_with_rol, require_superuser, require_superuser_or_rh
 from app.modules.audit.negocio import registrar_negocio
+from app.modules.audit.middleware import _client_ip
 
 from . import schemas, service
+
+TEXTO_ACEPTACION_SOLICITUD = (
+    "Declaro que solicito estas vacaciones de forma voluntaria, "
+    "acepto las fechas indicadas y confirmo con mi contraseña."
+)
 
 
 def _require_superuser_vacaciones_generales(current: dict):
@@ -109,23 +115,45 @@ def get_mis_solicitudes(
 @router.post("/mis-solicitudes", response_model=schemas.SolicitudVacacionesResponse, status_code=status.HTTP_201_CREATED)
 def create_mi_solicitud(
     body: schemas.SolicitudVacacionesCreateMine,
+    request: Request,
     current: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Crear solicitud de vacaciones del empleado actual. Requiere autenticación."""
+    """Crear solicitud de vacaciones del empleado actual. Requiere aceptación + contraseña (Fase B)."""
+    from datetime import datetime, timezone
+    from app.modules.personal.models import Empleado
+
     empleado_id = int(current["user_id"])
+    if not body.acepto:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Debes marcar que aceptas la solicitud de vacaciones.",
+        )
+    if not (body.password or "").strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Indica tu contraseña para confirmar la solicitud.",
+        )
+    emp = db.query(Empleado).filter(Empleado.id == empleado_id).first()
+    if not emp or not verify_empleado_password(emp, body.password):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Contraseña incorrecta. No se creó la solicitud.",
+        )
+
     solicitud = schemas.SolicitudVacacionesCreate(
         empleado_id=empleado_id,
         fecha_inicio=body.fecha_inicio,
         fecha_fin=body.fecha_fin,
-        motivo=body.motivo
+        motivo=body.motivo,
+        aceptacion_solicitante_at=datetime.now(timezone.utc),
+        aceptacion_solicitante_ip=(_client_ip(request) or None),
+        aceptacion_solicitante_texto=TEXTO_ACEPTACION_SOLICITUD,
     )
     try:
         result = service.VacacionesService.create_solicitud(db, solicitud)
         # Notificar al jefe directo que hay una nueva solicitud pendiente
         try:
-            from app.modules.personal.models import Empleado
-            emp = db.query(Empleado).filter(Empleado.id == empleado_id).first()
             if emp and emp.jefe_id:
                 nombre_emp = f"{emp.nombre} {emp.apellido_paterno or ''}".strip()
                 fi = body.fecha_inicio.strftime("%d/%m/%Y")
@@ -143,7 +171,16 @@ def create_mi_solicitud(
         registrar_negocio(
             db,
             empleado_id=empleado_id,
-            mensaje=f"Solicitud de vacaciones creada id={result.id} ({result.dias_solicitados} días)",
+            mensaje=f"Solicitud de vacaciones creada id={result.id} ({result.dias_solicitados} días) con aceptación FES",
+            contexto={
+                "solicitud_id": result.id,
+                "accion": "solicitar_fes",
+                "dias": result.dias_solicitados,
+                "aceptacion_at": getattr(result, "aceptacion_solicitante_at", None)
+                or solicitud.aceptacion_solicitante_at,
+                "aceptacion_ip": getattr(result, "aceptacion_solicitante_ip", None)
+                or solicitud.aceptacion_solicitante_ip,
+            },
         )
         return result
     except ValueError as e:
@@ -241,11 +278,26 @@ def cancelar_mi_solicitud(
 def aprobar_solicitud(
     solicitud_id: int,
     aprobacion: schemas.SolicitudVacacionesAprobar,
+    request: Request,
     jefe_id: int = Query(..., description="ID del jefe que aprueba"),
     current_extra: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db)
 ):
     """Aprobar o rechazar. Al aprobar, el saldo se descuenta de inmediato; RH solo registra confirmación formal (o auto 24 h antes del inicio)."""
+    from datetime import datetime, timezone
+    from app.modules.personal.models import Empleado
+
+    uid = int(current_extra["user_id"])
+    if uid != int(jefe_id) and not current_extra.get("is_superuser"):
+        raise HTTPException(status_code=403, detail="Solo puedes firmar con tu propio usuario.")
+    if not aprobacion.acepto:
+        raise HTTPException(status_code=400, detail="Debes confirmar la aceptación con el casilla de aceptación.")
+    if not (aprobacion.password or "").strip():
+        raise HTTPException(status_code=400, detail="Indica tu contraseña para confirmar la decisión.")
+    firmante = db.query(Empleado).filter(Empleado.id == uid).first()
+    if not firmante or not verify_empleado_password(firmante, aprobacion.password):
+        raise HTTPException(status_code=400, detail="Contraseña incorrecta.")
+
     try:
         result = service.VacacionesService.aprobar_solicitud(
             db,
@@ -256,7 +308,9 @@ def aprobar_solicitud(
             bypass_permiso=current_extra.get("is_superuser") is True,
             es_gerente_o_director=current_extra.get("is_gerente_general") is True or current_extra.get("is_director") is True,
             es_gerente_general=current_extra.get("is_gerente_general") is True,
-            departamento_ids_que_administro=current_extra.get("departamento_ids_que_administro") or []
+            departamento_ids_que_administro=current_extra.get("departamento_ids_que_administro") or [],
+            aceptacion_jefe_at=datetime.now(timezone.utc),
+            aceptacion_jefe_ip=(_client_ip(request) or None),
         )
         if result:
             _set_jefe_aprobador_nombre(result)
@@ -301,10 +355,20 @@ def aprobar_solicitud(
             except Exception:
                 pass
             accion = "aprobada por jefe (saldo descontado)" if aprobacion.aprobar else "rechazada por jefe"
+            solicitante = db.query(Empleado).filter(Empleado.id == result.empleado_id).first()
+            num_solicitante = (solicitante.numero_empleado if solicitante else None) or str(result.empleado_id)
             registrar_negocio(
                 db,
                 empleado_id=jefe_id,
-                mensaje=f"Solicitud vacaciones id={solicitud_id} {accion}; solicitante empleado_id={result.empleado_id}",
+                mensaje=f"Solicitud vacaciones id={solicitud_id} {accion}; solicitante No. {num_solicitante}",
+                contexto={
+                    "solicitud_id": solicitud_id,
+                    "accion": "aprobar_jefe" if aprobacion.aprobar else "rechazar_jefe",
+                    "empleado_solicitante_id": result.empleado_id,
+                    "empleado_solicitante_numero": num_solicitante,
+                    "aceptacion_at": getattr(result, "aceptacion_jefe_at", None),
+                    "aceptacion_ip": getattr(result, "aceptacion_jefe_ip", None),
+                },
             )
         return result
     except ValueError as e:
@@ -323,6 +387,7 @@ def aprobar_solicitud(
 def confirmar_solicitud_rh(
     solicitud_id: int,
     aprobacion: schemas.SolicitudVacacionesAprobar,
+    request: Request,
     current: dict = Depends(get_current_user),
     current_extra: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db)
@@ -331,12 +396,22 @@ def confirmar_solicitud_rh(
     Registro formal de RH (sin descuento de saldo: ya ocurrió al aprobar el jefe).
     Solo rechazo desde la vista del jefe antes del inicio si aplica políticas internas.
     """
+    from datetime import datetime, timezone
+    from app.modules.personal.models import Empleado
+
     if not aprobacion.aprobar:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Desde la confirmación de RH solo se puede aprobar. Para rechazar use la vista del jefe directo."
         )
+    if not aprobacion.acepto:
+        raise HTTPException(status_code=400, detail="Debes confirmar la aceptación para el registro formal de RH.")
+    if not (aprobacion.password or "").strip():
+        raise HTTPException(status_code=400, detail="Indica tu contraseña para confirmar el registro de RH.")
     aprobador_id = int(current["user_id"])
+    firmante = db.query(Empleado).filter(Empleado.id == aprobador_id).first()
+    if not firmante or not verify_empleado_password(firmante, aprobacion.password):
+        raise HTTPException(status_code=400, detail="Contraseña incorrecta.")
     try:
         result = service.VacacionesService.confirmar_rh(
             db,
@@ -344,6 +419,8 @@ def confirmar_solicitud_rh(
             aprobador_id,
             aprobacion.aprobar,
             aprobacion.comentarios,
+            aceptacion_rh_at=datetime.now(timezone.utc),
+            aceptacion_rh_ip=(_client_ip(request) or None),
         )
         if result:
             _set_jefe_aprobador_nombre(result)
@@ -359,10 +436,20 @@ def confirmar_solicitud_rh(
                 )
             except Exception:
                 pass
+            solicitante = db.query(Empleado).filter(Empleado.id == result.empleado_id).first()
+            num_solicitante = (solicitante.numero_empleado if solicitante else None) or str(result.empleado_id)
             registrar_negocio(
                 db,
                 empleado_id=aprobador_id,
-                mensaje=f"Solicitud vacaciones confirmada por RH id={solicitud_id}; empleado_id={result.empleado_id}",
+                mensaje=f"Solicitud vacaciones confirmada por RH id={solicitud_id}; No. empleado {num_solicitante}",
+                contexto={
+                    "solicitud_id": solicitud_id,
+                    "accion": "confirmar_rh_fes",
+                    "empleado_solicitante_id": result.empleado_id,
+                    "empleado_solicitante_numero": num_solicitante,
+                    "aceptacion_at": getattr(result, "aceptacion_rh_at", None),
+                    "aceptacion_ip": getattr(result, "aceptacion_rh_ip", None),
+                },
             )
         return result
     except ValueError as e:

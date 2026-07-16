@@ -5,11 +5,24 @@ from sqlalchemy.orm import Session, joinedload
 from datetime import date
 from zoneinfo import ZoneInfo
 from app.core.database import get_db
-from app.core.security import verify_password, create_access_token, create_refresh_token, decode_access_token, get_current_user
 from app.modules.personal.models import Empleado, Departamento, Rol
 from app.modules.personal.service import PersonalService
-from app.modules.auth.schemas import LoginRequest, RefreshTokenRequest, TokenResponse, UserInfo
+from app.modules.auth.schemas import (
+    LoginRequest,
+    RefreshTokenRequest,
+    TokenResponse,
+    UserInfo,
+    CambiarPasswordRequest,
+)
 from app.core.config import settings
+from app.core.security import (
+    verify_password,
+    create_access_token,
+    create_refresh_token,
+    decode_access_token,
+    get_current_user,
+    get_password_hash,
+)
 from app.modules.audit.middleware import _client_ip
 from app.modules.audit.service import ActividadService
 
@@ -233,6 +246,7 @@ def login(
         "departamentos": [{"id": d.id, "nombre": d.nombre} for d in departamentos],
         "departamentos_que_administro": departamentos_que_administro,
         "exento_incidencias": bool(getattr(empleado, "exento_incidencias", False)),
+        "must_change_password": bool(getattr(empleado, "must_change_password", False)),
     }
     
     return TokenResponse(
@@ -392,4 +406,64 @@ def get_me(
         "departamentos": [{"id": d.id, "nombre": d.nombre} for d in departamentos],
         "departamentos_que_administro": departamentos_que_administro,
         "exento_incidencias": bool(getattr(empleado, "exento_incidencias", False)),
+        "must_change_password": bool(getattr(empleado, "must_change_password", False)),
     }
+
+
+@router.post("/cambiar-password")
+def cambiar_password(
+    body: CambiarPasswordRequest,
+    request: Request,
+    current: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    El colaborador cambia su propia contraseña (definitiva).
+    - Si must_change_password: no pide la actual (ya entró con la temporal).
+    - Si no: exige password_actual correcta.
+    """
+    import hashlib
+    empleado_id = int(current["user_id"])
+    empleado = db.query(Empleado).filter(Empleado.id == empleado_id).first()
+    if not empleado:
+        raise HTTPException(status_code=404, detail="Empleado no encontrado")
+
+    nueva = (body.password_nueva or "").strip()
+    if len(nueva) < 8:
+        raise HTTPException(status_code=400, detail="La nueva contraseña debe tener al menos 8 caracteres")
+
+    debe_cambiar = bool(getattr(empleado, "must_change_password", False))
+    if not debe_cambiar:
+        actual = (body.password_actual or "").strip()
+        if not actual:
+            raise HTTPException(status_code=400, detail="Indica tu contraseña actual")
+        if nueva == actual:
+            raise HTTPException(status_code=400, detail="La nueva contraseña debe ser distinta a la actual")
+
+        ok_actual = False
+        if not empleado.password_hash:
+            ok_actual = actual == (empleado.numero_empleado or "") or actual == "admin123"
+        elif len(empleado.password_hash) == 64:
+            ok_actual = hashlib.sha256(actual.encode()).hexdigest() == empleado.password_hash
+        else:
+            ok_actual = verify_password(actual, empleado.password_hash)
+
+        if not ok_actual:
+            raise HTTPException(status_code=400, detail="La contraseña actual no es correcta")
+
+    empleado.password_hash = get_password_hash(nueva)
+    empleado.must_change_password = False
+    db.commit()
+    ActividadService.registrar(
+        db,
+        nivel="info",
+        categoria="auth",
+        mensaje="Contraseña cambiada por el colaborador",
+        empleado_id=empleado_id,
+        ip_cliente=_client_ip(request) or None,
+        metodo_http="POST",
+        ruta=(f"{settings.API_V1_PREFIX}/auth/cambiar-password")[:500],
+        codigo_http=200,
+        contexto={"forzado_por_must_change": debe_cambiar},
+    )
+    return {"ok": True, "mensaje": "Contraseña actualizada"}

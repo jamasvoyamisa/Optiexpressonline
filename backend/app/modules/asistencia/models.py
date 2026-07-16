@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Enum, Text, LargeBinary, UniqueConstraint, Date, JSON
+from sqlalchemy import Column, Integer, String, ForeignKey, DateTime, Boolean, Enum, Text, Float, LargeBinary, UniqueConstraint, Date, JSON
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 import enum
@@ -195,7 +195,7 @@ class EmpleadoHorario(Base):
 
 class Asistencia(Base):
     __tablename__ = "asistencias"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     empleado_id = Column(Integer, ForeignKey("empleados.id"), nullable=False, index=True)
     dispositivo_id = Column(Integer, ForeignKey("dispositivos.id", ondelete="CASCADE"), nullable=False)
@@ -203,10 +203,16 @@ class Asistencia(Base):
     tipo = Column(Enum(TipoChecada), nullable=False)
     es_tiempo_extra = Column(Boolean, default=False)
     sincronizado = Column(Boolean, default=True)
-    
+    # Fase D — portal remoto: motivo + punto de ubicación al checar (no rastreo continuo)
+    motivo_remoto = Column(String(20), nullable=True)  # HO | TFO | OTRO
+    motivo_remoto_detalle = Column(String(255), nullable=True)
+    latitud = Column(Float, nullable=True)
+    longitud = Column(Float, nullable=True)
+    geo_precision_m = Column(Float, nullable=True)
+
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    
+
     # Relaciones
     empleado = relationship("Empleado", backref="asistencias")
     dispositivo = relationship("Dispositivo", back_populates="checadas")

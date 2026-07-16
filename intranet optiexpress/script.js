@@ -1,6 +1,7 @@
 // Avisos: imágenes de la carpeta images/Avisos/
+// Quiniela: al cambiar imagen, actualizar ruta aquí y el preload en index.html
 const avisos = [
-    { imagen: 'images/Avisos/quiniela.jpeg', titulo: 'Quiniela Mundialista Grupo Cristal', ampliar: true, destacado: true },
+    { imagen: 'images/Avisos/quiniela-15a-julio.jpeg', titulo: 'Quiniela Mundialista Grupo Cristal', ampliar: true, destacado: true },
     { imagen: 'images/Avisos/cumpleaños-julio.jpeg', titulo: 'Cumpleaños julio' },
     { imagen: 'images/Avisos/dias-feriados-oficiales.jpg', titulo: 'Días Feriados Oficiales' },
     { imagen: 'images/Avisos/dias-feriados-no-oficiales.jpg', titulo: 'Días Feriados No Oficiales' }
@@ -159,6 +160,15 @@ const MOSTRAR_POPUP_DIA_MADRES_2026 = true;
 const DIA_MADRES_DESDE_MX = '2026-05-07';
 const DIA_MADRES_HASTA_MX = '2026-05-10';
 
+/** Capacitación EssilorLuxottica — Crizal / Kodak Precise Next (23 jul 2026).
+ *  Visible hasta el día del evento; confirma asistencia antes del 20 de julio.
+ */
+const MOSTRAR_POPUP_CAP_ESSILOR_2026 = true;
+const CAP_ESSILOR_DESDE_MX = '2026-07-14';
+const CAP_ESSILOR_HASTA_MX = '2026-07-23';
+const CAP_ESSILOR_IMG = 'images/Avisos/cap-essilor-crizal-23julio.png';
+const CAP_ESSILOR_WHATSAPP = 'https://wa.me/523323584237';
+
 function _mexicoYmd(d = new Date()) {
     return new Intl.DateTimeFormat('en-CA', {
         timeZone: 'America/Mexico_City',
@@ -180,6 +190,12 @@ function popupDiaMadres2026HabilitadoHoy() {
     return ahoraMx >= DIA_MADRES_DESDE_MX && ahoraMx <= DIA_MADRES_HASTA_MX;
 }
 
+function popupCapEssilor2026HabilitadoHoy() {
+    if (!MOSTRAR_POPUP_CAP_ESSILOR_2026) return false;
+    const ahoraMx = _mexicoYmd();
+    return ahoraMx >= CAP_ESSILOR_DESDE_MX && ahoraMx <= CAP_ESSILOR_HASTA_MX;
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     renderizarAvisos();
     renderizarPromocionesActivas();
@@ -192,7 +208,19 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         const paramsLanding = new URLSearchParams(window.location.search || '');
         const mostrarMadres = popupDiaMadres2026HabilitadoHoy() || paramsLanding.get('ver_madres') === '1';
-        if (mostrarMadres) {
+        const mostrarEssilor = popupCapEssilor2026HabilitadoHoy() || paramsLanding.get('ver_essilor') === '1';
+        if (mostrarEssilor) {
+            // Capacitación Essilor primero; al cerrar, Madres (si aplica) o cumpleañeros.
+            setTimeout(() => mostrarPopupCapEssilor2026({
+                onCerrar: () => {
+                    if (mostrarMadres) {
+                        mostrarPopupDiaMadres2026({ onCerrar: verificarCumpleaneros });
+                    } else {
+                        verificarCumpleaneros();
+                    }
+                },
+            }), 700);
+        } else if (mostrarMadres) {
             // Día de las Madres PRIMERO; al cerrarse, lanzamos el popup de cumpleañeros.
             setTimeout(() => mostrarPopupDiaMadres2026({ onCerrar: verificarCumpleaneros }), 800);
         } else {
@@ -594,6 +622,75 @@ function mostrarPopupDiaMadres2026(opciones) {
         lanzarOnCerrar();
     };
     overlay.querySelector('.mama-cerrar')?.addEventListener('click', cerrar);
+    overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) cerrar();
+    });
+
+    requestAnimationFrame(() => overlay.classList.add('activo'));
+}
+
+// ──────────────────────────────────────────────────────
+// Popup capacitación EssilorLuxottica — Crizal / Kodak (landing)
+// ──────────────────────────────────────────────────────
+/**
+ * Flyer de capacitación de lanzamiento + confirmación WhatsApp con Lolita (Essilor).
+ * Forzar preview: ?ver_essilor=1
+ */
+function mostrarPopupCapEssilor2026(opciones) {
+    const params = new URLSearchParams(window.location.search || '');
+    const forzar = params.get('ver_essilor') === '1';
+    const onCerrar = (opciones && typeof opciones.onCerrar === 'function') ? opciones.onCerrar : null;
+    if (!forzar && !popupCapEssilor2026HabilitadoHoy()) {
+        if (onCerrar) onCerrar();
+        return;
+    }
+
+    const anterior = document.getElementById('capEssilor2026Overlay');
+    if (anterior) anterior.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'capEssilor2026Overlay';
+    overlay.className = 'essilor-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-modal', 'true');
+    overlay.setAttribute('aria-labelledby', 'essilor-titulo');
+    overlay.innerHTML = `
+    <div class="essilor-card">
+        <button type="button" class="essilor-cerrar" aria-label="Cerrar aviso">✕</button>
+        <p class="essilor-rubrica">Capacitación de lanzamiento · EssilorLuxottica</p>
+        <h2 id="essilor-titulo" class="essilor-titulo">Crizal Natural Look + Kodak Precise Next</h2>
+        <div class="essilor-flyer-wrap">
+            <img src="${CAP_ESSILOR_IMG}" alt="Capacitación EssilorLuxottica — 23 de julio 2026, Holiday Inn Centro Histórico" class="essilor-flyer" decoding="async">
+        </div>
+        <div class="essilor-aviso">
+            <p><strong>Colaboradores de Optiexpress y Eurolab</strong> que vayan a asistir, favor de confirmar con <strong>Lolita de Essilor</strong>, al WhatsApp <a href="${CAP_ESSILOR_WHATSAPP}" target="_blank" rel="noopener noreferrer">33 2358 4237</a> <strong>antes del 20 de julio</strong>.</p>
+        </div>
+        <div class="essilor-acciones">
+            <a class="essilor-whatsapp" href="${CAP_ESSILOR_WHATSAPP}" target="_blank" rel="noopener noreferrer">Confirmar por WhatsApp</a>
+            <button type="button" class="essilor-omitir">Cerrar</button>
+        </div>
+        <p class="essilor-meta">23 de julio · 8:00 a.m. · Holiday Inn Centro Histórico, Guadalajara</p>
+    </div>`;
+
+    document.body.appendChild(overlay);
+    landingPrepararOverlay(overlay);
+
+    let onCerrarLanzado = false;
+    const lanzarOnCerrar = () => {
+        if (onCerrarLanzado) return;
+        onCerrarLanzado = true;
+        if (onCerrar) setTimeout(onCerrar, 400);
+    };
+    const cerrar = () => {
+        overlay.classList.remove('activo');
+        setTimeout(() => {
+            overlay.remove();
+            landingDesbloquearScroll();
+        }, 350);
+        lanzarOnCerrar();
+    };
+    overlay.querySelector('.essilor-cerrar')?.addEventListener('click', cerrar);
+    overlay.querySelector('.essilor-omitir')?.addEventListener('click', cerrar);
     overlay.addEventListener('click', (e) => {
         if (e.target === overlay) cerrar();
     });

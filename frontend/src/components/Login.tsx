@@ -9,6 +9,7 @@ import { DiaMadres2026Modal } from './DiaMadres2026Modal';
 
 
 const getDefaultRoute = (me: AuthMe | null): string => {
+  if (me?.must_change_password) return '/cambiar-contrasena';
   if (me?.puede_ver_dashboard) return '/dashboard';
   if (me?.puede_ver_mi_area) return '/mi-area';
   if (me?.exento_incidencias) return '/mis-datos';

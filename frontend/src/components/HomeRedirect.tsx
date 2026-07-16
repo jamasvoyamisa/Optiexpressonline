@@ -8,6 +8,8 @@ export const HomeRedirect = () => {
   if (loading) return <div style={{ padding: '24px', textAlign: 'center' }}>Cargando...</div>;
   if (!isAuthenticated) return <Navigate to="/login" replace />;
 
+  if (authMe?.must_change_password) return <Navigate to="/cambiar-contrasena" replace />;
+
   // Administrador, Director, Gerente General, RH → Dashboard
   if (authMe?.puede_ver_dashboard) return <Navigate to="/dashboard" replace />;
 

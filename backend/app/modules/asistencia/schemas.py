@@ -281,6 +281,13 @@ class AsistenciaResponse(AsistenciaBase):
     # Desde empleado en BD (p. ej. administradores excluidos del listado /personal/empleados)
     empresa_nombre: Optional[str] = None
     departamento_nombre: Optional[str] = None
+    # Fase D — portal remoto
+    motivo_remoto: Optional[str] = None
+    motivo_remoto_detalle: Optional[str] = None
+    motivo_remoto_label: Optional[str] = None
+    latitud: Optional[float] = None
+    longitud: Optional[float] = None
+    geo_precision_m: Optional[float] = None
 
     @field_serializer("timestamp", "created_at")
     def serialize_datetime_mexico(self, dt: datetime):

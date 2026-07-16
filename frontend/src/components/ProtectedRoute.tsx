@@ -3,8 +3,8 @@ import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import type { AuthMe } from '../hooks/useAuth';
 
-/** Permisos requeridos por ruta: soporte (TI o admin), superuser (solo admin), rh (RH o admin), configuracion (solo admin), dashboard, mi_area, solicitudes_vacaciones (Admin/Director/GG), o all (cualquier autenticado). */
-export type RoutePermission = 'soporte' | 'superuser' | 'rh' | 'configuracion' | 'dashboard' | 'mi_area' | 'solicitudes_vacaciones' | 'all';
+/** Permisos requeridos por ruta: soporte (TI o admin), superuser (solo admin), rh (RH o admin), organigrama (RH/Admin/Director/GG/gerentes), configuracion (solo admin), dashboard, mi_area, solicitudes_vacaciones (Admin/Director/GG), o all (cualquier autenticado). */
+export type RoutePermission = 'soporte' | 'superuser' | 'rh' | 'organigrama' | 'configuracion' | 'dashboard' | 'mi_area' | 'solicitudes_vacaciones' | 'all';
 
 const hasPermission = (authMe: AuthMe | null, perm: RoutePermission): boolean => {
   if (!authMe) return false;
@@ -12,6 +12,15 @@ const hasPermission = (authMe: AuthMe | null, perm: RoutePermission): boolean =>
   if (perm === 'soporte') return authMe.is_superuser === true || authMe.is_ti === true;
   if (perm === 'superuser') return authMe.is_superuser === true;
   if (perm === 'rh') return authMe.is_rh === true || authMe.is_superuser === true || authMe.is_director === true;
+  if (perm === 'organigrama') {
+    return (
+      authMe.is_superuser === true ||
+      authMe.is_rh === true ||
+      authMe.is_director === true ||
+      authMe.is_gerente_general === true ||
+      authMe.is_jefe === true
+    );
+  }
   if (perm === 'configuracion') return authMe.is_superuser === true;
   if (perm === 'dashboard') return authMe.puede_ver_dashboard === true || authMe.puede_ver_mi_area === true;
   if (perm === 'mi_area') return authMe.puede_ver_mi_area === true;
@@ -46,6 +55,14 @@ export const ProtectedRoute = ({ children, require: requiredPerm = 'all' }: Prot
 
   if (!isAuthenticated) {
     return <Navigate to="/login" state={{ from: location }} replace />;
+  }
+
+  // Fase A: clave temporal → solo puede estar en cambiar-contraseña hasta que la cambie.
+  if (
+    authMe?.must_change_password &&
+    location.pathname !== '/cambiar-contrasena'
+  ) {
+    return <Navigate to="/cambiar-contrasena" replace />;
   }
 
   if (!hasPermission(authMe, requiredPerm)) {

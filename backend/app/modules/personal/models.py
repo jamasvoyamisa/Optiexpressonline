@@ -66,6 +66,8 @@ class Departamento(Base):
     nombre = Column(String(150), nullable=False)
     empresa_id = Column(Integer, ForeignKey("empresas.id"), nullable=False)
     jefe_id = Column(Integer, ForeignKey("empleados.id"), nullable=True)
+    # Subdepartamento: apunta al departamento padre (misma empresa). NULL = depto raíz.
+    padre_id = Column(Integer, ForeignKey("departamentos.id"), nullable=True, index=True)
     activo = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
@@ -73,6 +75,12 @@ class Departamento(Base):
     empresa = relationship("Empresa", backref="departamentos")
     jefe = relationship("Empleado", foreign_keys=[jefe_id], backref="departamento_a_cargo")
     empleados = relationship("Empleado", back_populates="departamento_rel", foreign_keys="Empleado.departamento_id")
+    padre = relationship(
+        "Departamento",
+        remote_side=[id],
+        foreign_keys=[padre_id],
+        backref="subdepartamentos",
+    )
 
     @property
     def jefe_nombre(self) -> Optional[str]:
@@ -80,6 +88,12 @@ class Departamento(Base):
         if self.jefe:
             j = self.jefe
             return f"{j.nombre} {j.apellido_paterno or ''} {j.apellido_materno or ''}".strip()
+        return None
+
+    @property
+    def padre_nombre(self) -> Optional[str]:
+        if self.padre:
+            return self.padre.nombre
         return None
 
 
@@ -121,6 +135,8 @@ class Empleado(Base):
     telefono_empresa_asignado = Column(String(20), nullable=True)
     username = Column(String(100), unique=True, nullable=True, index=True)
     password_hash = Column(String(255), nullable=True)
+    # Fase A alineación LFT: True tras alta o reset temporal; el colaborador debe cambiarla.
+    must_change_password = Column(Boolean, default=False, nullable=False)
 
     puesto_id = Column(Integer, ForeignKey("puestos.id"), nullable=True)
     curp = Column(String(18), nullable=True)

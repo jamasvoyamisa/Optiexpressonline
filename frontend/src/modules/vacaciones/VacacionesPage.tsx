@@ -89,6 +89,31 @@ const fmtPartes = (iso: string | null | undefined) => {
   };
 };
 
+/** Fecha/hora de aceptación FES en zona México. */
+const fmtAceptacionMx = (iso: string | null | undefined) => {
+  if (!iso) return '—';
+  const s = String(iso);
+  const hasTz = s.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(s);
+  const d = new Date(hasTz ? s : s);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString('es-MX', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZone: 'America/Mexico_City',
+  });
+};
+
+const escapeHtml = (v: string) =>
+  v
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
 const generarDocumento = (sol: SolicitudVacaciones, emp: EmpleadoResumen | null) => {
   const nombreCompleto = emp
     ? [emp.nombre, emp.apellido_paterno, emp.apellido_materno].filter(Boolean).join(' ')
@@ -116,6 +141,16 @@ const generarDocumento = (sol: SolicitudVacaciones, emp: EmpleadoResumen | null)
   })();
 
   const esBorrador = sol.estado === 'pendiente';
+  const ipSol = (sol.aceptacion_solicitante_ip || '').trim() || '—';
+  const ipJefe = (sol.aceptacion_jefe_ip || '').trim() || '—';
+  const ipRh = (sol.aceptacion_rh_ip || '').trim() || '—';
+  const atSol = fmtAceptacionMx(sol.aceptacion_solicitante_at);
+  const atJefe = fmtAceptacionMx(sol.aceptacion_jefe_at);
+  const atRh = fmtAceptacionMx(sol.aceptacion_rh_at);
+  const nombreJefe = (sol.jefe_aprobador_nombre || '').trim() || '—';
+  const textoAceptacion = (sol.aceptacion_solicitante_texto || '').trim();
+  const hayFes =
+    !!(sol.aceptacion_solicitante_at || sol.aceptacion_jefe_at || sol.aceptacion_rh_at);
 
   const logoGrupo = new URL('../../assets/GPOCristal.png', import.meta.url).pathname;
   const logoRaiz = new URL('../../assets/Raiz.png', import.meta.url).pathname;
@@ -157,7 +192,14 @@ const generarDocumento = (sol: SolicitudVacaciones, emp: EmpleadoResumen | null)
   .firma-line { border-top: 1.5px solid #555; margin-bottom: 6px; }
   .firma-nombre { font-size: 11px; font-weight: 700; color: #1a1a2e; }
   .firma-cargo { font-size: 10px; color: #555; margin-top: 2px; }
+  .firma-fes { font-size: 9.5px; color: #334155; margin-top: 6px; line-height: 1.35; }
   .firmas-bottom { display: flex; justify-content: center; }
+  .fes-box { margin-top: 28px; border: 1px solid #cbd5e1; border-radius: 6px; padding: 14px 16px; background: #f8fafc; }
+  .fes-box .sec-title { margin-bottom: 10px; }
+  .fes-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  .fes-table th, .fes-table td { border: 1px solid #cbd5e1; padding: 7px 8px; text-align: left; vertical-align: top; }
+  .fes-table th { background: #e2e8f0; color: #1e3a8a; font-size: 11px; }
+  .fes-note { margin-top: 8px; font-size: 10px; color: #64748b; line-height: 1.35; }
   .borrador-banner { background: #fef9c3; border: 1px solid #fbbf24; color: #92400e; padding: 6px 14px; border-radius: 4px; font-size: 11px; font-weight: 600; }
   .btn-print { padding: 8px 20px; background: #1e3a8a; color: white; border: none; border-radius: 5px; font-size: 13px; font-weight: 600; cursor: pointer; }
   .btn-close { padding: 8px 20px; background: #e2e8f0; color: #334155; border: none; border-radius: 5px; font-size: 13px; font-weight: 600; cursor: pointer; }
@@ -192,14 +234,14 @@ const generarDocumento = (sol: SolicitudVacaciones, emp: EmpleadoResumen | null)
   <div class="form-row">
     <div class="form-field">
       <span class="form-label">Nombre de colaborador:</span>
-      <span class="form-value wide">${nombreCompleto}</span>
+      <span class="form-value wide">${escapeHtml(nombreCompleto)}</span>
     </div>
   </div>
 
   <div class="form-row">
     <div class="form-field">
       <span class="form-label">No. de nómina:</span>
-      <span class="form-value">${numEmp}</span>
+      <span class="form-value">${escapeHtml(String(numEmp))}</span>
     </div>
     <div class="form-field" style="display:flex;align-items:flex-end;gap:8px;">
       <span class="form-label" style="white-space:nowrap;">Fecha ingreso:</span>
@@ -216,18 +258,18 @@ const generarDocumento = (sol: SolicitudVacaciones, emp: EmpleadoResumen | null)
   <div class="form-row">
     <div class="form-field">
       <span class="form-label">Empresa:</span>
-      <span class="form-value">${empresa}</span>
+      <span class="form-value">${escapeHtml(empresa)}</span>
     </div>
     <div class="form-field">
       <span class="form-label">Departamento:</span>
-      <span class="form-value">${departamento}</span>
+      <span class="form-value">${escapeHtml(departamento)}</span>
     </div>
   </div>
 
   <div class="form-row">
     <div class="form-field">
       <span class="form-label">Puesto:</span>
-      <span class="form-value wide">${puesto}</span>
+      <span class="form-value wide">${escapeHtml(puesto)}</span>
     </div>
   </div>
 
@@ -261,23 +303,64 @@ const generarDocumento = (sol: SolicitudVacaciones, emp: EmpleadoResumen | null)
     </div>
   </div>
 
+  ${hayFes ? `
+  <div class="fes-box">
+    <div class="sec-title">Constancia de aceptación electrónica (FES)</div>
+    <table class="fes-table">
+      <thead>
+        <tr>
+          <th>Rol</th>
+          <th>Fecha y hora (México)</th>
+          <th>IP del equipo</th>
+          <th>Detalle</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Solicitante</td>
+          <td>${escapeHtml(atSol)}</td>
+          <td>${escapeHtml(ipSol)}</td>
+          <td>${escapeHtml(nombreCompleto)}</td>
+        </tr>
+        <tr>
+          <td>Jefe directo</td>
+          <td>${escapeHtml(atJefe)}</td>
+          <td>${escapeHtml(ipJefe)}</td>
+          <td>${escapeHtml(nombreJefe)}</td>
+        </tr>
+        <tr>
+          <td>Gestión RH</td>
+          <td>${escapeHtml(atRh)}</td>
+          <td>${escapeHtml(ipRh)}</td>
+          <td>${sol.aceptacion_rh_at ? 'Confirmación formal RH' : '—'}</td>
+        </tr>
+      </tbody>
+    </table>
+    ${textoAceptacion ? `<p class="fes-note"><strong>Texto aceptado:</strong> ${escapeHtml(textoAceptacion)}</p>` : ''}
+    <p class="fes-note">La IP corresponde a la del equipo según la red (reserva DHCP / inventario de TI). Firma electrónica simple (no e.firma SAT).</p>
+  </div>
+  ` : ''}
+
   <div class="firmas-title">Firmas para aprobación de solicitud</div>
 
   <div class="firmas-grid">
     <div class="firma-item">
       <div class="firma-line"></div>
-      <div class="firma-nombre">NOMBRE Y FIRMA</div>
+      <div class="firma-nombre">${sol.aceptacion_solicitante_at ? escapeHtml(nombreCompleto) : 'NOMBRE Y FIRMA'}</div>
       <div class="firma-cargo">Solicitante</div>
+      ${sol.aceptacion_solicitante_at ? `<div class="firma-fes">Aceptado electrónicamente<br/>${escapeHtml(atSol)}<br/>IP: ${escapeHtml(ipSol)}</div>` : ''}
     </div>
     <div class="firma-item">
       <div class="firma-line"></div>
-      <div class="firma-nombre">NOMBRE Y FIRMA</div>
+      <div class="firma-nombre">${sol.aceptacion_jefe_at && nombreJefe !== '—' ? escapeHtml(nombreJefe) : 'NOMBRE Y FIRMA'}</div>
       <div class="firma-cargo">Jefe Directo</div>
+      ${sol.aceptacion_jefe_at ? `<div class="firma-fes">Aceptado electrónicamente<br/>${escapeHtml(atJefe)}<br/>IP: ${escapeHtml(ipJefe)}</div>` : ''}
     </div>
     <div class="firma-item">
       <div class="firma-line"></div>
-      <div class="firma-nombre">NOMBRE Y FIRMA</div>
+      <div class="firma-nombre">${sol.aceptacion_rh_at ? 'Gestión RH' : 'NOMBRE Y FIRMA'}</div>
       <div class="firma-cargo">Gestión RH</div>
+      ${sol.aceptacion_rh_at ? `<div class="firma-fes">Aceptado electrónicamente<br/>${escapeHtml(atRh)}<br/>IP: ${escapeHtml(ipRh)}</div>` : ''}
     </div>
   </div>
 
@@ -371,6 +454,8 @@ export const VacacionesPage = ({ embeddedRh = false }: { embeddedRh?: boolean } 
   const [confirmandoId, setConfirmandoId] = useState<number | null>(null);
   const [modalConfirmar, setModalConfirmar] = useState<number | null>(null);
   const [comentarioRH, setComentarioRH] = useState('');
+  const [confirmacionAcepto, setConfirmacionAcepto] = useState(false);
+  const [confirmacionPassword, setConfirmacionPassword] = useState('');
 
   // Filtros
   const [busqueda, setBusqueda] = useState('');
@@ -402,12 +487,26 @@ export const VacacionesPage = ({ embeddedRh = false }: { embeddedRh?: boolean } 
   useEffect(() => { cargarDatos(); }, [cargarDatos]);
 
   const confirmarRH = async (solicitudId: number, comentarios?: string) => {
+    if (!confirmacionAcepto) {
+      alert('Debes marcar la casilla de aceptación para confirmar.');
+      return;
+    }
+    if (!confirmacionPassword.trim()) {
+      alert('Indica tu contraseña para confirmar el registro de RH.');
+      return;
+    }
     setConfirmandoId(solicitudId);
     try {
       await api.put(`/vacaciones/solicitudes/${solicitudId}/confirmar-rh`, {
         aprobar: true,
         comentarios: comentarios || null,
+        acepto: true,
+        password: confirmacionPassword,
       });
+      setModalConfirmar(null);
+      setComentarioRH('');
+      setConfirmacionAcepto(false);
+      setConfirmacionPassword('');
       await cargarDatos();
     } catch (e: unknown) {
       const msg = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail
@@ -622,7 +721,7 @@ export const VacacionesPage = ({ embeddedRh = false }: { embeddedRh?: boolean } 
                   <button
                     type="button"
                     disabled={confirmandoId === sol.id}
-                    onClick={() => { setModalConfirmar(sol.id); setComentarioRH(''); }}
+                    onClick={() => { setModalConfirmar(sol.id); setComentarioRH(''); setConfirmacionAcepto(false); setConfirmacionPassword(''); }}
                     style={{ ...rhMobileBtnPrimary, marginTop: 10, background: '#059669' }}
                   >
                     Confirmar RH
@@ -697,7 +796,7 @@ export const VacacionesPage = ({ embeddedRh = false }: { embeddedRh?: boolean } 
                             <button
                               type="button"
                               disabled={enConfirmacion}
-                              onClick={() => { setModalConfirmar(sol.id); setComentarioRH(''); }}
+                              onClick={() => { setModalConfirmar(sol.id); setComentarioRH(''); setConfirmacionAcepto(false); setConfirmacionPassword(''); }}
                               style={{
                                 padding: '5px 12px',
                                 backgroundColor: enConfirmacion ? '#9ca3af' : '#059669',
@@ -800,7 +899,7 @@ export const VacacionesPage = ({ embeddedRh = false }: { embeddedRh?: boolean } 
       {/* Modal confirmación RH */}
       {modalConfirmar !== null && (
         <div
-          onClick={() => setModalConfirmar(null)}
+          onClick={() => { setModalConfirmar(null); setConfirmacionAcepto(false); setConfirmacionPassword(''); }}
           style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
         >
           <div
@@ -825,22 +924,37 @@ export const VacacionesPage = ({ embeddedRh = false }: { embeddedRh?: boolean } 
               rows={3}
               style={{ width: '100%', padding: '8px 10px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: '0.85rem', resize: 'vertical', boxSizing: 'border-box' }}
             />
+            <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', margin: '12px 0', fontSize: '0.85rem', color: '#374151', cursor: 'pointer' }}>
+              <input type="checkbox" checked={confirmacionAcepto} onChange={(e) => setConfirmacionAcepto(e.target.checked)}
+                style={{ marginTop: 3, width: 16, height: 16, flexShrink: 0 }} />
+              <span>
+                Confirmo el registro formal de RH de esta solicitud y lo autentico con mi contraseña.
+              </span>
+            </label>
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ display: 'block', fontWeight: 600, marginBottom: 6, fontSize: '0.85rem' }}>Contraseña</label>
+              <input
+                type="password"
+                value={confirmacionPassword}
+                onChange={(e) => setConfirmacionPassword(e.target.value)}
+                autoComplete="current-password"
+                placeholder="Tu contraseña de acceso"
+                style={{ width: '100%', padding: '8px 10px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: '0.85rem', boxSizing: 'border-box' }}
+              />
+            </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 16 }}>
               <button
-                onClick={() => setModalConfirmar(null)}
+                onClick={() => { setModalConfirmar(null); setConfirmacionAcepto(false); setConfirmacionPassword(''); }}
                 style={{ padding: '7px 18px', border: '1px solid #d1d5db', borderRadius: 6, cursor: 'pointer', backgroundColor: 'white', fontSize: '0.85rem' }}
               >
                 Cancelar
               </button>
               <button
-                onClick={() => {
-                  const id = modalConfirmar;
-                  setModalConfirmar(null);
-                  confirmarRH(id, comentarioRH);
-                }}
-                style={{ padding: '7px 20px', backgroundColor: '#059669', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 700, fontSize: '0.85rem' }}
+                onClick={() => confirmarRH(modalConfirmar, comentarioRH)}
+                disabled={!!confirmandoId || !confirmacionAcepto || !confirmacionPassword.trim()}
+                style={{ padding: '7px 20px', backgroundColor: '#059669', color: 'white', border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 700, fontSize: '0.85rem', opacity: (!confirmacionAcepto || !confirmacionPassword.trim()) ? 0.6 : 1 }}
               >
-                Confirmar
+                {confirmandoId ? '...' : 'Confirmar'}
               </button>
             </div>
           </div>

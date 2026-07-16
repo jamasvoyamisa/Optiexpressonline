@@ -462,6 +462,8 @@ export const MiAreaPage = () => {
   const [filtroEstadoVacaciones, setFiltroEstadoVacaciones] = useState<string>('pendientes');
   const [modalAprobar, setModalAprobar] = useState<SolicitudVacaciones | null>(null);
   const [aprobacionComentarios, setAprobacionComentarios] = useState('');
+  const [aprobacionAcepto, setAprobacionAcepto] = useState(false);
+  const [aprobacionPassword, setAprobacionPassword] = useState('');
   const [aprobando, setAprobando] = useState(false);
   const [solicitudesPrestamos, setSolicitudesPrestamos] = useState<SolicitudPrestamo[]>([]);
   const [loadingPrestamos, setLoadingPrestamos] = useState(false);
@@ -1091,11 +1093,28 @@ export const MiAreaPage = () => {
 
   const handleAprobarRechazar = (aprobar: boolean) => {
     if (!modalAprobar || !authMe) return;
+    if (!aprobacionAcepto) {
+      alert('Debes marcar la casilla de aceptación para continuar.');
+      return;
+    }
+    if (!aprobacionPassword.trim()) {
+      alert('Indica tu contraseña para confirmar la decisión.');
+      return;
+    }
     setAprobando(true);
     api.put(`/vacaciones/solicitudes/${modalAprobar.id}/aprobar?jefe_id=${authMe.id}`, {
-      aprobar, comentarios: aprobacionComentarios.trim() || null,
+      aprobar,
+      comentarios: aprobacionComentarios.trim() || null,
+      acepto: true,
+      password: aprobacionPassword,
     })
-      .then(() => { loadSolicitudesVacaciones(); setModalAprobar(null); setAprobacionComentarios(''); })
+      .then(() => {
+        loadSolicitudesVacaciones();
+        setModalAprobar(null);
+        setAprobacionComentarios('');
+        setAprobacionAcepto(false);
+        setAprobacionPassword('');
+      })
       .catch((err) => alert(err.response?.data?.detail ?? err.message ?? 'Error al aprobar o rechazar'))
       .finally(() => setAprobando(false));
   };
@@ -1972,7 +1991,7 @@ export const MiAreaPage = () => {
                     </span>
                   </div>
                   {s.estado === 'pendiente' && (
-                    <button type="button" onClick={() => { setModalAprobar(s); setAprobacionComentarios(''); }} style={{ ...rhMobileBtnPrimary, marginTop: 10, backgroundColor: '#0d9488' }}>
+                    <button type="button" onClick={() => { setModalAprobar(s); setAprobacionComentarios(''); setAprobacionAcepto(false); setAprobacionPassword(''); }} style={{ ...rhMobileBtnPrimary, marginTop: 10, backgroundColor: '#0d9488' }}>
                       Aprobar / Rechazar
                     </button>
                   )}
@@ -2010,7 +2029,7 @@ export const MiAreaPage = () => {
                       <td style={{ ...td, textAlign: 'center' }}>
                         {s.estado === 'pendiente' && (
                           <button
-                            onClick={() => { setModalAprobar(s); setAprobacionComentarios(''); }}
+                            onClick={() => { setModalAprobar(s); setAprobacionComentarios(''); setAprobacionAcepto(false); setAprobacionPassword(''); }}
                             style={{ padding: '5px 12px', backgroundColor: '#0d9488', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.82rem' }}
                           >
                             Aprobar / Rechazar
@@ -2211,17 +2230,35 @@ export const MiAreaPage = () => {
               <textarea value={aprobacionComentarios} onChange={e => setAprobacionComentarios(e.target.value)} rows={2}
                 style={{ width: '100%', padding: '10px', border: '1px solid #ddd', borderRadius: '6px', resize: 'vertical', fontSize: '0.9rem' }} />
             </div>
+            <label style={{ display: 'flex', gap: 10, alignItems: 'flex-start', marginBottom: 12, fontSize: '0.85rem', color: '#374151', cursor: 'pointer' }}>
+              <input type="checkbox" checked={aprobacionAcepto} onChange={(e) => setAprobacionAcepto(e.target.checked)}
+                style={{ marginTop: 3, width: 16, height: 16, flexShrink: 0 }} />
+              <span>
+                Confirmo mi decisión sobre esta solicitud de vacaciones y la autentico con mi contraseña.
+              </span>
+            </label>
+            <div style={{ marginBottom: '14px' }}>
+              <label style={{ display: 'block', fontWeight: 600, marginBottom: '6px', fontSize: '0.9rem' }}>Contraseña</label>
+              <input
+                type="password"
+                value={aprobacionPassword}
+                onChange={(e) => setAprobacionPassword(e.target.value)}
+                autoComplete="current-password"
+                placeholder="Tu contraseña de acceso"
+                style={{ width: '100%', padding: '10px', border: '1px solid #ddd', borderRadius: '6px', fontSize: '0.9rem', boxSizing: 'border-box' }}
+              />
+            </div>
             <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-              <button onClick={() => setModalAprobar(null)}
+              <button onClick={() => { setModalAprobar(null); setAprobacionAcepto(false); setAprobacionPassword(''); }}
                 style={{ padding: '9px 18px', backgroundColor: '#e5e7eb', color: '#374151', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>
                 Cancelar
               </button>
-              <button onClick={() => handleAprobarRechazar(false)} disabled={aprobando}
-                style={{ padding: '9px 18px', backgroundColor: '#dc2626', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>
+              <button onClick={() => handleAprobarRechazar(false)} disabled={aprobando || !aprobacionAcepto || !aprobacionPassword.trim()}
+                style={{ padding: '9px 18px', backgroundColor: '#dc2626', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', opacity: (!aprobacionAcepto || !aprobacionPassword.trim()) ? 0.6 : 1 }}>
                 {aprobando ? '...' : 'Rechazar'}
               </button>
-              <button onClick={() => handleAprobarRechazar(true)} disabled={aprobando}
-                style={{ padding: '9px 18px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer' }}>
+              <button onClick={() => handleAprobarRechazar(true)} disabled={aprobando || !aprobacionAcepto || !aprobacionPassword.trim()}
+                style={{ padding: '9px 18px', backgroundColor: '#16a34a', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', opacity: (!aprobacionAcepto || !aprobacionPassword.trim()) ? 0.6 : 1 }}>
                 {aprobando ? '...' : 'Aprobar'}
               </button>
             </div>

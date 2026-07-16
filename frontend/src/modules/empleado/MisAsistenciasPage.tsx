@@ -45,6 +45,7 @@ type DayRow = {
   salidaComerTs?: number;
   regresoComerTs?: number;
   esTiempoExtra: boolean;
+  motivosPortal?: string[];
 };
 
 type DayRowConContexto = DayRow & { contexto?: DiaContextoLaboral };
@@ -110,6 +111,11 @@ function buildDayRows(checadas: AsistenciaResponse[]): DayRow[] {
     else if (c.tipo === 'salida_comer') { if (!row.salida_comer) { row.salida_comer = hora; row.salidaComerTs = t; } }
     else if (c.tipo === 'regreso_comer') { if (!row.regreso_comer) { row.regreso_comer = hora; row.regresoComerTs = t; } }
     else if (c.tipo === 'salida' && !row.salida) row.salida = hora;
+    const mot = (c.motivo_remoto_label || '').trim();
+    if (mot) {
+      if (!row.motivosPortal) row.motivosPortal = [];
+      if (!row.motivosPortal.includes(mot)) row.motivosPortal.push(mot);
+    }
   });
   const rows = Array.from(map.values());
   rows.sort((a, b) => b.fechaSort.localeCompare(a.fechaSort));
@@ -377,6 +383,11 @@ export const MisAsistenciasPage = () => {
                       {row.contexto.etiqueta}
                     </div>
                   )}
+                  {row.motivosPortal && row.motivosPortal.length > 0 && (
+                    <div style={{ fontSize: '0.72rem', color: '#0369a1', marginTop: 3 }}>
+                      Portal: {row.motivosPortal.join(' · ')}
+                    </div>
+                  )}
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
                   {row.esTiempoExtra && (
@@ -428,6 +439,11 @@ export const MisAsistenciasPage = () => {
                     {row.fecha}
                     {row.esTiempoExtra && (
                       <span style={{ marginLeft: '8px', padding: '2px 8px', borderRadius: '4px', fontSize: '0.72rem', fontWeight: 600, backgroundColor: '#ff9800', color: 'white' }}>T. EXTRA</span>
+                    )}
+                    {row.motivosPortal && row.motivosPortal.length > 0 && (
+                      <div style={{ fontSize: '0.72rem', color: '#0369a1', marginTop: 2 }}>
+                        Portal: {row.motivosPortal.join(' · ')}
+                      </div>
                     )}
                   </td>
                   <td style={{ ...td, fontSize: '0.85rem', color: '#334155', lineHeight: 1.35, verticalAlign: 'top' }}>

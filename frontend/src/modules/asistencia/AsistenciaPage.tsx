@@ -113,6 +113,8 @@ export const AsistenciaPage = () => {
     /** Timestamp (ms) de salida a comer y regreso (para restar del total) */
     salidaComerTs?: number;
     regresoComerTs?: number;
+    /** Motivos de checadas de portal remoto del día (HO/TFO/Otro) */
+    motivosPortal?: string[];
   };
 
   const calcularHorasDelDia = (row: DayRow): string => {
@@ -159,6 +161,11 @@ export const AsistenciaPage = () => {
       } else if (c.tipo === 'regreso_comer') {
         if (!row.regreso_comer) { row.regreso_comer = hora; row.regresoComerTs = t; }
       } else if (c.tipo === 'salida' && !row.salida) row.salida = hora;
+      const mot = (c.motivo_remoto_label || '').trim();
+      if (mot) {
+        if (!row.motivosPortal) row.motivosPortal = [];
+        if (!row.motivosPortal.includes(mot)) row.motivosPortal.push(mot);
+      }
     }
     const list = Array.from(map.values());
     list.forEach(row => { row.totalHoras = calcularHorasDelDia(row); });
@@ -325,6 +332,11 @@ export const AsistenciaPage = () => {
                 <div style={{ marginTop: 10 }}>
                   <ChecadaMiniGrid entrada={row.entrada} salida_comer={row.salida_comer} regreso_comer={row.regreso_comer} salida={row.salida} />
                 </div>
+                {row.motivosPortal && row.motivosPortal.length > 0 && (
+                  <div style={{ marginTop: 8, fontSize: '0.75rem', color: '#0369a1' }}>
+                    Portal: {row.motivosPortal.join(' · ')}
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -365,6 +377,11 @@ export const AsistenciaPage = () => {
                         fontSize: '0.72rem', fontWeight: 600,
                         backgroundColor: '#ff9800', color: 'white',
                       }}>T. EXTRA</span>
+                    )}
+                    {row.motivosPortal && row.motivosPortal.length > 0 && (
+                      <div style={{ fontSize: '0.72rem', color: '#0369a1', marginTop: 2, whiteSpace: 'normal' }}>
+                        Portal: {row.motivosPortal.join(' · ')}
+                      </div>
                     )}
                   </td>
                   <td style={{ padding: '10px 14px', textAlign: 'center', fontWeight: 600, color: row.entrada ? '#155724' : '#ccc' }}>{row.entrada || '--:--'}</td>
