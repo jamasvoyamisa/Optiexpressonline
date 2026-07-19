@@ -37,12 +37,6 @@ const fmtDate = (iso: string) => {
   });
 };
 
-const toLocalDate = (iso: string) => {
-  const s = String(iso);
-  const hasTz = s.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(s);
-  return new Date(hasTz ? s : s);
-};
-
 /** Extrae la empresa del empleado afectado desde el contexto (JSON) del log, si existe. */
 const extraerEmpresaContexto = (contexto?: string | null): string | null => {
   if (!contexto) return null;

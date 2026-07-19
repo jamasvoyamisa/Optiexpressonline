@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime as dt
 from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
@@ -11,6 +12,8 @@ from app.modules.audit.negocio import registrar_negocio
 from app.modules.audit.middleware import _client_ip
 
 from . import schemas, service
+
+logger = logging.getLogger(__name__)
 
 TEXTO_ACEPTACION_SOLICITUD = (
     "Declaro que solicito estas vacaciones de forma voluntaria, "
@@ -71,9 +74,16 @@ def _balance_con_periodos_schema(data: dict) -> schemas.BalanceConPeriodosRespon
     )
 
 
-@router.post("/solicitudes", response_model=schemas.SolicitudVacacionesResponse, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/solicitudes",
+    response_model=schemas.SolicitudVacacionesResponse,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_superuser_or_rh)],
+)
 def create_solicitud(solicitud: schemas.SolicitudVacacionesCreate, db: Session = Depends(get_db)):
-    """Crear nueva solicitud de vacaciones"""
+    """Crear solicitud de vacaciones a nombre de un empleado (uso de RH/Admin). El
+    autoservicio del colaborador usa POST /mis-solicitudes, que exige contraseña y
+    toma el empleado_id del token."""
     try:
         result = service.VacacionesService.create_solicitud(db, solicitud)
         registrar_negocio(
@@ -243,8 +253,32 @@ def get_solicitud(
             detail="Solicitud no encontrada"
         )
     empleado_id = int(current["user_id"])
+
+    # Solo puede verla: el propio solicitante, su jefe directo o de departamento, RH o Admin.
+    # Antes cualquier empleado autenticado podía ver la solicitud de cualquier otro cambiando
+    # el ID en la URL (motivo, fechas, comentarios de aprobación).
+    es_propio = db_solicitud.empleado_id == empleado_id
+    solicitante = db_solicitud.empleado
+    es_su_jefe = bool(solicitante and getattr(solicitante, "jefe_id", None) == empleado_id)
+    es_jefe_depto = bool(
+        solicitante
+        and getattr(solicitante, "departamento_rel", None)
+        and getattr(solicitante.departamento_rel, "jefe_id", None) == empleado_id
+    )
+    if not (
+        es_propio
+        or es_su_jefe
+        or es_jefe_depto
+        or current.get("is_superuser")
+        or current.get("is_rh")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Solicitud no encontrada",
+        )
+
     estado_sol = getattr(db_solicitud.estado, "value", str(db_solicitud.estado)).lower()
-    if estado_sol == "cancelada" and db_solicitud.empleado_id != empleado_id and not current.get("is_superuser"):
+    if estado_sol == "cancelada" and not es_propio and not current.get("is_superuser"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Solicitud no encontrada",
@@ -376,10 +410,11 @@ def aprobar_solicitud(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-    except Exception as e:
+    except Exception:
+        logger.exception("Error al procesar solicitud de vacaciones (aprobación jefe)")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error al procesar solicitud: {str(e)}"
+            detail="Error al procesar la solicitud. Intenta de nuevo o contacta a soporte."
         )
 
 
@@ -457,10 +492,11 @@ def confirmar_solicitud_rh(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-    except Exception as e:
+    except Exception:
+        logger.exception("Error al confirmar solicitud de vacaciones (RH)")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error al confirmar solicitud: {str(e)}"
+            detail="Error al confirmar la solicitud. Intenta de nuevo o contacta a soporte."
         )
 
 

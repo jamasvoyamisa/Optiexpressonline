@@ -1,5 +1,7 @@
 /**
- * Descarga un archivo protegido usando fetch con ?download_token=xxx.
+ * Descarga un archivo protegido usando fetch con el JWT en el header Authorization
+ * (igual que cualquier otra petición autenticada, en vez de en la URL vía query string,
+ * donde puede quedar expuesto en logs de servidor/proxy o en el historial del navegador).
  * Si el backend responde JSON de error (401/403/500), muestra mensaje en vez de
  * descargar un .json (caso observado especialmente en Chrome).
  */
@@ -26,10 +28,12 @@ export async function descargarArchivo(
   }
   const base = (api.defaults.baseURL ?? '/api/v1').replace(/\/$/, '');
   const rutaLimpia = ruta.replace(/^\//, '');
-  const sep = rutaLimpia.includes('?') ? '&' : '?';
-  const url = `${base}/${rutaLimpia}${sep}download_token=${encodeURIComponent(token)}`;
+  const url = `${base}/${rutaLimpia}`;
 
-  const res = await fetch(url, { method: 'GET' });
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${token}` },
+  });
   const contentType = (res.headers.get('content-type') || '').toLowerCase();
   const esJson = contentType.includes('application/json');
 

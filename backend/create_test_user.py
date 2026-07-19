@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
-"""Script para crear un usuario de prueba"""
+"""Script para crear un usuario de prueba (solo desarrollo local, no usar en producción)."""
 from sqlalchemy.orm import Session
 from app.core.database import SessionLocal
 from app.modules.personal.models import Empleado, Rol
-from passlib.context import CryptContext
-
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
+from app.core.security import get_password_hash
 
 def create_test_user():
     db: Session = SessionLocal()

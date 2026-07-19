@@ -68,6 +68,8 @@ class Departamento(Base):
     jefe_id = Column(Integer, ForeignKey("empleados.id"), nullable=True)
     # Subdepartamento: apunta al departamento padre (misma empresa). NULL = depto raíz.
     padre_id = Column(Integer, ForeignKey("departamentos.id"), nullable=True, index=True)
+    # Solo hijos: 'subdepartamento' | 'sucursal'. Raíces: NULL.
+    tipo = Column(String(20), nullable=True)
     activo = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
@@ -80,6 +82,11 @@ class Departamento(Base):
         remote_side=[id],
         foreign_keys=[padre_id],
         backref="subdepartamentos",
+    )
+    encargados_rel = relationship(
+        "DepartamentoEncargado",
+        back_populates="departamento",
+        cascade="all, delete-orphan",
     )
 
     @property
@@ -95,6 +102,31 @@ class Departamento(Base):
         if self.padre:
             return self.padre.nombre
         return None
+
+    @property
+    def encargados_ids(self):
+        return [r.empleado_id for r in (self.encargados_rel or [])]
+
+    @property
+    def encargados_nombres(self):
+        nombres = []
+        for r in (self.encargados_rel or []):
+            e = r.empleado
+            if not e:
+                continue
+            nombres.append(f"{e.nombre} {e.apellido_paterno or ''} {e.apellido_materno or ''}".strip())
+        return nombres
+
+
+class DepartamentoEncargado(Base):
+    """Encargados de una sucursal/subdepartamento (varios por área hija)."""
+    __tablename__ = "departamento_encargados"
+
+    departamento_id = Column(Integer, ForeignKey("departamentos.id", ondelete="CASCADE"), primary_key=True)
+    empleado_id = Column(Integer, ForeignKey("empleados.id", ondelete="CASCADE"), primary_key=True)
+
+    departamento = relationship("Departamento", back_populates="encargados_rel")
+    empleado = relationship("Empleado")
 
 
 class Puesto(Base):

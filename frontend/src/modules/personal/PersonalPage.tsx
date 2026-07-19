@@ -521,13 +521,24 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
     /** Solo si se edita un subdepartamento: a qué departamento pertenece. */
     padre_id: null as number | null,
   });
-  /** Nombres de subdeptos a crear junto con un departamento nuevo (aún sin id). */
-  const [subdeptosPendientes, setSubdeptosPendientes] = useState<string[]>([]);
-  const [nuevoSubNombre, setNuevoSubNombre] = useState('');
+  /** Nombres/datos de hijos a crear junto con un departamento nuevo (aún sin id). */
+  const [subdeptosPendientes, setSubdeptosPendientes] = useState<
+    { nombre: string; tipo: 'subdepartamento' | 'sucursal'; encargados_ids: number[] }[]
+  >([]);
   const [guardandoSub, setGuardandoSub] = useState(false);
-  /** Edición inline de un subdepartamento dentro del modal del departamento. */
-  const [editSubId, setEditSubId] = useState<number | null>(null);
-  const [editSubNombre, setEditSubNombre] = useState('');
+  /** Modal dedicado: crear/editar sucursal o subdepartamento (varios encargados). */
+  const [showSubModal, setShowSubModal] = useState(false);
+  const [editingSubId, setEditingSubId] = useState<number | null>(null);
+  const [editingSubPendienteIdx, setEditingSubPendienteIdx] = useState<number | null>(null);
+  const [subForm, setSubForm] = useState({
+    nombre: '',
+    tipo: 'sucursal' as 'subdepartamento' | 'sucursal',
+    encargados_ids: [] as number[],
+    padre_id: null as number | null,
+    empresa_id: undefined as number | undefined,
+    activo: true,
+  });
+  const [encargadoPick, setEncargadoPick] = useState('');
   const [passwordTemporalInfo, setPasswordTemporalInfo] = useState<{
     nombre: string;
     password: string;
@@ -1096,15 +1107,11 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
   const openNewDepto = () => {
     setDeptoForm({ nombre: '', empresa_id: undefined, jefe_id: null, padre_id: null });
     setSubdeptosPendientes([]);
-    setNuevoSubNombre('');
-    setEditSubId(null);
-    setEditSubNombre('');
     setEditingDeptoId(null);
     setShowDeptoModal(true);
   };
 
   const startEditDepto = (d: DepartamentoResponse) => {
-    // Solo se editan departamentos de la empresa desde el listado; los hijos se gestionan en este mismo modal.
     setDeptoForm({
       nombre: d.nombre,
       empresa_id: d.empresa_id,
@@ -1112,70 +1119,128 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
       padre_id: d.padre_id ?? null,
     });
     setSubdeptosPendientes([]);
-    setNuevoSubNombre('');
-    setEditSubId(null);
-    setEditSubNombre('');
     setEditingDeptoId(d.id);
     setShowDeptoModal(true);
   };
 
-  const agregarSubPendiente = () => {
-    const n = nuevoSubNombre.trim();
-    if (!n) return;
-    if (subdeptosPendientes.some(s => s.toLowerCase() === n.toLowerCase())) {
-      alert('Ese subdepartamento ya está en la lista');
-      return;
-    }
-    setSubdeptosPendientes(prev => [...prev, n]);
-    setNuevoSubNombre('');
+  const openNewSub = (padreId: number | null, empresaId?: number) => {
+    setEditingSubId(null);
+    setEditingSubPendienteIdx(null);
+    setSubForm({
+      nombre: '',
+      tipo: 'sucursal',
+      encargados_ids: [],
+      padre_id: padreId,
+      empresa_id: empresaId ?? deptoForm.empresa_id,
+      activo: true,
+    });
+    setEncargadoPick('');
+    setShowSubModal(true);
   };
 
-  /** Al editar un departamento (raíz), crea un hijo al instante. */
-  const agregarSubdeptoAlEditado = async () => {
-    const n = nuevoSubNombre.trim();
-    if (!n || !editingDeptoId || !deptoForm.empresa_id) return;
-    if (deptoForm.padre_id) {
-      alert('Un subdepartamento no puede tener más niveles debajo.');
-      return;
-    }
-    const yaExiste = subdeptosDe(editingDeptoId, false).some(d => d.nombre.toLowerCase() === n.toLowerCase());
-    if (yaExiste) {
-      alert('Ya existe un subdepartamento con ese nombre');
-      return;
-    }
-    setGuardandoSub(true);
-    try {
-      await api.post('/personal/departamentos', {
-        nombre: n,
-        empresa_id: deptoForm.empresa_id,
-        padre_id: editingDeptoId,
-        jefe_id: null,
-      });
-      setNuevoSubNombre('');
-      await loadData();
-    } catch (error: unknown) {
-      const err = error as { response?: { data?: { detail?: string } } };
-      alert(err.response?.data?.detail || 'Error al agregar subdepartamento');
-    } finally {
-      setGuardandoSub(false);
-    }
+  const startEditSub = (h: DepartamentoResponse) => {
+    setEditingSubId(h.id);
+    setEditingSubPendienteIdx(null);
+    setSubForm({
+      nombre: h.nombre,
+      tipo: (h.tipo === 'subdepartamento' ? 'subdepartamento' : 'sucursal'),
+      encargados_ids: [...(h.encargados_ids || [])],
+      padre_id: h.padre_id ?? null,
+      empresa_id: h.empresa_id,
+      activo: h.activo,
+    });
+    setEncargadoPick('');
+    setShowSubModal(true);
   };
 
-  const guardarSubInline = async (subId: number) => {
-    const n = editSubNombre.trim();
+  const startEditSubPendiente = (idx: number) => {
+    const p = subdeptosPendientes[idx];
+    if (!p) return;
+    setEditingSubId(null);
+    setEditingSubPendienteIdx(idx);
+    setSubForm({
+      nombre: p.nombre,
+      tipo: p.tipo,
+      encargados_ids: [...p.encargados_ids],
+      padre_id: null,
+      empresa_id: deptoForm.empresa_id,
+      activo: true,
+    });
+    setEncargadoPick('');
+    setShowSubModal(true);
+  };
+
+  const agregarEncargadoAlSub = () => {
+    const id = encargadoPick ? Number(encargadoPick) : NaN;
+    if (!id || subForm.encargados_ids.includes(id)) return;
+    setSubForm(p => ({ ...p, encargados_ids: [...p.encargados_ids, id] }));
+    setEncargadoPick('');
+  };
+
+  const quitarEncargadoDelSub = (id: number) => {
+    setSubForm(p => ({ ...p, encargados_ids: p.encargados_ids.filter(x => x !== id) }));
+  };
+
+  const handleSubSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const n = subForm.nombre.trim();
     if (!n) {
       alert('El nombre es obligatorio');
       return;
     }
+    if (!subForm.empresa_id) {
+      alert('Falta la empresa del departamento padre');
+      return;
+    }
+
+    // Pendiente (departamento aún no creado)
+    if (!editingDeptoId || editingSubPendienteIdx !== null) {
+      const item = { nombre: n, tipo: subForm.tipo, encargados_ids: [...subForm.encargados_ids] };
+      if (editingSubPendienteIdx !== null) {
+        setSubdeptosPendientes(prev => prev.map((x, i) => (i === editingSubPendienteIdx ? item : x)));
+      } else if (!editingDeptoId) {
+        if (subdeptosPendientes.some(s => s.nombre.toLowerCase() === n.toLowerCase())) {
+          alert('Ese subdepartamento/sucursal ya está en la lista');
+          return;
+        }
+        setSubdeptosPendientes(prev => [...prev, item]);
+      }
+      setShowSubModal(false);
+      return;
+    }
+
     setGuardandoSub(true);
     try {
-      await api.put(`/personal/departamentos/${subId}`, { nombre: n });
-      setEditSubId(null);
-      setEditSubNombre('');
+      if (editingSubId) {
+        await api.put(`/personal/departamentos/${editingSubId}`, {
+          nombre: n,
+          tipo: subForm.tipo,
+          encargados_ids: subForm.encargados_ids,
+          activo: subForm.activo,
+          padre_id: subForm.padre_id,
+          empresa_id: subForm.empresa_id,
+        });
+      } else {
+        const yaExiste = subdeptosDe(editingDeptoId, false).some(d => d.nombre.toLowerCase() === n.toLowerCase());
+        if (yaExiste) {
+          alert('Ya existe un hijo con ese nombre');
+          setGuardandoSub(false);
+          return;
+        }
+        await api.post('/personal/departamentos', {
+          nombre: n,
+          empresa_id: subForm.empresa_id,
+          padre_id: editingDeptoId,
+          tipo: subForm.tipo,
+          encargados_ids: subForm.encargados_ids,
+          jefe_id: null,
+        });
+      }
+      setShowSubModal(false);
       await loadData();
     } catch (error: unknown) {
       const err = error as { response?: { data?: { detail?: string } } };
-      alert(err.response?.data?.detail || 'Error al guardar subdepartamento');
+      alert(err.response?.data?.detail || 'Error al guardar');
     } finally {
       setGuardandoSub(false);
     }
@@ -1186,7 +1251,6 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
     if (!deptoForm.nombre.trim() || !deptoForm.empresa_id) { alert('Nombre y empresa son obligatorios'); return; }
     setSaving(true);
     try {
-      // Departamento de la empresa: padre_id null. Solo se conserva si se edita un hijo ya existente.
       const payload: Record<string, unknown> = {
         nombre: deptoForm.nombre,
         empresa_id: deptoForm.empresa_id,
@@ -1199,25 +1263,26 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
       } else {
         const { data: creado } = await api.post<DepartamentoResponse>('/personal/departamentos', {
           ...payload,
-          padre_id: null, // siempre cuelga de la empresa
+          padre_id: null,
         });
-        for (const nombreSub of subdeptosPendientes) {
+        for (const sub of subdeptosPendientes) {
           await api.post('/personal/departamentos', {
-            nombre: nombreSub,
+            nombre: sub.nombre,
             empresa_id: deptoForm.empresa_id,
             padre_id: creado.id,
+            tipo: sub.tipo,
+            encargados_ids: sub.encargados_ids,
             jefe_id: null,
           });
         }
         alert(
           subdeptosPendientes.length > 0
-            ? `Departamento creado con ${subdeptosPendientes.length} subdepartamento(s)`
+            ? `Departamento creado con ${subdeptosPendientes.length} sucursal(es)/subdepartamento(s)`
             : 'Departamento creado'
         );
       }
       setShowDeptoModal(false);
       setSubdeptosPendientes([]);
-      setNuevoSubNombre('');
       loadData();
     } catch (error: unknown) {
       const err = error as { response?: { data?: { detail?: string } } };
@@ -1389,6 +1454,27 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
       return [...deLaEmpresa, ...otros];
     }
     return [...lista].sort(cmpNombreEmpleado);
+  };
+
+  /** Encargados: personal activo del departamento padre (toda el área), no solo de la sucursal. */
+  const empleadosParaEncargadoSub = () => {
+    const padreId = editingSubId
+      ? (subForm.padre_id || departamentos.find(d => d.id === editingSubId)?.padre_id || null)
+      : (subForm.padre_id || editingDeptoId || null);
+    if (!padreId) return [];
+    // Departamento raíz + todos sus hijos (sucursales/subs)
+    const idsArea = new Set<number>([
+      padreId,
+      ...departamentos.filter(d => d.padre_id === padreId).map(d => d.id),
+    ]);
+    return empleados
+      .filter(e =>
+        e.estado === 'activo'
+        && e.departamento_id != null
+        && idsArea.has(e.departamento_id)
+        && !subForm.encargados_ids.includes(e.id)
+      )
+      .sort(cmpNombreEmpleado);
   };
 
   const filtrarPorEmpresaDepto = (lista: Empleado[]) =>
@@ -3979,9 +4065,9 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
 
                 {puedeAgregarSubs && (
                   <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: 14 }}>
-                    <label style={labelStyle}>Subdepartamentos / sucursales</label>
+                    <label style={labelStyle}>Sucursales / subdepartamentos</label>
                     <p style={{ margin: '0 0 10px', fontSize: '0.78rem', color: '#6b7280' }}>
-                      Puedes agregar uno o varios (p. ej. sucursales bajo este departamento).
+                      Cada uno puede tener uno o varios encargados (aparecen en el organigrama).
                     </p>
 
                     {editingDeptoId && hijosExistentes.length > 0 && (
@@ -3997,80 +4083,91 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                               border: '1px solid #e5e7eb',
                             }}
                           >
-                            {editSubId === h.id ? (
-                              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                                <input
-                                  style={{ ...inputStyle, flex: 1, margin: 0, minWidth: 140 }}
-                                  value={editSubNombre}
-                                  onChange={e => setEditSubNombre(e.target.value)}
-                                  autoFocus
-                                  onKeyDown={e => {
-                                    if (e.key === 'Enter') {
-                                      e.preventDefault();
-                                      void guardarSubInline(h.id);
-                                    }
-                                    if (e.key === 'Escape') {
-                                      setEditSubId(null);
-                                      setEditSubNombre('');
-                                    }
-                                  }}
-                                />
-                                <button
-                                  type="button"
-                                  disabled={guardandoSub || !editSubNombre.trim()}
-                                  onClick={() => void guardarSubInline(h.id)}
-                                  style={{ ...btnSuccess, padding: '6px 12px', fontSize: '0.8rem' }}
-                                >
-                                  Guardar
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => { setEditSubId(null); setEditSubNombre(''); }}
-                                  style={{ ...btnSecondary, padding: '6px 12px', fontSize: '0.8rem' }}
-                                >
-                                  Cancelar
-                                </button>
-                              </div>
-                            ) : (
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                                <span style={{ flex: 1, fontWeight: 500 }}>{h.nombre}</span>
+                            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
+                              <div style={{ flex: 1, minWidth: 140 }}>
+                                <div style={{ fontWeight: 600 }}>
+                                  <span
+                                    style={{
+                                      fontSize: '0.68rem',
+                                      fontWeight: 700,
+                                      textTransform: 'uppercase',
+                                      color: h.tipo === 'subdepartamento' ? '#7c3aed' : '#0369a1',
+                                      marginRight: 6,
+                                    }}
+                                  >
+                                    {h.tipo === 'subdepartamento' ? 'Sub' : 'Sucursal'}
+                                  </span>
+                                  {h.nombre}
+                                </div>
+                                <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: 2 }}>
+                                  {(h.encargados_nombres && h.encargados_nombres.length > 0)
+                                    ? `Encargados: ${h.encargados_nombres.join(', ')}`
+                                    : 'Sin encargados'}
+                                </div>
                                 {!h.activo && (
                                   <span style={{ fontSize: '0.72rem', color: '#991b1b' }}>Inactivo</span>
                                 )}
-                                <button
-                                  type="button"
-                                  onClick={() => { setEditSubId(h.id); setEditSubNombre(h.nombre); }}
-                                  style={{ padding: '4px 10px', fontSize: '0.75rem', cursor: 'pointer', backgroundColor: '#ffc107', color: '#000', border: 'none', borderRadius: 4 }}
-                                >
-                                  Editar
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => void toggleDeptoActivo(h)}
-                                  style={{
-                                    padding: '4px 10px',
-                                    fontSize: '0.75rem',
-                                    cursor: 'pointer',
-                                    backgroundColor: h.activo ? '#dc3545' : '#28a745',
-                                    color: 'white',
-                                    border: 'none',
-                                    borderRadius: 4,
-                                  }}
-                                >
-                                  {h.activo ? 'Desactivar' : 'Activar'}
-                                </button>
                               </div>
-                            )}
+                              <button
+                                type="button"
+                                onClick={() => startEditSub(h)}
+                                style={{ padding: '4px 10px', fontSize: '0.75rem', cursor: 'pointer', backgroundColor: '#ffc107', color: '#000', border: 'none', borderRadius: 4 }}
+                              >
+                                Editar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => void toggleDeptoActivo(h)}
+                                style={{
+                                  padding: '4px 10px',
+                                  fontSize: '0.75rem',
+                                  cursor: 'pointer',
+                                  backgroundColor: h.activo ? '#dc3545' : '#28a745',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: 4,
+                                }}
+                              >
+                                {h.activo ? 'Desactivar' : 'Activar'}
+                              </button>
+                            </div>
                           </li>
                         ))}
                       </ul>
                     )}
 
                     {!editingDeptoId && subdeptosPendientes.length > 0 && (
-                      <ul style={{ margin: '0 0 10px', paddingLeft: 18, fontSize: '0.9rem' }}>
-                        {subdeptosPendientes.map((nombre, i) => (
-                          <li key={`${nombre}-${i}`} style={{ marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
-                            <span>{nombre}</span>
+                      <ul style={{ margin: '0 0 10px', padding: 0, listStyle: 'none', fontSize: '0.9rem' }}>
+                        {subdeptosPendientes.map((item, i) => (
+                          <li
+                            key={`${item.nombre}-${i}`}
+                            style={{
+                              marginBottom: 8,
+                              padding: '8px 10px',
+                              background: '#f8fafc',
+                              borderRadius: 8,
+                              border: '1px solid #e5e7eb',
+                              display: 'flex',
+                              gap: 8,
+                              alignItems: 'center',
+                              flexWrap: 'wrap',
+                            }}
+                          >
+                            <div style={{ flex: 1 }}>
+                              <strong>{item.tipo === 'subdepartamento' ? 'Sub' : 'Sucursal'}</strong>: {item.nombre}
+                              <div style={{ fontSize: '0.78rem', color: '#64748b' }}>
+                                {item.encargados_ids.length
+                                  ? `${item.encargados_ids.length} encargado(s)`
+                                  : 'Sin encargados'}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => startEditSubPendiente(i)}
+                              style={{ fontSize: '0.75rem', padding: '2px 8px', cursor: 'pointer', background: '#ffc107', border: 'none', borderRadius: 4 }}
+                            >
+                              Editar
+                            </button>
                             <button
                               type="button"
                               onClick={() => setSubdeptosPendientes(prev => prev.filter((_, j) => j !== i))}
@@ -4083,37 +4180,18 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                       </ul>
                     )}
 
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                      <input
-                        style={{ ...inputStyle, flex: 1, margin: 0 }}
-                        value={nuevoSubNombre}
-                        onChange={e => setNuevoSubNombre(e.target.value)}
-                        placeholder="Nombre del subdepartamento"
-                        onKeyDown={e => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            if (editingDeptoId) void agregarSubdeptoAlEditado();
-                            else agregarSubPendiente();
-                          }
-                        }}
-                      />
-                      <button
-                        type="button"
-                        disabled={!nuevoSubNombre.trim() || guardandoSub}
-                        onClick={() => {
-                          if (editingDeptoId) void agregarSubdeptoAlEditado();
-                          else agregarSubPendiente();
-                        }}
-                        style={{
-                          ...btnSuccess,
-                          whiteSpace: 'nowrap',
-                          opacity: (!nuevoSubNombre.trim() || guardandoSub) ? 0.6 : 1,
-                          cursor: (!nuevoSubNombre.trim() || guardandoSub) ? 'not-allowed' : 'pointer',
-                        }}
-                      >
-                        {guardandoSub ? 'Agregando...' : '+ Agregar'}
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      disabled={!deptoForm.empresa_id}
+                      onClick={() => openNewSub(editingDeptoId, deptoForm.empresa_id)}
+                      style={{
+                        ...btnSuccess,
+                        opacity: !deptoForm.empresa_id ? 0.6 : 1,
+                        cursor: !deptoForm.empresa_id ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      + Agregar sucursal / subdepartamento
+                    </button>
                     {!editingDeptoId && (
                       <p style={{ margin: '6px 0 0', fontSize: '0.75rem', color: '#6b7280' }}>
                         Se crearán al guardar el departamento.
@@ -4133,6 +4211,150 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
         </div>
         );
       })()}
+
+      {/* ========== MODAL: SUCURSAL / SUBDEPARTAMENTO ========== */}
+      {showSubModal && (
+        <div style={subModalOverlay} onClick={() => setShowSubModal(false)}>
+          <div style={{ ...modalSmall, maxWidth: 520 }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <h3 style={{ margin: 0 }}>
+                {editingSubId || editingSubPendienteIdx !== null
+                  ? 'Editar sucursal / subdepartamento'
+                  : 'Nueva sucursal / subdepartamento'}
+              </h3>
+              <button onClick={() => setShowSubModal(false)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: '#999', lineHeight: 1 }}>&times;</button>
+            </div>
+            <form onSubmit={handleSubSubmit}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginBottom: '20px' }}>
+                <div>
+                  <label style={labelStyle}>Nombre *</label>
+                  <input
+                    style={inputStyle}
+                    value={subForm.nombre}
+                    onChange={e => setSubForm(p => ({ ...p, nombre: e.target.value }))}
+                    required
+                    autoFocus
+                  />
+                </div>
+                <div>
+                  <label style={labelStyle}>Tipo *</label>
+                  <select
+                    style={inputStyle}
+                    value={subForm.tipo}
+                    onChange={e => setSubForm(p => ({
+                      ...p,
+                      tipo: e.target.value === 'subdepartamento' ? 'subdepartamento' : 'sucursal',
+                    }))}
+                  >
+                    <option value="sucursal">Sucursal</option>
+                    <option value="subdepartamento">Subdepartamento</option>
+                  </select>
+                </div>
+                {(editingDeptoId || subForm.padre_id) && (
+                  <div style={{ padding: '10px 12px', background: '#f8fafc', borderRadius: 8, border: '1px solid #e5e7eb' }}>
+                    <div style={{ fontSize: '0.78rem', color: '#6b7280', marginBottom: 2 }}>Pertenece a</div>
+                    <div style={{ fontWeight: 600 }}>
+                      {departamentos.find(d => d.id === (subForm.padre_id || editingDeptoId))?.nombre
+                        || deptoForm.nombre
+                        || '—'}
+                    </div>
+                  </div>
+                )}
+                <div>
+                  <label style={labelStyle}>Encargados</label>
+                  <p style={{ margin: '0 0 8px', fontSize: '0.78rem', color: '#6b7280' }}>
+                    Personal del departamento (incluye sucursales/subs de esa área). Puedes agregar varios.
+                  </p>
+                  {subForm.encargados_ids.length > 0 && (
+                    <ul style={{ margin: '0 0 10px', padding: 0, listStyle: 'none' }}>
+                      {subForm.encargados_ids.map(id => {
+                        const emp = empleados.find(e => e.id === id);
+                        const label = emp
+                          ? `${emp.numero_empleado} - ${emp.nombre} ${emp.apellido_paterno || ''}`.trim()
+                          : `#${id}`;
+                        return (
+                          <li
+                            key={id}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 8,
+                              marginBottom: 6,
+                              padding: '6px 8px',
+                              background: '#eff6ff',
+                              borderRadius: 6,
+                            }}
+                          >
+                            <span style={{ flex: 1, fontSize: '0.88rem' }}>{label}</span>
+                            <button
+                              type="button"
+                              onClick={() => quitarEncargadoDelSub(id)}
+                              style={{ fontSize: '0.75rem', padding: '2px 8px', cursor: 'pointer', background: '#fee2e2', color: '#991b1b', border: 'none', borderRadius: 4 }}
+                            >
+                              Quitar
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  )}
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <select
+                      style={{ ...inputStyle, flex: 1, margin: 0 }}
+                      value={encargadoPick}
+                      onChange={e => setEncargadoPick(e.target.value)}
+                    >
+                      <option value="">
+                        {empleadosParaEncargadoSub().length === 0
+                          ? '-- No hay personal en el departamento --'
+                          : '-- Elegir encargado --'}
+                      </option>
+                      {empleadosParaEncargadoSub().map(emp => (
+                        <option key={emp.id} value={emp.id}>
+                          {emp.numero_empleado} - {emp.nombre} {emp.apellido_paterno || ''}
+                          {emp.puesto?.nombre ? ` · ${emp.puesto.nombre}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      disabled={!encargadoPick}
+                      onClick={agregarEncargadoAlSub}
+                      style={{
+                        ...btnSecondary,
+                        opacity: !encargadoPick ? 0.6 : 1,
+                        cursor: !encargadoPick ? 'not-allowed' : 'pointer',
+                      }}
+                    >
+                      Añadir
+                    </button>
+                  </div>
+                </div>
+                {editingSubId != null && (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.9rem' }}>
+                    <input
+                      type="checkbox"
+                      checked={subForm.activo}
+                      onChange={e => setSubForm(p => ({ ...p, activo: e.target.checked }))}
+                    />
+                    Activo
+                  </label>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                <button type="button" onClick={() => setShowSubModal(false)} style={btnSecondary}>Cancelar</button>
+                <button
+                  type="submit"
+                  style={guardandoSub ? { ...btnSuccess, opacity: 0.6, cursor: 'not-allowed' } : btnSuccess}
+                  disabled={guardandoSub}
+                >
+                  {guardandoSub ? 'Guardando...' : 'Guardar'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* ========== MODAL: CREAR/EDITAR PUESTO ========== */}
       {showPuestoModal && (

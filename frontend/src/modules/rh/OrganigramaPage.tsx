@@ -14,7 +14,10 @@ type VistaModo = 'arbol' | 'interactivo' | 'lista';
 
 type AreaNodo = {
   depto: DepartamentoResponse;
+  /** Gerente del departamento raíz (jefe_id). */
   jefe: EmpleadoResponse | null;
+  /** Encargados de sucursal/subdepartamento (varios). */
+  encargados: EmpleadoResponse[];
   staff: EmpleadoResponse[];
   /** Activos del área + subáreas. */
   total: number;
@@ -435,7 +438,7 @@ function VistaArbol({
     jefeSuperior: EmpleadoResponse | null = null,
     jefeSuperiorNombre: string | null = null,
   ): ReactNode => {
-    const { depto, jefe, staff, total, hijos } = area;
+    const { depto, jefe, encargados, staff, total, hijos } = area;
     const keyDepto = `d-${depto.id}`;
     const keyJefe = `j-${depto.id}`;
     const deptoAbierto = estaAbierto(keyDepto);
@@ -443,13 +446,19 @@ function VistaArbol({
     const tieneStaff = staff.length > 0;
     const tieneHijos = hijos.length > 0;
     const esSub = !!depto.padre_id;
-    const jefePropio = jefe;
-    const nombreJefePropio = depto.jefe_nombre || null;
-    // Sucursal sin jefe propio: hereda al gerente del padre (no se redibuja).
-    const heredaJefe = esSub && !jefePropio && !nombreJefePropio && (!!jefeSuperior || !!jefeSuperiorNombre);
-    const dibujarJefe = !heredaJefe && (!!jefePropio || !!nombreJefePropio || !esSub);
-    const tieneBajoJefe = tieneStaff || tieneHijos;
-    const tieneContenido = dibujarJefe || tieneStaff || tieneHijos || heredaJefe;
+    const etiquetaTipo = esSub
+      ? (depto.tipo === 'subdepartamento' ? 'Subdepartamento' : 'Sucursal')
+      : null;
+
+    // Raíz: gerente (jefe_id). Hijo: encargados (varios). Sin encargados → hereda gerente padre.
+    const tieneEncargados = esSub && encargados.length > 0;
+    const jefePropio = !esSub ? jefe : null;
+    const nombreJefePropio = !esSub ? (depto.jefe_nombre || null) : null;
+    const heredaJefe = esSub && !tieneEncargados && (!!jefeSuperior || !!jefeSuperiorNombre);
+    const dibujarGerenteRaiz = !esSub && (!!jefePropio || !!nombreJefePropio || true);
+    const tieneBajoLiderazgo = tieneStaff || tieneHijos;
+    const tieneContenido = (esSub ? (tieneEncargados || heredaJefe || tieneStaff || tieneHijos) : true)
+      || tieneStaff || tieneHijos;
 
     const hojasStaff = staff.map(emp => (
       <NodoArbol
@@ -462,54 +471,81 @@ function VistaArbol({
       />
     ));
 
+    const liderParaHijos = esSub
+      ? (encargados[0] || jefeSuperior)
+      : (jefePropio || jefeSuperior);
+    const nombreLiderHijos = esSub
+      ? (encargados[0] ? fmtNombreEmpleado(encargados[0]) : jefeSuperiorNombre)
+      : (nombreJefePropio || jefeSuperiorNombre);
+
     const ramasHijos = hijos.map(h =>
-      renderArea(h, jefePropio || jefeSuperior, nombreJefePropio || jefeSuperiorNombre),
+      renderArea(h, liderParaHijos, nombreLiderHijos),
     );
 
-    const extrasJefe: string[] = [];
-    if (tieneHijos) extrasJefe.push(`${hijos.length} sucursal${hijos.length === 1 ? '' : 'es'}`);
-    if (tieneStaff) extrasJefe.push(`${staff.length} en equipo`);
-    const rolJefe = jefePropio
-      ? (jefePropio.puesto?.nombre || 'Jefe de área')
-      : (nombreJefePropio ? 'Jefe de área' : 'Sin jefe de área');
-    const subJefe = [rolJefe, ...extrasJefe].join(' · ');
+    const extrasGerente: string[] = [];
+    if (tieneHijos) extrasGerente.push(`${hijos.length} sucursal${hijos.length === 1 ? '' : 'es'}`);
+    if (tieneStaff) extrasGerente.push(`${staff.length} en equipo`);
 
-    const nodoJefe = !dibujarJefe ? null : jefePropio ? (
+    const nodoGerenteRaiz = !dibujarGerenteRaiz || esSub ? null : jefePropio ? (
       <NodoArbol
         variante="jefe"
         titulo={fmtNombreEmpleado(jefePropio)}
-        subtitulo={subJefe}
+        subtitulo={['Gerente de área', ...extrasGerente].join(' · ')}
         badge={<BadgeNivel puesto={jefePropio.puesto?.nombre} />}
         ancho={168}
-        expandible={puedeToggle && tieneBajoJefe}
+        expandible={puedeToggle && tieneBajoLiderazgo}
         abierto={jefeAbierto}
-        onToggle={puedeToggle && tieneBajoJefe ? () => onToggle!(keyJefe) : undefined}
+        onToggle={puedeToggle && tieneBajoLiderazgo ? () => onToggle!(keyJefe) : undefined}
       />
     ) : nombreJefePropio ? (
       <NodoArbol
         variante="hueco"
         titulo={nombreJefePropio}
-        subtitulo={subJefe}
+        subtitulo={['Gerente de área', ...extrasGerente].join(' · ')}
         ancho={168}
-        expandible={puedeToggle && tieneBajoJefe}
+        expandible={puedeToggle && tieneBajoLiderazgo}
         abierto={jefeAbierto}
-        onToggle={puedeToggle && tieneBajoJefe ? () => onToggle!(keyJefe) : undefined}
+        onToggle={puedeToggle && tieneBajoLiderazgo ? () => onToggle!(keyJefe) : undefined}
       />
     ) : (
       <NodoArbol
         variante="hueco"
-        titulo="Sin jefe de área"
-        subtitulo={extrasJefe.join(' · ') || undefined}
+        titulo="Sin gerente de área"
+        subtitulo={extrasGerente.join(' · ') || undefined}
         ancho={168}
-        expandible={puedeToggle && tieneBajoJefe}
+        expandible={puedeToggle && tieneBajoLiderazgo}
         abierto={jefeAbierto}
-        onToggle={puedeToggle && tieneBajoJefe ? () => onToggle!(keyJefe) : undefined}
+        onToggle={puedeToggle && tieneBajoLiderazgo ? () => onToggle!(keyJefe) : undefined}
       />
     );
 
+    const nodosEncargados = tieneEncargados
+      ? encargados.map((enc, idx) => (
+          <NodoArbol
+            key={`enc-${enc.id}`}
+            variante="jefe"
+            titulo={fmtNombreEmpleado(enc)}
+            subtitulo={
+              [
+                encargados.length > 1 ? `Encargado ${idx + 1}` : 'Encargado',
+                enc.puesto?.nombre,
+                idx === 0 && tieneStaff ? `${staff.length} en equipo` : null,
+              ].filter(Boolean).join(' · ')
+            }
+            badge={<BadgeNivel puesto={enc.puesto?.nombre} />}
+            ancho={168}
+            expandible={puedeToggle && idx === 0 && tieneBajoLiderazgo}
+            abierto={idx === 0 ? jefeAbierto : true}
+            onToggle={puedeToggle && idx === 0 && tieneBajoLiderazgo ? () => onToggle!(keyJefe) : undefined}
+          />
+        ))
+      : null;
+
     const subtituloDepto = [
+      etiquetaTipo,
       `${total} activo${total === 1 ? '' : 's'}`,
       tieneHijos ? `${hijos.length} sucursal${hijos.length === 1 ? '' : 'es'}` : null,
+      tieneEncargados ? `${encargados.length} encargado${encargados.length === 1 ? '' : 's'}` : null,
       heredaJefe
         ? (jefeSuperior
           ? `Gerente: ${fmtNombreEmpleado(jefeSuperior)}`
@@ -528,25 +564,46 @@ function VistaArbol({
           abierto={deptoAbierto}
           onToggle={puedeToggle && tieneContenido ? () => onToggle!(keyDepto) : undefined}
         />
-        {deptoAbierto && tieneContenido && nodoJefe && (
+        {deptoAbierto && tieneContenido && (
           <RamaHijos>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-              {nodoJefe}
-              {jefeAbierto && tieneStaff && (
-                <RamaHijos>{hojasStaff}</RamaHijos>
-              )}
-              {/* Sucursales = hermanos en fila bajo el gerente (no encadenados). */}
-              {jefeAbierto && tieneHijos && (
-                <RamaHijos>{ramasHijos}</RamaHijos>
-              )}
-            </div>
+            {!esSub && nodoGerenteRaiz && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                {nodoGerenteRaiz}
+                {/* Equipo del departamento arriba; sucursales/subs abajo (no en la misma fila). */}
+                {jefeAbierto && tieneStaff && (
+                  <RamaHijos>{hojasStaff}</RamaHijos>
+                )}
+                {jefeAbierto && tieneHijos && (
+                  <RamaHijos>{ramasHijos}</RamaHijos>
+                )}
+              </div>
+            )}
+            {esSub && tieneEncargados && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 12 }}>
+                  {nodosEncargados}
+                </div>
+                {jefeAbierto && tieneStaff && (
+                  <RamaHijos>{hojasStaff}</RamaHijos>
+                )}
+                {jefeAbierto && tieneHijos && (
+                  <RamaHijos>{ramasHijos}</RamaHijos>
+                )}
+              </div>
+            )}
+            {esSub && heredaJefe && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                {tieneStaff && <RamaHijos>{hojasStaff}</RamaHijos>}
+                {tieneHijos && <RamaHijos>{ramasHijos}</RamaHijos>}
+              </div>
+            )}
+            {esSub && !tieneEncargados && !heredaJefe && (tieneStaff || tieneHijos) && (
+              <>
+                {tieneStaff && <RamaHijos>{hojasStaff}</RamaHijos>}
+                {tieneHijos && <RamaHijos>{ramasHijos}</RamaHijos>}
+              </>
+            )}
           </RamaHijos>
-        )}
-        {deptoAbierto && tieneContenido && !nodoJefe && tieneStaff && (
-          <RamaHijos>{hojasStaff}</RamaHijos>
-        )}
-        {deptoAbierto && tieneContenido && !nodoJefe && tieneHijos && (
-          <RamaHijos>{ramasHijos}</RamaHijos>
         )}
       </div>
     );
@@ -597,6 +654,7 @@ function VistaArbol({
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [arrastrando, setArrastrando] = useState(false);
   const viewportRef = useRef<HTMLDivElement>(null);
+  const empresaNodoRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{
     pointerId: number;
     startX: number;
@@ -607,10 +665,32 @@ function VistaArbol({
     fromToggle: boolean;
   } | null>(null);
 
-  useEffect(() => {
-    setZoom(1);
+  /** Centra el viewport en el banner de la empresa (arriba + horizontal). */
+  const centrarEnEmpresa = useCallback((opts?: { resetZoom?: boolean }) => {
+    const resetZoom = opts?.resetZoom !== false;
+    if (resetZoom) setZoom(1);
     setPan({ x: 0, y: 0 });
-  }, [empresa.id]);
+    // Doble rAF: esperar layout tras reset de pan/zoom
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const viewport = viewportRef.current;
+        const nodo = empresaNodoRef.current;
+        if (!viewport || !nodo) return;
+        const vp = viewport.getBoundingClientRect();
+        const nd = nodo.getBoundingClientRect();
+        const dx = Math.round(vp.left + vp.width / 2 - (nd.left + nd.width / 2));
+        // Banner cerca del borde superior del canvas
+        const dy = Math.round(vp.top + 24 - nd.top);
+        setPan({ x: dx, y: dy });
+      });
+    });
+  }, []);
+
+  useEffect(() => {
+    // Al cambiar de empresa (o al montar), enfocar el banner
+    const t = window.setTimeout(() => centrarEnEmpresa(), 80);
+    return () => window.clearTimeout(t);
+  }, [empresa.id, centrarEnEmpresa]);
 
   useEffect(() => {
     const el = viewportRef.current;
@@ -618,7 +698,6 @@ function VistaArbol({
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       const step = e.deltaY > 0 ? -0.1 : 0.1;
-      // Pasos redondos (50%, 60%…): menos pixelado que escalas intermedias
       setZoom(z => {
         const next = Math.round((z + step) * 10) / 10;
         return Math.min(2.5, Math.max(0.5, next));
@@ -631,10 +710,8 @@ function VistaArbol({
   const iniciarArrastre = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     const t = e.target as HTMLElement;
-    // Botones reales (Centrar, etiquetas de liderazgo): no pan
     if (t.closest('button')) return;
     const fromToggle = Boolean(t.closest('[data-org-toggle="1"]'));
-    // No capturar aún: si es un clic (sin mover), el toggle debe funcionar
     dragRef.current = {
       pointerId: e.pointerId,
       startX: e.clientX,
@@ -649,7 +726,6 @@ function VistaArbol({
   const moverArrastre = (e: ReactPointerEvent<HTMLDivElement>) => {
     const d = dragRef.current;
     if (!d || d.pointerId !== e.pointerId) return;
-    // Desde un nodo expandible: umbral más alto para no robar el clic
     const umbral = d.fromToggle ? 10 : 5;
     const dx = e.clientX - d.startX;
     const dy = e.clientY - d.startY;
@@ -674,7 +750,6 @@ function VistaArbol({
     const d = dragRef.current;
     if (!d || d.pointerId !== e.pointerId) return;
     if (d.moved) {
-      // Tras panear, bloquear el click sintético que vendría después
       const bloquearClic = (ev: MouseEvent) => {
         ev.stopPropagation();
         ev.preventDefault();
@@ -691,12 +766,6 @@ function VistaArbol({
     } catch {
       /* ignore */
     }
-  };
-
-  const panActivo = pan.x !== 0 || pan.y !== 0;
-  const resetVista = () => {
-    setZoom(1);
-    setPan({ x: 0, y: 0 });
   };
 
   return (
@@ -723,24 +792,22 @@ function VistaArbol({
         <span title="Arrastra el fondo para mover · clic en nodos para expandir · rueda para zoom">
           Zoom {Math.round(zoom * 100)}%
         </span>
-        {(zoom !== 1 || panActivo) && (
-          <button
-            type="button"
-            onClick={resetVista}
-            style={{
-              border: 'none',
-              background: '#e0f2fe',
-              color: '#0369a1',
-              borderRadius: 5,
-              padding: '2px 8px',
-              fontSize: '0.72rem',
-              fontWeight: 700,
-              cursor: 'pointer',
-            }}
-          >
-            Centrar
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={() => centrarEnEmpresa()}
+          style={{
+            border: 'none',
+            background: '#e0f2fe',
+            color: '#0369a1',
+            borderRadius: 5,
+            padding: '2px 8px',
+            fontSize: '0.72rem',
+            fontWeight: 700,
+            cursor: 'pointer',
+          }}
+        >
+          Centrar
+        </button>
       </div>
       <div
         ref={viewportRef}
@@ -758,11 +825,10 @@ function VistaArbol({
           position: 'relative',
         }}
       >
-        {/* Pan con translate (píxeles enteros). Zoom con CSS zoom: reflow nítido, sin pixelar. */}
         <div
           style={{
             transform: `translate(${pan.x}px, ${pan.y}px)`,
-            transformOrigin: 'center top',
+            transformOrigin: '0 0',
             willChange: arrastrando ? 'transform' : undefined,
           }}
         >
@@ -771,21 +837,24 @@ function VistaArbol({
               display: 'inline-flex',
               flexDirection: 'column',
               alignItems: 'center',
+              width: 'max-content',
               minWidth: '100%',
-              padding: '20px 16px 28px',
-              // zoom CSS redibuja el texto (no escala un bitmap como transform:scale)
+              padding: '20px 48px 28px',
+              boxSizing: 'border-box',
               zoom,
             } as CSSProperties}
           >
-          <NodoArbol
-            variante="empresa"
-            titulo={empresa.nombre}
-            subtitulo={`${totalActivos} colaborador${totalActivos === 1 ? '' : 'es'} en estructura${empresa.siglas ? ` · ${empresa.siglas}` : ''}`}
-            ancho={280}
-            expandible={puedeToggle && hayContenido}
-            abierto={empresaAbierta}
-            onToggle={puedeToggle && hayContenido ? () => onToggle!('empresa') : undefined}
-          />
+          <div ref={empresaNodoRef} data-org-empresa="1">
+            <NodoArbol
+              variante="empresa"
+              titulo={empresa.nombre}
+              subtitulo={`${totalActivos} colaborador${totalActivos === 1 ? '' : 'es'} en estructura${empresa.siglas ? ` · ${empresa.siglas}` : ''}`}
+              ancho={280}
+              expandible={puedeToggle && hayContenido}
+              abierto={empresaAbierta}
+              onToggle={puedeToggle && hayContenido ? () => onToggle!('empresa') : undefined}
+            />
+          </div>
           {empresaAbierta && hayContenido ? (
             <RamaHijos>
               {(directores.length > 0 || subdirectores.length > 0 || gerentesGenerales.length > 0) && (
@@ -903,19 +972,26 @@ function VistaLista({
           jefeSuperior: EmpleadoResponse | null = null,
           jefeSuperiorNombre: string | null = null,
         ): ReactNode => {
-          const { depto, jefe, staff, total, hijos } = a;
+          const { depto, jefe, encargados, staff, total, hijos } = a;
           const key = `d-${depto.id}`;
           const open = abiertos[key] !== false;
           const tieneHijos = hijos.length > 0;
-          const esSub = nivel > 0;
-          const heredaJefe = esSub && !jefe && !depto.jefe_nombre && (!!jefeSuperior || !!jefeSuperiorNombre);
-          const textoJefe = jefe
-            ? `Jefe de área: ${fmtNombreEmpleado(jefe)}`
-            : depto.jefe_nombre
-              ? `Jefe de área: ${depto.jefe_nombre}`
+          const esSub = nivel > 0 || !!depto.padre_id;
+          const heredaJefe = esSub && encargados.length === 0 && (!!jefeSuperior || !!jefeSuperiorNombre);
+          const textoJefe = !esSub
+            ? (jefe
+              ? `Gerente: ${fmtNombreEmpleado(jefe)}`
+              : depto.jefe_nombre
+                ? `Gerente: ${depto.jefe_nombre}`
+                : 'Sin gerente de área')
+            : encargados.length > 0
+              ? `Encargados: ${encargados.map(fmtNombreEmpleado).join(', ')}`
               : heredaJefe
                 ? `Gerente: ${jefeSuperior ? fmtNombreEmpleado(jefeSuperior) : jefeSuperiorNombre}`
-                : 'Sin jefe de área asignado';
+                : 'Sin encargados';
+          const tipoLabel = esSub
+            ? (depto.tipo === 'subdepartamento' ? 'Subdepartamento' : 'Sucursal')
+            : 'Departamento';
           return (
             <div
               key={depto.id}
@@ -948,11 +1024,9 @@ function VistaLista({
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '0.95rem' }}>
                     {depto.nombre}
-                    {nivel > 0 && (
-                      <span style={{ marginLeft: 8, fontSize: '0.72rem', fontWeight: 600, color: '#64748b' }}>
-                        Sucursal
-                      </span>
-                    )}
+                    <span style={{ marginLeft: 8, fontSize: '0.72rem', fontWeight: 600, color: '#64748b' }}>
+                      {tipoLabel}
+                    </span>
                   </div>
                   <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: 2 }}>
                     {textoJefe}
@@ -978,9 +1052,19 @@ function VistaLista({
                   {jefe && (
                     <div>
                       <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#0369a1', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.3 }}>
-                        {tieneHijos ? 'Gerente (también de sucursales)' : 'Jefe de área'}
+                        Gerente de área
                       </div>
                       <PersonaRow emp={jefe} destacado />
+                    </div>
+                  )}
+                  {encargados.length > 0 && (
+                    <div>
+                      <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#0369a1', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.3 }}>
+                        Encargados
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                        {encargados.map(enc => <PersonaRow key={enc.id} emp={enc} destacado />)}
+                      </div>
                     </div>
                   )}
 
@@ -1015,7 +1099,14 @@ function VistaLista({
                         Sucursales a su cargo
                       </div>
                       {hijos.map(h =>
-                        renderAreaLista(h, nivel + 1, jefe || jefeSuperior, depto.jefe_nombre || jefeSuperiorNombre),
+                        renderAreaLista(
+                          h,
+                          nivel + 1,
+                          encargados[0] || jefe || jefeSuperior,
+                          encargados[0]
+                            ? fmtNombreEmpleado(encargados[0])
+                            : (depto.jefe_nombre || jefeSuperiorNombre),
+                        ),
                       )}
                     </div>
                   )}
@@ -1196,13 +1287,24 @@ export const OrganigramaPage = () => {
     const idsDeptoEmpresa = new Set(deptosEmpresa.map(d => d.id));
 
     const buildArea = (d: DepartamentoResponse): AreaNodo => {
+      const esHijo = !!d.padre_id;
+      const encIds = new Set((d.encargados_ids || []).map(Number));
       const delArea = activosEmpresa.filter(
         e => e.departamento_id === d.id && !idsLiderazgo.has(e.id),
       );
-      const jefeEmp = d.jefe_id ? porId.get(d.jefe_id) || null : null;
+      const jefeEmp = !esHijo && d.jefe_id ? porId.get(d.jefe_id) || null : null;
       const jefe = jefeEmp && !idsLiderazgo.has(jefeEmp.id) ? jefeEmp : null;
+      const encargados = esHijo
+        ? (d.encargados_ids || [])
+            .map(id => porId.get(id))
+            .filter((e): e is EmpleadoResponse => !!e && !idsLiderazgo.has(e.id))
+            .sort(cmpNombreEmpleado)
+        : [];
+      const idsExcluirStaff = new Set<number>();
+      if (d.jefe_id) idsExcluirStaff.add(d.jefe_id);
+      encIds.forEach(id => idsExcluirStaff.add(id));
       const staff = delArea
-        .filter(e => e.id !== d.jefe_id)
+        .filter(e => !idsExcluirStaff.has(e.id))
         .sort(cmpNombreEmpleado);
       const hijos = deptosEmpresa
         .filter(h => h.padre_id === d.id)
@@ -1212,6 +1314,7 @@ export const OrganigramaPage = () => {
       return {
         depto: d,
         jefe,
+        encargados,
         staff,
         hijos,
         total: delArea.length + totalHijos,

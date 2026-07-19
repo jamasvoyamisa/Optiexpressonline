@@ -1,31 +1,20 @@
 from datetime import datetime, timezone
 from pathlib import Path
-import hashlib
 import uuid
 from typing import Optional
 
-from passlib.context import CryptContext
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import settings
+from app.core.security import verify_and_upgrade_password
 from app.modules.personal import models as personal_models
 from . import models, schemas
 
-_pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-
-def _verificar_password_empleado(empleado: personal_models.Empleado, password: str) -> bool:
-    """Misma lógica que portal de checadas: sin hash legacy, SHA256 64 hex, o bcrypt."""
-    if not empleado.password_hash:
-        return password == (empleado.numero_empleado or "") or password == "admin123"
-    h = empleado.password_hash
-    if len(h) == 64:
-        return hashlib.sha256(password.encode()).hexdigest() == h
-    try:
-        return bool(_pwd_ctx.verify(password, h))
-    except Exception:
-        return False
+def _verificar_password_empleado(db: Session, empleado: personal_models.Empleado, password: str) -> bool:
+    """Misma lógica centralizada que login/portal: SHA-256 legacy o bcrypt, con upgrade transparente."""
+    return verify_and_upgrade_password(db, empleado, password)
 
 
 class SoporteService:
@@ -359,7 +348,7 @@ class SoporteService:
             )
             .first()
         )
-        if not empleado or not _verificar_password_empleado(empleado, data.password):
+        if not empleado or not _verificar_password_empleado(db, empleado, data.password):
             raise ValueError("Credenciales incorrectas.")
 
         tipo_ticket = SoporteService._resolver_tipo_ticket(

@@ -1,3 +1,4 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, UploadFile, File, Form, Request
 from sqlalchemy.orm import Session, joinedload
 from typing import List, Optional
@@ -5,13 +6,16 @@ from datetime import datetime, timezone, timedelta, date
 from app.core.database import get_db
 from app.core.config import settings
 from app.core.security import get_current_user
-from app.core.deps import get_current_empleado_with_rol, require_superuser_download, require_superuser, require_superuser_or_rh_download
+from app.core.deps import get_current_empleado_with_rol, require_superuser_download, require_superuser, require_superuser_or_rh, require_superuser_or_rh_download
 from app.modules.audit.service import ActividadService
 from app.modules.personal import models as personal_models
 from app.modules.personal.service import PersonalService
 from app.modules.asistencia.motivo_remoto import label_motivo_remoto
 from . import schemas, service, models
 from .biometric.sync_service import SyncService
+from .biometric.agent_auth import require_device_api_key_or_superuser
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_fecha_mexico_a_utc(fecha_str: str, es_fin: bool = False) -> Optional[datetime]:
@@ -66,23 +70,24 @@ def sync_attendance(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
-    except Exception as e:
+    except Exception:
+        logger.exception("Error al sincronizar asistencia (device_sync)")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error al sincronizar asistencia: {str(e)}"
+            detail="Error al sincronizar asistencia. Intenta de nuevo o contacta a soporte."
         )
 
 
 # ========== DISPOSITIVOS ==========
 # Nota: ADMS (conexión directa dispositivo→servidor) ya no se usa. Solo el agente local sincroniza.
 
-@router.post("/devices", response_model=schemas.DispositivoResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/devices", response_model=schemas.DispositivoResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_superuser)])
 def create_dispositivo(dispositivo: schemas.DispositivoCreate, db: Session = Depends(get_db)):
     """Registrar nuevo dispositivo/agente"""
     return service.AsistenciaService.create_dispositivo(db, dispositivo)
 
 
-@router.get("/devices", response_model=List[schemas.DispositivoResponse])
+@router.get("/devices", response_model=List[schemas.DispositivoResponse], dependencies=[Depends(require_superuser)])
 def get_dispositivos(
     activo: Optional[bool] = None,
     db: Session = Depends(get_db)
@@ -91,7 +96,7 @@ def get_dispositivos(
     return service.AsistenciaService.get_dispositivos(db, activo=activo)
 
 
-@router.get("/devices/{device_id}", response_model=schemas.DispositivoResponse)
+@router.get("/devices/{device_id}", response_model=schemas.DispositivoResponse, dependencies=[Depends(require_superuser)])
 def get_dispositivo(device_id: int, db: Session = Depends(get_db)):
     """Obtener dispositivo por ID"""
     dispositivo = service.AsistenciaService.get_dispositivo(db, device_id)
@@ -103,7 +108,7 @@ def get_dispositivo(device_id: int, db: Session = Depends(get_db)):
     return dispositivo
 
 
-@router.patch("/devices/{device_id}", response_model=schemas.DispositivoResponse)
+@router.patch("/devices/{device_id}", response_model=schemas.DispositivoResponse, dependencies=[Depends(require_superuser)])
 def update_dispositivo(device_id: int, data: schemas.DispositivoUpdate, db: Session = Depends(get_db)):
     """Actualizar dispositivo (nombre, ip_local, ubicación, etc.)"""
     dispositivo = service.AsistenciaService.update_dispositivo(db, device_id, data)
@@ -112,7 +117,7 @@ def update_dispositivo(device_id: int, data: schemas.DispositivoUpdate, db: Sess
     return dispositivo
 
 
-@router.delete("/devices/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/devices/{device_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_superuser)])
 def delete_dispositivo(device_id: int, db: Session = Depends(get_db)):
     """Eliminar dispositivo. No permite si tiene checadas registradas."""
     try:
@@ -121,7 +126,7 @@ def delete_dispositivo(device_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
-@router.post("/devices/{device_id}/test-connection", response_model=schemas.TestConnectionResponse)
+@router.post("/devices/{device_id}/test-connection", response_model=schemas.TestConnectionResponse, dependencies=[Depends(require_superuser)])
 def test_connection(device_id: int, db: Session = Depends(get_db)):
     """Probar configuración: crea registro de prueba"""
     result = service.AsistenciaService.test_connection(db, device_id)
@@ -133,7 +138,7 @@ def test_connection(device_id: int, db: Session = Depends(get_db)):
     return result
 
 
-@router.post("/devices/{device_id}/test-device-connection")
+@router.post("/devices/{device_id}/test-device-connection", dependencies=[Depends(require_superuser)])
 def test_real_device_connection(device_id: int, db: Session = Depends(get_db)):
     """Probar conexión REAL con el dispositivo (pyzk, puerto 4370). El backend debe estar en la misma red."""
     result = service.AsistenciaService.test_device_connection(db, device_id)
@@ -145,7 +150,7 @@ def test_real_device_connection(device_id: int, db: Session = Depends(get_db)):
     return result
 
 
-@router.post("/devices/{device_id}/enqueue-user", response_model=schemas.UsuarioPendienteResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/devices/{device_id}/enqueue-user", response_model=schemas.UsuarioPendienteResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_superuser)])
 def enqueue_user(
     device_id: int,
     data: schemas.EnqueueUserRequest,
@@ -158,7 +163,7 @@ def enqueue_user(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
-@router.post("/enqueue-user-multi")
+@router.post("/enqueue-user-multi", dependencies=[Depends(require_superuser)])
 def enqueue_user_multi(
     data: schemas.EnqueueUserRequest,
     dispositivo_ids: List[int] = Query(..., description="IDs de dispositivos destino"),
@@ -175,7 +180,7 @@ def enqueue_user_multi(
     return {"results": results}
 
 
-@router.post("/devices/{device_id}/enqueue-replicate", response_model=schemas.PendingReplicateResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/devices/{device_id}/enqueue-replicate", response_model=schemas.PendingReplicateResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_superuser)])
 def enqueue_replicate(
     device_id: int,
     data: schemas.EnqueueReplicateRequest,
@@ -246,7 +251,7 @@ def enqueue_replicate(
     return pr
 
 
-@router.get("/devices/{device_id}/pending-replicate", response_model=List[schemas.PendingReplicateResponse])
+@router.get("/devices/{device_id}/pending-replicate", response_model=List[schemas.PendingReplicateResponse], dependencies=[Depends(require_superuser)])
 def get_pending_replicate_for_device(device_id: int, db: Session = Depends(get_db)):
     """Ver cola de replicaciones pendientes para un dispositivo"""
     return db.query(models.PendingReplicate).filter(
@@ -255,7 +260,11 @@ def get_pending_replicate_for_device(device_id: int, db: Session = Depends(get_d
     ).all()
 
 
-@router.get("/fingerprint-templates/{numero_empleado}", response_model=List[schemas.FingerprintTemplateResponse])
+@router.get(
+    "/fingerprint-templates/{numero_empleado}",
+    response_model=List[schemas.FingerprintTemplateResponse],
+    dependencies=[Depends(require_device_api_key_or_superuser)],
+)
 def get_templates_for_employee(
     numero_empleado: str,
     empleado_id: Optional[int] = Query(None),
@@ -300,7 +309,7 @@ def get_templates_for_employee(
     return result
 
 
-@router.post("/devices/{device_id}/pending-users/{pending_id}/retry")
+@router.post("/devices/{device_id}/pending-users/{pending_id}/retry", dependencies=[Depends(require_superuser)])
 def retry_pending_user(device_id: int, pending_id: int, db: Session = Depends(get_db)):
     """Reintentar envío: marca como no enviado para que el agente lo reenvíe en el próximo ciclo"""
     pendiente = db.query(models.UsuarioPendienteDispositivo).filter(
@@ -315,7 +324,7 @@ def retry_pending_user(device_id: int, pending_id: int, db: Session = Depends(ge
     return {"status": "ok", "message": "Se reenviará cuando el agente sincronice"}
 
 
-@router.get("/devices/{device_id}/pending-users", response_model=List[schemas.UsuarioPendienteResponse])
+@router.get("/devices/{device_id}/pending-users", response_model=List[schemas.UsuarioPendienteResponse], dependencies=[Depends(require_superuser)])
 def get_pending_users(
     device_id: int,
     include_sent: bool = Query(False, description="Incluir usuarios ya enviados"),
@@ -325,7 +334,7 @@ def get_pending_users(
     return service.AsistenciaService.get_pending_users(db, device_id, include_sent=include_sent)
 
 
-@router.post("/devices/{device_id}/start-enroll", response_model=schemas.PendingEnrollResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/devices/{device_id}/start-enroll", response_model=schemas.PendingEnrollResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_superuser)])
 def start_enroll(
     device_id: int,
     data: schemas.StartEnrollRequest,
@@ -344,7 +353,7 @@ def start_enroll(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
-@router.get("/devices/{device_id}/enroll-status/{enroll_id}", response_model=schemas.PendingEnrollResponse)
+@router.get("/devices/{device_id}/enroll-status/{enroll_id}", response_model=schemas.PendingEnrollResponse, dependencies=[Depends(require_superuser)])
 def get_enroll_status(
     device_id: int,
     enroll_id: int,
@@ -365,6 +374,7 @@ def get_enroll_status(
 @router.get(
     "/empleados/{empleado_id}/dispositivos",
     response_model=List[schemas.EmpleadoDispositivoEstado],
+    dependencies=[Depends(require_superuser)],
 )
 def get_empleado_dispositivos(empleado_id: int, db: Session = Depends(get_db)):
     """
@@ -491,7 +501,7 @@ def get_empleado_dispositivos(empleado_id: int, db: Session = Depends(get_db)):
     return result
 
 
-@router.post("/devices/{device_id}/queue-delete", status_code=status.HTTP_201_CREATED)
+@router.post("/devices/{device_id}/queue-delete", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_superuser)])
 def queue_delete_user(
     device_id: int,
     data: schemas.QueueDeleteRequest,
@@ -1407,7 +1417,7 @@ def get_mis_contexto_dias(
     return [schemas.DiaContextoLaboralResponse(**row) for row in raw]
 
 
-@router.post("/cleanup-employees")
+@router.post("/cleanup-employees", dependencies=[Depends(require_superuser)])
 def cleanup_employees(
     keep_numeros: List[str] = Query(..., description="Numeros de empleado a conservar"),
     db: Session = Depends(get_db)
@@ -1435,23 +1445,6 @@ def cleanup_employees(
             db.delete(emp)
     db.commit()
     return {"deleted": deleted_names, "kept": keep_numeros}
-
-
-# ========== HORARIOS ==========
-
-@router.post("/horarios", response_model=schemas.HorarioResponse, status_code=status.HTTP_201_CREATED)
-def create_horario(horario: schemas.HorarioCreate, db: Session = Depends(get_db)):
-    """Crear nuevo horario"""
-    return service.AsistenciaService.create_horario(db, horario)
-
-
-@router.get("/horarios", response_model=List[schemas.HorarioResponse])
-def get_horarios(
-    activo: Optional[bool] = None,
-    db: Session = Depends(get_db)
-):
-    """Listar horarios"""
-    return service.AsistenciaService.get_horarios(db, activo=activo)
 
 
 # ========== INCIDENCIAS ==========
@@ -1795,17 +1788,17 @@ def delete_horario(
 @router.get("/empleados/{empleado_id}/horarios", response_model=list[schemas.EmpleadoHorarioResponse])
 def get_horarios_empleado(
     empleado_id: int,
-    current_extra: dict = Depends(get_current_empleado_with_rol),
+    current_extra: dict = Depends(require_superuser_or_rh),
     db: Session = Depends(get_db)
 ):
-    """Lista todos los horarios activos del empleado (puede haber varios para días distintos)."""
+    """Lista todos los horarios activos del empleado (puede haber varios para días distintos). Solo RH/Admin."""
     return service.AsistenciaService.get_horarios_activos_empleado(db, empleado_id)
 
 
 @router.get("/empleados/{empleado_id}/horario", response_model=schemas.EmpleadoHorarioResponse)
 def get_horario_empleado(
     empleado_id: int,
-    current_extra: dict = Depends(get_current_empleado_with_rol),
+    current_extra: dict = Depends(require_superuser_or_rh),
     db: Session = Depends(get_db)
 ):
     """Obtiene el primer horario activo del empleado (compatibilidad)."""
@@ -2064,7 +2057,7 @@ def reporte_resumen_asistencia(
     departamento_id: Optional[int] = None,
     empleado_id: Optional[int] = None,
     db: Session = Depends(get_db),
-    _current: dict = Depends(get_current_user),
+    _current: dict = Depends(require_superuser_or_rh),
 ):
     """
     Reporte de asistencia resumido por empleado.
@@ -2163,7 +2156,7 @@ def reporte_detalle_empleado(
     fecha_inicio: str = Query(...),
     fecha_fin: str = Query(...),
     db: Session = Depends(get_db),
-    _current: dict = Depends(get_current_user),
+    _current: dict = Depends(require_superuser_or_rh),
 ):
     """
     Detalle día a día de un empleado en el período: checadas, incidencias e incapacidades.
@@ -2307,7 +2300,7 @@ def reporte_export_detalle(
     empresa_id: Optional[int] = None,
     departamento_id: Optional[int] = None,
     db: Session = Depends(get_db),
-    _current: dict = Depends(get_current_user),
+    _current: dict = Depends(require_superuser_or_rh),
 ):
     """
     Detalle día a día de TODOS los empleados del período, para exportar XLSX completo.

@@ -3,9 +3,16 @@ from sqlalchemy.orm import Session
 from typing import List
 from app.core.database import get_db
 from app.core.config import settings
+from app.core.deps import require_superuser_or_rh
 from . import schemas, service
 
-router = APIRouter(prefix=f"{settings.API_V1_PREFIX}/rh", tags=["RH"])
+# Expedientes/documentos/evaluaciones/capacitaciones son datos sensibles de RH:
+# todo el router exige Administrador o RH (antes no tenía ninguna autenticación).
+router = APIRouter(
+    prefix=f"{settings.API_V1_PREFIX}/rh",
+    tags=["RH"],
+    dependencies=[Depends(require_superuser_or_rh)],
+)
 
 
 # ========== EXPEDIENTES ==========

@@ -35,6 +35,18 @@ interface SolicitudPrestamoDoc {
   created_at: string;
 }
 
+/**
+ * Escapa caracteres especiales de HTML para evitar inyección al insertar
+ * datos dinámicos en el documento renderizado vía document.write.
+ */
+const escapeHtml = (x: string) =>
+  x
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
 const labelEstado = (e?: string) => {
   const x = (e || '').toLowerCase();
   const m: Record<string, string> = {
@@ -44,10 +56,10 @@ const labelEstado = (e?: string) => {
     rechazada: 'Rechazada',
     cancelada: 'Cancelada',
   };
-  return m[x] || e || '—';
+  return escapeHtml(m[x] || e || '—');
 };
 
-const val = (x: string | null | undefined) => x ?? '';
+const val = (x: string | null | undefined) => escapeHtml(x ?? '');
 
 const formatMonto = (x: string | number) => {
   const n = typeof x === 'string' ? parseFloat(x) : x;

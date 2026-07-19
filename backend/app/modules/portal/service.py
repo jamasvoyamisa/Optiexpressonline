@@ -1,7 +1,6 @@
 from sqlalchemy.orm import Session
 from datetime import datetime, timezone, timedelta, date
 from typing import Optional, Tuple
-import hashlib
 import logging
 
 from app.modules.personal import models as personal_models
@@ -11,7 +10,7 @@ from app.modules.asistencia.biometric.sync_service import (
     checada_anterior_a_alta_en_sistema,
     checada_anterior_a_fecha_ingreso,
 )
-from app.core.security import verify_password
+from app.core.security import verify_and_upgrade_password
 from app.core.timezone_utils import to_mexico, mexico_date_to_utc_range
 from app.modules.asistencia.motivo_remoto import MOTIVOS_REMOTOS_VALIDOS
 from .schemas import ChecadaRemotaResponse, EstadoChecadaRemotaResponse
@@ -86,14 +85,9 @@ def _mensaje_dia_no_laboral(motivo: str) -> str:
     }.get(motivo, "No aplica checada hoy.")
 
 
-def _verificar_password(empleado: personal_models.Empleado, password: str) -> bool:
-    """Verifica la contraseña del empleado (bcrypt o SHA256 legacy)."""
-    if not empleado.password_hash:
-        return password == (empleado.numero_empleado or "") or password == "admin123"
-    if len(empleado.password_hash) == 64:
-        h = hashlib.sha256(password.encode()).hexdigest()
-        return h == empleado.password_hash
-    return verify_password(password, empleado.password_hash)
+def _verificar_password(db: Session, empleado: personal_models.Empleado, password: str) -> bool:
+    """Verifica la contraseña del empleado (bcrypt o SHA-256 legacy, con upgrade transparente)."""
+    return verify_and_upgrade_password(db, empleado, password)
 
 
 def _auth_portal_checada(
@@ -130,7 +124,7 @@ def _auth_portal_checada(
     if not empleado.puede_checar_remoto:
         return None, "No tienes permiso para checar de forma remota."
 
-    if not _verificar_password(empleado, password):
+    if not _verificar_password(db, empleado, password):
         return None, "Credenciales incorrectas."
 
     return empleado, None

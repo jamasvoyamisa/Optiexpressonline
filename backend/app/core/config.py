@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     # Si true, restringe login/refresh a Administrador, Gerente o Supervisor (bloqueo temporal).
     LOGIN_MAINTENANCE_RESTRICTED: bool = False
 
+    # Contraseña del usuario admin creado automáticamente en el primer arranque (instalación
+    # nueva sin empleados). Si se deja vacío, se genera una aleatoria y se imprime UNA VEZ en
+    # el log de arranque; en ambos casos must_change_password queda en True.
+    ADMIN_DEFAULT_PASSWORD: str = ""
+
     # CORS - Lista separada por comas. Incluye landing estática (puerto 8080) para cumpleañeros/API.
     CORS_ORIGINS: str = (
         "http://localhost:3000,http://localhost:5173,"

@@ -48,11 +48,14 @@ def _depto_to_response(depto: models.Departamento) -> dict:
     data = {
         "id": depto.id, "nombre": depto.nombre, "empresa_id": depto.empresa_id,
         "jefe_id": depto.jefe_id, "padre_id": getattr(depto, "padre_id", None),
+        "tipo": getattr(depto, "tipo", None),
         "activo": depto.activo,
         "created_at": depto.created_at, "updated_at": depto.updated_at,
         "empresa": depto.empresa,
         "jefe_nombre": depto.jefe_nombre,
         "padre_nombre": getattr(depto, "padre_nombre", None),
+        "encargados_ids": getattr(depto, "encargados_ids", None) or [],
+        "encargados_nombres": getattr(depto, "encargados_nombres", None) or [],
     }
     return data
 
@@ -60,7 +63,7 @@ def _depto_to_response(depto: models.Departamento) -> dict:
 # ========== RUTAS DE EMPRESAS ==========
 
 @router.post("/empresas", response_model=schemas.EmpresaResponse, status_code=status.HTTP_201_CREATED)
-def create_empresa(empresa: schemas.EmpresaCreate, db: Session = Depends(get_db)):
+def create_empresa(empresa: schemas.EmpresaCreate, db: Session = Depends(get_db), _admin: dict = Depends(require_superuser)):
     existing = db.query(models.Empresa).filter(models.Empresa.nombre == empresa.nombre).first()
     if existing:
         raise HTTPException(status_code=400, detail="Ya existe una empresa con ese nombre")
@@ -75,13 +78,14 @@ def get_empresas(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
     activo: Optional[bool] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _current: dict = Depends(get_current_user),
 ):
     return service.PersonalService.get_empresas(db, skip=skip, limit=limit, activo=activo)
 
 
 @router.get("/empresas/{empresa_id}", response_model=schemas.EmpresaResponse)
-def get_empresa(empresa_id: int, db: Session = Depends(get_db)):
+def get_empresa(empresa_id: int, db: Session = Depends(get_db), _current: dict = Depends(get_current_user)):
     emp = service.PersonalService.get_empresa(db, empresa_id)
     if not emp:
         raise HTTPException(status_code=404, detail="Empresa no encontrada")
@@ -89,7 +93,7 @@ def get_empresa(empresa_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/empresas/{empresa_id}", response_model=schemas.EmpresaResponse)
-def update_empresa(empresa_id: int, empresa: schemas.EmpresaUpdate, db: Session = Depends(get_db)):
+def update_empresa(empresa_id: int, empresa: schemas.EmpresaUpdate, db: Session = Depends(get_db), _admin: dict = Depends(require_superuser)):
     try:
         emp = service.PersonalService.update_empresa(db, empresa_id, empresa)
     except ValueError as e:
@@ -100,13 +104,13 @@ def update_empresa(empresa_id: int, empresa: schemas.EmpresaUpdate, db: Session 
 
 
 @router.delete("/empresas/{empresa_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_empresa(empresa_id: int, db: Session = Depends(get_db)):
+def delete_empresa(empresa_id: int, db: Session = Depends(get_db), _admin: dict = Depends(require_superuser)):
     if not service.PersonalService.delete_empresa(db, empresa_id):
         raise HTTPException(status_code=404, detail="Empresa no encontrada")
 
 
 @router.get("/regimenes-fiscales-sat")
-def get_regimenes_fiscales_sat():
+def get_regimenes_fiscales_sat(_current: dict = Depends(get_current_user)):
     """Catálogo c_RegimenFiscal (SAT) para alta/edición de empresas."""
     return REGIMENES_FISCALES_SAT
 
@@ -114,7 +118,7 @@ def get_regimenes_fiscales_sat():
 # ========== RUTAS DE DEPARTAMENTOS ==========
 
 @router.post("/departamentos", response_model=schemas.DepartamentoResponse, status_code=status.HTTP_201_CREATED)
-def create_departamento(depto: schemas.DepartamentoCreate, db: Session = Depends(get_db)):
+def create_departamento(depto: schemas.DepartamentoCreate, db: Session = Depends(get_db), _admin: dict = Depends(require_superuser_or_rh)):
     empresa = service.PersonalService.get_empresa(db, depto.empresa_id)
     if not empresa:
         raise HTTPException(status_code=400, detail="La empresa especificada no existe")
@@ -136,14 +140,15 @@ def get_departamentos(
     limit: int = Query(100, ge=1, le=1000),
     empresa_id: Optional[int] = None,
     activo: Optional[bool] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _current: dict = Depends(get_current_user),
 ):
     deptos = service.PersonalService.get_departamentos(db, skip=skip, limit=limit, empresa_id=empresa_id, activo=activo)
     return [_depto_to_response(d) for d in deptos]
 
 
 @router.get("/departamentos/{depto_id}", response_model=schemas.DepartamentoResponse)
-def get_departamento(depto_id: int, db: Session = Depends(get_db)):
+def get_departamento(depto_id: int, db: Session = Depends(get_db), _current: dict = Depends(get_current_user)):
     depto = service.PersonalService.get_departamento(db, depto_id)
     if not depto:
         raise HTTPException(status_code=404, detail="Departamento no encontrado")
@@ -151,7 +156,7 @@ def get_departamento(depto_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/departamentos/{depto_id}", response_model=schemas.DepartamentoResponse)
-def update_departamento(depto_id: int, depto: schemas.DepartamentoUpdate, db: Session = Depends(get_db)):
+def update_departamento(depto_id: int, depto: schemas.DepartamentoUpdate, db: Session = Depends(get_db), _admin: dict = Depends(require_superuser_or_rh)):
     try:
         updated = service.PersonalService.update_departamento(db, depto_id, depto)
     except ValueError as e:
@@ -163,7 +168,7 @@ def update_departamento(depto_id: int, depto: schemas.DepartamentoUpdate, db: Se
 
 
 @router.delete("/departamentos/{depto_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_departamento(depto_id: int, db: Session = Depends(get_db)):
+def delete_departamento(depto_id: int, db: Session = Depends(get_db), _admin: dict = Depends(require_superuser_or_rh)):
     if not service.PersonalService.delete_departamento(db, depto_id):
         raise HTTPException(status_code=404, detail="Departamento no encontrado")
 
@@ -179,7 +184,8 @@ def get_puestos(
     activo: Optional[bool] = Query(None, description="true=activos, false=inactivos, omitir=todos"),
     empresa_id: Optional[int] = Query(None, description="Filtrar por empresa"),
     departamento_id: Optional[int] = Query(None, description="Filtrar por departamento"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _current: dict = Depends(get_current_user),
 ):
     """Lista de puestos por empresa y departamento. Los puestos reservados son globales (sin empresa/depto)."""
     service.PersonalService.ensure_puestos_reservados(db)
@@ -188,7 +194,7 @@ def get_puestos(
 
 
 @router.post("/puestos", response_model=schemas.PuestoResponse, status_code=status.HTTP_201_CREATED)
-def create_puesto(data: schemas.PuestoCreate, db: Session = Depends(get_db)):
+def create_puesto(data: schemas.PuestoCreate, db: Session = Depends(get_db), _admin: dict = Depends(require_superuser_or_rh)):
     """Crear puesto por empresa y departamento. No se pueden crear puestos reservados del sistema."""
     try:
         p = service.PersonalService.create_puesto(db, data)
@@ -202,7 +208,7 @@ def create_puesto(data: schemas.PuestoCreate, db: Session = Depends(get_db)):
 def update_puesto(
     puesto_id: int,
     data: schemas.PuestoUpdate,
-    current_extra: dict = Depends(get_current_empleado_with_rol),
+    current_extra: dict = Depends(require_superuser_or_rh),
     db: Session = Depends(get_db)
 ):
     """Actualizar puesto. Los puestos reservados solo los edita el Administrador."""
@@ -225,7 +231,7 @@ def update_puesto(
 
 
 @router.delete("/puestos/{puesto_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_puesto(puesto_id: int, db: Session = Depends(get_db)):
+def delete_puesto(puesto_id: int, db: Session = Depends(get_db), _admin: dict = Depends(require_superuser_or_rh)):
     """Eliminar puesto. No se pueden eliminar puestos reservados ni puestos con empleados asignados."""
     try:
         if not service.PersonalService.delete_puesto(db, puesto_id):
@@ -237,7 +243,7 @@ def delete_puesto(puesto_id: int, db: Session = Depends(get_db)):
 # ========== RUTAS DE ROLES ==========
 
 @router.post("/roles", response_model=schemas.RolResponse, status_code=status.HTTP_201_CREATED)
-def create_rol(rol: schemas.RolCreate, db: Session = Depends(get_db)):
+def create_rol(rol: schemas.RolCreate, db: Session = Depends(get_db), _admin: dict = Depends(require_superuser)):
     """Crear nuevo rol"""
     # Verificar si ya existe un rol con ese nombre
     existing = db.query(models.Rol).filter(models.Rol.nombre == rol.nombre).first()
@@ -254,14 +260,15 @@ def get_roles(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
     activo: Optional[bool] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _current: dict = Depends(get_current_user),
 ):
     """Listar roles"""
     return service.PersonalService.get_roles(db, skip=skip, limit=limit, activo=activo)
 
 
 @router.get("/roles/{rol_id}", response_model=schemas.RolResponse)
-def get_rol(rol_id: int, db: Session = Depends(get_db)):
+def get_rol(rol_id: int, db: Session = Depends(get_db), _current: dict = Depends(get_current_user)):
     """Obtener rol por ID"""
     db_rol = service.PersonalService.get_rol(db, rol_id)
     if not db_rol:
@@ -273,7 +280,7 @@ def get_rol(rol_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/roles/{rol_id}", response_model=schemas.RolResponse)
-def update_rol(rol_id: int, rol: schemas.RolUpdate, db: Session = Depends(get_db)):
+def update_rol(rol_id: int, rol: schemas.RolUpdate, db: Session = Depends(get_db), _admin: dict = Depends(require_superuser)):
     """Actualizar rol"""
     db_rol = service.PersonalService.update_rol(db, rol_id, rol)
     if not db_rol:
@@ -285,7 +292,7 @@ def update_rol(rol_id: int, rol: schemas.RolUpdate, db: Session = Depends(get_db
 
 
 @router.delete("/roles/{rol_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_rol(rol_id: int, db: Session = Depends(get_db)):
+def delete_rol(rol_id: int, db: Session = Depends(get_db), _admin: dict = Depends(require_superuser)):
     """Eliminar rol (desactivar)"""
     success = service.PersonalService.delete_rol(db, rol_id)
     if not success:
@@ -298,7 +305,7 @@ def delete_rol(rol_id: int, db: Session = Depends(get_db)):
 # ========== RUTAS DE EMPLEADOS ==========
 
 @router.get("/empleados/next-numero")
-def next_numero_empleado(empresa_id: int, db: Session = Depends(get_db)):
+def next_numero_empleado(empresa_id: int, db: Session = Depends(get_db), _current: dict = Depends(get_current_user)):
     """Siguiente número de empleado = último numérico registrado en la empresa + 1.
     Solo considera valores totalmente numéricos; el formato (ceros a la izquierda) se
     mantiene acorde al ancho máximo existente."""
@@ -320,14 +327,14 @@ def next_numero_empleado(empresa_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/empleados/check-username")
-def check_username(username: str, exclude_id: int = None, db: Session = Depends(get_db)):
+def check_username(username: str, exclude_id: int = None, db: Session = Depends(get_db), _current: dict = Depends(get_current_user)):
     """Verificar si un username está disponible. Devuelve {available, suggested}."""
     available = service.PersonalService.check_username_available(db, username, exclude_id)
     return {"available": available, "username": username}
 
 
 @router.get("/empleados/suggest-username")
-def suggest_username(nombre: str, apellido_paterno: str, exclude_id: int = None, db: Session = Depends(get_db)):
+def suggest_username(nombre: str, apellido_paterno: str, exclude_id: int = None, db: Session = Depends(get_db), _current: dict = Depends(get_current_user)):
     """Generar un username único a partir de nombre y apellido paterno."""
     username = service.PersonalService.suggest_username(db, nombre, apellido_paterno, exclude_id)
     return {"username": username}
@@ -440,7 +447,8 @@ def get_empleados(
         False,
         description="Si true, incluye usuarios especiales (exento incidencias). Por defecto el listado solo muestra empleados operativos.",
     ),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    _current: dict = Depends(get_current_user),
 ):
     """Listar empleados con filtros. Por defecto excluye usuarios especiales. exento_incidencias=true lista solo especiales."""
     return service.PersonalService.get_empleados(
@@ -543,7 +551,7 @@ def get_me(
 
 
 @router.get("/empleados/{empleado_id}", response_model=schemas.EmpleadoResponse)
-def get_empleado(empleado_id: int, db: Session = Depends(get_db)):
+def get_empleado(empleado_id: int, db: Session = Depends(get_db), _current: dict = Depends(get_current_user)):
     """Obtener empleado por ID"""
     db_empleado = service.PersonalService.get_empleado(db, empleado_id)
     if not db_empleado:
@@ -723,7 +731,7 @@ def create_usuario_especial(
 
 
 @router.delete("/empleados/{empleado_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_empleado(empleado_id: int, db: Session = Depends(get_db)):
+def delete_empleado(empleado_id: int, db: Session = Depends(get_db), _admin: dict = Depends(require_superuser_or_rh)):
     """Eliminar empleado (dar de baja)"""
     success = service.PersonalService.delete_empleado(db, empleado_id)
     if not success:
@@ -734,7 +742,7 @@ def delete_empleado(empleado_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/empleados/{jefe_id}/subordinados", response_model=List[schemas.EmpleadoResponse])
-def get_subordinados(jefe_id: int, db: Session = Depends(get_db)):
+def get_subordinados(jefe_id: int, db: Session = Depends(get_db), _current: dict = Depends(get_current_user)):
     """Obtener subordinados de un jefe"""
     jefe = service.PersonalService.get_empleado(db, jefe_id)
     if not jefe:

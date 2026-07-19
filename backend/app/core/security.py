@@ -2,7 +2,8 @@ import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from jose import JWTError, jwt
-from fastapi import Depends, HTTPException, status
+import bcrypt
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session, joinedload
 from app.core.config import settings
@@ -10,30 +11,66 @@ from app.core.database import get_db
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.API_V1_PREFIX}/auth/login")
 
+# Único punto de creación/verificación de hashes de contraseña (bcrypt directo,
+# sin passlib: passlib 1.7.4 es incompatible con bcrypt>=4 y lanza ValueError
+# al hashear/verificar).
+_BCRYPT_MAX_BYTES = 72  # límite duro del algoritmo bcrypt
+
+# Hashes legacy (SHA-256 hexdigest) siempre tienen 64 caracteres hexadecimales.
+_LEGACY_SHA256_LEN = 64
+
 
 def get_password_hash(password: str) -> str:
-    """Genera hash SHA-256 de la contraseña."""
-    return hashlib.sha256(password.encode()).hexdigest()
+    """Genera hash bcrypt de la contraseña."""
+    pw_bytes = password.encode("utf-8")[:_BCRYPT_MAX_BYTES]
+    return bcrypt.hashpw(pw_bytes, bcrypt.gensalt()).decode("utf-8")
+
+
+def is_legacy_sha256_hash(hashed_password: Optional[str]) -> bool:
+    """True si el hash almacenado es el formato legacy SHA-256 (64 hex chars, sin salt)."""
+    return bool(hashed_password) and len(hashed_password) == _LEGACY_SHA256_LEN
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verifica si la contraseña coincide con el hash SHA-256."""
-    return get_password_hash(plain_password) == hashed_password
+    """Verifica una contraseña contra un hash bcrypt."""
+    try:
+        pw_bytes = (plain_password or "").encode("utf-8")[:_BCRYPT_MAX_BYTES]
+        return bcrypt.checkpw(pw_bytes, hashed_password.encode("utf-8"))
+    except (ValueError, TypeError):
+        return False
 
 
 def verify_empleado_password(empleado, plain_password: str) -> bool:
     """
-    Verifica la contraseña de un Empleado (legacy sin hash, SHA-256 de 64 chars, u otro hash vía verify_password).
+    Verifica la contraseña de un Empleado.
+    - Sin password_hash: acceso denegado (ya no existe contraseña por defecto/backdoor).
+    - Hash legacy SHA-256 (64 hex chars): se compara en ese formato por compatibilidad.
+    - Cualquier otro caso: hash bcrypt.
     """
     plain = (plain_password or "").strip()
     if not plain:
         return False
     ph = getattr(empleado, "password_hash", None)
     if not ph:
-        return plain == (empleado.numero_empleado or "") or plain == "admin123"
-    if len(ph) == 64:
+        return False
+    if is_legacy_sha256_hash(ph):
         return hashlib.sha256(plain.encode()).hexdigest() == ph
     return verify_password(plain, ph)
+
+
+def verify_and_upgrade_password(db: Session, empleado, plain_password: str) -> bool:
+    """
+    Verifica la contraseña del empleado y, si el hash almacenado es el formato legacy
+    SHA-256, lo re-hashea a bcrypt de forma transparente (migración progresiva, sin
+    downtime ni script masivo). Usar esta función en todos los puntos de login/verificación
+    en lugar de reimplementar la lógica legacy/bcrypt.
+    """
+    ok = verify_empleado_password(empleado, plain_password)
+    if ok and is_legacy_sha256_hash(getattr(empleado, "password_hash", None)):
+        empleado.password_hash = get_password_hash(plain_password)
+        db.add(empleado)
+        db.commit()
+    return ok
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
@@ -124,20 +161,31 @@ async def _validate_token(token: str, db: Session) -> dict:
 
 
 async def get_current_user_download(
+    request: Request,
     download_token: Optional[str] = None,
     db: Session = Depends(get_db),
 ):
     """
-    Acepta el token desde el query param ?download_token=xxx
-    para descargas directas (sin JS/fetch intermedio).
+    Descargas protegidas: prefiere el JWT en el header Authorization (como cualquier
+    otra petición autenticada) y, solo si no viene, acepta ?download_token=xxx por
+    compatibilidad con enlaces directos antiguos. El JWT en la URL puede quedar
+    expuesto en logs de servidor/proxy o en el historial del navegador.
     """
-    if not download_token:
+    token = None
+    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+    if auth_header:
+        scheme, _, param = auth_header.partition(" ")
+        if scheme.lower() == "bearer" and param:
+            token = param
+    if not token:
+        token = download_token
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="No autenticado",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    return await _validate_token(download_token, db)
+    return await _validate_token(token, db)
 
 
 async def get_current_user(

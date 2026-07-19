@@ -5,11 +5,18 @@ from datetime import date
 
 from app.core.database import get_db
 from app.core.security import get_current_user
+from app.core.deps import require_superuser_or_rh
 from app.core.config import settings
 from app.modules.audit.negocio import registrar_negocio
 from . import service, schemas
 
-router = APIRouter(prefix=f"{settings.API_V1_PREFIX}/incapacidades", tags=["incapacidades"])
+# Datos médicos/sensibles: solo Administrador o RH (antes cualquier empleado autenticado
+# podía listar/ver/crear/editar incapacidades de cualquier otro empleado).
+router = APIRouter(
+    prefix=f"{settings.API_V1_PREFIX}/incapacidades",
+    tags=["incapacidades"],
+    dependencies=[Depends(require_superuser_or_rh)],
+)
 
 
 @router.get("", response_model=List[schemas.IncapacidadResponse])

@@ -189,7 +189,7 @@ sudo systemctl status optiexpress-backend
 ## 7. Acceso
 
 - **URL**: `http://IP_SERVIDOR` (ej: `http://192.168.1.100`)
-- **Usuario admin por defecto**: `admin` / `Admin123!`
+- **Usuario admin por defecto**: `admin`. Ya no tiene una contraseña fija: si defines `ADMIN_DEFAULT_PASSWORD` en `.env` se usa esa; si no, se genera una aleatoria y se imprime **una sola vez** en el log de arranque (`sudo journalctl -u optiexpress-backend -n 50`). En ambos casos se exige cambiarla en el primer login.
 
 ---
 

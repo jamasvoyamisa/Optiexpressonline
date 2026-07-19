@@ -137,15 +137,64 @@ class PersonalService:
             cur_id = row[0] if row else None
 
     @staticmethod
+    def _validar_tipo_y_encargados(
+        *,
+        padre_id: Optional[int],
+        tipo: Optional[str],
+        encargados_ids: Optional[List[int]],
+    ) -> tuple:
+        """Normaliza tipo/encargados. Raíz: tipo null y sin encargados. Hijo: tipo requerido."""
+        from app.modules.personal.schemas import TIPOS_HIJO_DEPTO
+
+        if padre_id is None:
+            return None, []
+        t = (tipo or "sucursal").strip().lower()
+        if t not in TIPOS_HIJO_DEPTO:
+            raise ValueError("El tipo debe ser 'subdepartamento' o 'sucursal'.")
+        ids = []
+        seen = set()
+        for eid in (encargados_ids or []):
+            if eid is None:
+                continue
+            i = int(eid)
+            if i in seen:
+                continue
+            seen.add(i)
+            ids.append(i)
+        return t, ids
+
+    @staticmethod
+    def _set_encargados(db: Session, depto: models.Departamento, empleado_ids: List[int]) -> None:
+        depto.encargados_rel.clear()
+        db.flush()
+        for eid in empleado_ids:
+            emp = db.query(models.Empleado).filter(models.Empleado.id == eid).first()
+            if not emp:
+                raise ValueError(f"El encargado (empleado id={eid}) no existe.")
+            depto.encargados_rel.append(
+                models.DepartamentoEncargado(departamento_id=depto.id, empleado_id=eid)
+            )
+
+    @staticmethod
     def create_departamento(db: Session, depto: schemas.DepartamentoCreate) -> models.Departamento:
         data = depto.dict()
+        encargados_ids = data.pop("encargados_ids", None)
         PersonalService._validar_padre_departamento(
             db,
             empresa_id=data["empresa_id"],
             padre_id=data.get("padre_id"),
         )
+        tipo, enc_ids = PersonalService._validar_tipo_y_encargados(
+            padre_id=data.get("padre_id"),
+            tipo=data.get("tipo"),
+            encargados_ids=encargados_ids,
+        )
+        data["tipo"] = tipo
         db_depto = models.Departamento(**data)
         db.add(db_depto)
+        db.flush()
+        if enc_ids:
+            PersonalService._set_encargados(db, db_depto, enc_ids)
         db.commit()
         db.refresh(db_depto)
         return db_depto
@@ -156,6 +205,7 @@ class PersonalService:
             joinedload(models.Departamento.empresa),
             joinedload(models.Departamento.jefe),
             joinedload(models.Departamento.padre),
+            selectinload(models.Departamento.encargados_rel).selectinload(models.DepartamentoEncargado.empleado),
         ).filter(models.Departamento.id == depto_id).first()
 
     @staticmethod
@@ -167,6 +217,7 @@ class PersonalService:
             joinedload(models.Departamento.empresa),
             joinedload(models.Departamento.jefe),
             joinedload(models.Departamento.padre),
+            selectinload(models.Departamento.encargados_rel).selectinload(models.DepartamentoEncargado.empleado),
         )
         if empresa_id is not None:
             query = query.filter(models.Departamento.empresa_id == empresa_id)
@@ -176,10 +227,13 @@ class PersonalService:
 
     @staticmethod
     def update_departamento(db: Session, depto_id: int, depto: schemas.DepartamentoUpdate) -> Optional[models.Departamento]:
-        db_depto = db.query(models.Departamento).filter(models.Departamento.id == depto_id).first()
+        db_depto = db.query(models.Departamento).options(
+            selectinload(models.Departamento.encargados_rel),
+        ).filter(models.Departamento.id == depto_id).first()
         if not db_depto:
             return None
         data = depto.dict(exclude_unset=True)
+        encargados_ids = data.pop("encargados_ids", None) if "encargados_ids" in data else None
         empresa_id = data.get("empresa_id", db_depto.empresa_id)
         if "padre_id" in data or "empresa_id" in data:
             padre_id = data["padre_id"] if "padre_id" in data else db_depto.padre_id
@@ -189,8 +243,26 @@ class PersonalService:
                 padre_id=padre_id,
                 depto_id=depto_id,
             )
+        padre_id_final = data["padre_id"] if "padre_id" in data else db_depto.padre_id
+        tipo_in = data["tipo"] if "tipo" in data else db_depto.tipo
+        if "tipo" in data or "padre_id" in data or encargados_ids is not None:
+            tipo, _ = PersonalService._validar_tipo_y_encargados(
+                padre_id=padre_id_final,
+                tipo=tipo_in,
+                encargados_ids=encargados_ids if encargados_ids is not None else (db_depto.encargados_ids or []),
+            )
+            data["tipo"] = tipo
         for field, value in data.items():
             setattr(db_depto, field, value)
+        if encargados_ids is not None:
+            if padre_id_final is None and encargados_ids:
+                raise ValueError("Los encargados solo aplican a sucursales/subdepartamentos.")
+            _, enc_ids = PersonalService._validar_tipo_y_encargados(
+                padre_id=padre_id_final,
+                tipo=db_depto.tipo,
+                encargados_ids=encargados_ids,
+            )
+            PersonalService._set_encargados(db, db_depto, enc_ids)
         db.commit()
         db.refresh(db_depto)
         return db_depto

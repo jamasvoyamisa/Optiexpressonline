@@ -185,11 +185,16 @@ class RolResponse(RolBase):
 
 # ---- Schemas para Departamento ----
 
+TIPOS_HIJO_DEPTO = ("subdepartamento", "sucursal")
+
+
 class DepartamentoBase(BaseModel):
     nombre: str
     empresa_id: int
     jefe_id: Optional[int] = None
     padre_id: Optional[int] = None
+    tipo: Optional[str] = None  # subdepartamento | sucursal (solo hijos)
+    encargados_ids: Optional[List[int]] = None
 
 
 class DepartamentoCreate(DepartamentoBase):
@@ -201,17 +206,26 @@ class DepartamentoUpdate(BaseModel):
     empresa_id: Optional[int] = None
     jefe_id: Optional[int] = None
     padre_id: Optional[int] = None
+    tipo: Optional[str] = None
     activo: Optional[bool] = None
+    encargados_ids: Optional[List[int]] = None
 
 
-class DepartamentoResponse(DepartamentoBase):
+class DepartamentoResponse(BaseModel):
     id: int
+    nombre: str
+    empresa_id: int
+    jefe_id: Optional[int] = None
+    padre_id: Optional[int] = None
+    tipo: Optional[str] = None
     activo: bool
     created_at: datetime
     updated_at: Optional[datetime] = None
     empresa: Optional[EmpresaResponse] = None
     jefe_nombre: Optional[str] = None
     padre_nombre: Optional[str] = None
+    encargados_ids: Optional[List[int]] = None
+    encargados_nombres: Optional[List[str]] = None
 
     class Config:
         from_attributes = True

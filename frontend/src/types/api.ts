@@ -278,6 +278,10 @@ export interface DepartamentoResponse {
   /** Departamento padre (subdepartamento). null = raíz. */
   padre_id?: number | null;
   padre_nombre?: string | null;
+  /** Solo hijos: subdepartamento | sucursal */
+  tipo?: 'subdepartamento' | 'sucursal' | string | null;
+  encargados_ids?: number[] | null;
+  encargados_nombres?: string[] | null;
   activo: boolean;
   empresa?: EmpresaResponse | null;
   created_at?: string;
@@ -289,6 +293,8 @@ export interface DepartamentoCreate {
   empresa_id: number;
   jefe_id?: number | null;
   padre_id?: number | null;
+  tipo?: 'subdepartamento' | 'sucursal' | null;
+  encargados_ids?: number[] | null;
 }
 
 export interface DepartamentoUpdate {
@@ -296,7 +302,9 @@ export interface DepartamentoUpdate {
   empresa_id?: number;
   jefe_id?: number | null;
   padre_id?: number | null;
+  tipo?: 'subdepartamento' | 'sucursal' | null;
   activo?: boolean;
+  encargados_ids?: number[] | null;
 }
 
 // ========== EMPLEADO ==========

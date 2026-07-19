@@ -4,13 +4,27 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi import HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
+from slowapi.errors import RateLimitExceeded
 from app.core.config import settings
+from app.core.rate_limit import limiter
 
 app = FastAPI(
     title=settings.APP_NAME,
     version="1.0.0",
     debug=settings.DEBUG
 )
+
+# Rate limiting (slowapi) para endpoints sensibles a fuerza bruta (login, portal remoto).
+app.state.limiter = limiter
+
+
+@app.exception_handler(RateLimitExceeded)
+async def _rate_limit_exceeded_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Demasiados intentos. Espera un momento e inténtalo de nuevo."},
+    )
+
 
 # Configurar CORS (incluye red interna: 192.168.x.x, 10.x.x.x)
 app.add_middleware(
@@ -115,7 +129,6 @@ def on_startup():
         db.commit()
 
         admin_email = "admin@admin.com"
-        admin_password = "Admin123!"
         admin_empleado = db.query(pm.Empleado).filter(pm.Empleado.email == admin_email).first()
         if not admin_empleado:
             # Evitar INSERT duplicado si ya existe fila con username/numero "admin" y otro correo (índice único username).
@@ -127,6 +140,19 @@ def on_startup():
                 .first()
             )
         if not admin_empleado:
+            # Sin contraseña fija en el código: se usa ADMIN_DEFAULT_PASSWORD si se definió
+            # en el entorno, o se genera una aleatoria que solo queda en el log de arranque
+            # (el admin debe cambiarla en el primer login, must_change_password=True).
+            if settings.ADMIN_DEFAULT_PASSWORD:
+                admin_password = settings.ADMIN_DEFAULT_PASSWORD
+            else:
+                import secrets as _secrets
+                admin_password = _secrets.token_urlsafe(12)
+                print(
+                    "=" * 70 + "\n"
+                    f"[startup] Usuario admin creado. Contraseña temporal (solo en este log): {admin_password}\n"
+                    "Cámbiala de inmediato o define ADMIN_DEFAULT_PASSWORD en el .env.\n" + "=" * 70
+                )
             admin_empleado = pm.Empleado(
                 numero_empleado="admin",
                 nombre="Administrador",
@@ -134,6 +160,7 @@ def on_startup():
                 email=admin_email,
                 username="admin",
                 password_hash=get_password_hash(admin_password),
+                must_change_password=True,
                 rol_id=rol.id,
                 estado=pm.EstadoEmpleado.ACTIVO,
             )

@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.config import settings
+from app.core.rate_limit import limiter
 from app.modules.personal import models as pm
 from . import schemas, service
 
@@ -108,7 +109,8 @@ def listar_empresas_checadas_remotas(db: Session = Depends(get_db)):
 
 
 @router.post("/checadas", response_model=schemas.ChecadaRemotaResponse)
-def registrar_checada(data: schemas.ChecadaRemotaRequest, db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+def registrar_checada(data: schemas.ChecadaRemotaRequest, request: Request, db: Session = Depends(get_db)):
     """Registra una checada remota. Autentica con empresa + usuario + contraseña de la app."""
     return service.registrar_checada_remota(
         db,
@@ -124,7 +126,8 @@ def registrar_checada(data: schemas.ChecadaRemotaRequest, db: Session = Depends(
 
 
 @router.post("/estado-hoy", response_model=schemas.EstadoChecadaRemotaResponse)
-def estado_hoy(data: schemas.ChecadaRemotaRequest, db: Session = Depends(get_db)):
+@limiter.limit("10/minute")
+def estado_hoy(data: schemas.ChecadaRemotaRequest, request: Request, db: Session = Depends(get_db)):
     """Consulta checadas de hoy vs requeridas (4 lun–vie, 2 sábado si aplica) sin registrar."""
     return service.estado_checada_remota(
         db,

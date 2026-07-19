@@ -15,8 +15,9 @@ from app.modules.auth.schemas import (
     CambiarPasswordRequest,
 )
 from app.core.config import settings
+from app.core.rate_limit import limiter
 from app.core.security import (
-    verify_password,
+    verify_and_upgrade_password,
     create_access_token,
     create_refresh_token,
     decode_access_token,
@@ -87,6 +88,7 @@ router = APIRouter(prefix=f"{settings.API_V1_PREFIX}/auth", tags=["autenticació
 
 
 @router.post("/login", response_model=TokenResponse)
+@limiter.limit("10/minute")
 def login(
     login_data: LoginRequest,
     request: Request,
@@ -115,35 +117,13 @@ def login(
             detail="Acceso suspendido temporalmente: solo Administrador, Gerente o Supervisor puede ingresar."
         )
     
-    # Verificar contraseña
-    import hashlib
-    if not empleado.password_hash:
-        # Empleados sin contraseña (legacy): permitir numero_empleado como contraseña o "admin123"
-        ok = (
-            login_data.password == (empleado.numero_empleado or "")
-            or login_data.password == "admin123"
+    # Verificar contraseña (legacy SHA-256 con upgrade transparente a bcrypt, o bcrypt directo).
+    # Sin password_hash = sin acceso: ya no existe contraseña por defecto/backdoor.
+    if not verify_and_upgrade_password(db, empleado, login_data.password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Credenciales incorrectas"
         )
-        if not ok:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Credenciales incorrectas"
-            )
-    else:
-        # Verificar si es hash SHA256 (desarrollo) o bcrypt (producción)
-        if len(empleado.password_hash) == 64:  # SHA256 hash
-            password_hash = hashlib.sha256(login_data.password.encode()).hexdigest()
-            if password_hash != empleado.password_hash:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Credenciales incorrectas"
-                )
-        else:
-            # Usar bcrypt para producción
-            if not verify_password(login_data.password, empleado.password_hash):
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Credenciales incorrectas"
-                )
     
     # Generar session_id único para esta sesión (invalida cualquier sesión anterior)
     session_id = str(uuid.uuid4()).replace("-", "")
@@ -422,7 +402,6 @@ def cambiar_password(
     - Si must_change_password: no pide la actual (ya entró con la temporal).
     - Si no: exige password_actual correcta.
     """
-    import hashlib
     empleado_id = int(current["user_id"])
     empleado = db.query(Empleado).filter(Empleado.id == empleado_id).first()
     if not empleado:
@@ -440,15 +419,7 @@ def cambiar_password(
         if nueva == actual:
             raise HTTPException(status_code=400, detail="La nueva contraseña debe ser distinta a la actual")
 
-        ok_actual = False
-        if not empleado.password_hash:
-            ok_actual = actual == (empleado.numero_empleado or "") or actual == "admin123"
-        elif len(empleado.password_hash) == 64:
-            ok_actual = hashlib.sha256(actual.encode()).hexdigest() == empleado.password_hash
-        else:
-            ok_actual = verify_password(actual, empleado.password_hash)
-
-        if not ok_actual:
+        if not verify_and_upgrade_password(db, empleado, actual):
             raise HTTPException(status_code=400, detail="La contraseña actual no es correcta")
 
     empleado.password_hash = get_password_hash(nueva)
