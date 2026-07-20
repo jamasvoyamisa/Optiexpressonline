@@ -607,15 +607,14 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
       if (search) params.append('search', search);
       if (filtroEstado) params.append('estado', filtroEstado);
       params.append('limit', '500');
-      // Incluir exento_incidencias: si no, al marcar la casilla el API deja de devolver al empleado y “desaparece” del listado.
-      params.append('incluir_exentos', 'true');
+      // Usuarios especiales (exento) no son personal operativo: se gestionan en Configuración.
       const statsParams = new URLSearchParams();
       if (search) statsParams.append('search', search);
       statsParams.append('limit', '5000');
-      statsParams.append('incluir_exentos', 'true');
       const candidatosParams = new URLSearchParams();
       candidatosParams.append('limit', '2000');
       candidatosParams.append('estado', 'activo');
+      // Candidatos a gerente de depto: sí pueden incluir especiales (p. ej. dirección).
       candidatosParams.append('incluir_exentos', 'true');
       const [empRes, empStatsRes, empGerRes, devRes, emprsRes, deptosRes, puestosRes, horRes, catRes] = await Promise.all([
         api.get(`/personal/empleados?${params.toString()}`),

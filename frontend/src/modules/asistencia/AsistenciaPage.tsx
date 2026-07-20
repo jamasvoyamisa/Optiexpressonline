@@ -54,7 +54,7 @@ export const AsistenciaPage = () => {
       if (f.fecha_fin) params.append('fecha_fin', f.fecha_fin + 'T23:59:59');
       const empleadosParams = new URLSearchParams();
       empleadosParams.set('limit', '5000');
-      empleadosParams.set('incluir_exentos', 'true');
+      // Sin usuarios especiales: no son personal operativo de checadas.
       const [checadasRes, dispositivosRes, empleadosRes] = await Promise.all([
         api.get(`/asistencia/checadas?${params.toString()}`),
         api.get('/asistencia/devices'),

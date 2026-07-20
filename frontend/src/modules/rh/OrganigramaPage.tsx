@@ -1244,6 +1244,12 @@ export const OrganigramaPage = () => {
       .sort(cmpNombreEmpleado);
   }, [empleados, empresaId, departamentos]);
 
+  /** Conteo operativo: sin usuarios especiales (exentos). La dirección sigue en el bloque de liderazgo. */
+  const totalActivosOperativos = useMemo(
+    () => activosEmpresa.filter(e => !e.exento_incidencias).length,
+    [activosEmpresa],
+  );
+
   const liderazgo = useMemo(() => {
     if (!empresaId) {
       return {
@@ -1290,14 +1296,18 @@ export const OrganigramaPage = () => {
       const esHijo = !!d.padre_id;
       const encIds = new Set((d.encargados_ids || []).map(Number));
       const delArea = activosEmpresa.filter(
-        e => e.departamento_id === d.id && !idsLiderazgo.has(e.id),
+        e => e.departamento_id === d.id && !idsLiderazgo.has(e.id) && !e.exento_incidencias,
       );
       const jefeEmp = !esHijo && d.jefe_id ? porId.get(d.jefe_id) || null : null;
-      const jefe = jefeEmp && !idsLiderazgo.has(jefeEmp.id) ? jefeEmp : null;
+      const jefe =
+        jefeEmp && !idsLiderazgo.has(jefeEmp.id) && !jefeEmp.exento_incidencias ? jefeEmp : null;
       const encargados = esHijo
         ? (d.encargados_ids || [])
             .map(id => porId.get(id))
-            .filter((e): e is EmpleadoResponse => !!e && !idsLiderazgo.has(e.id))
+            .filter(
+              (e): e is EmpleadoResponse =>
+                !!e && !idsLiderazgo.has(e.id) && !e.exento_incidencias,
+            )
             .sort(cmpNombreEmpleado)
         : [];
       const idsExcluirStaff = new Set<number>();
@@ -1337,7 +1347,7 @@ export const OrganigramaPage = () => {
 
   const sinDepartamento = useMemo(
     () => activosEmpresa
-      .filter(e => !e.departamento_id && !idsLiderazgo.has(e.id))
+      .filter(e => !e.departamento_id && !idsLiderazgo.has(e.id) && !e.exento_incidencias)
       .sort(cmpNombreEmpleado),
     [activosEmpresa, idsLiderazgo],
   );
@@ -1428,7 +1438,7 @@ export const OrganigramaPage = () => {
       </div>
       {empresaSeleccionada && (
         <div style={{ fontSize: '0.82rem', color: '#64748b', fontWeight: 600 }}>
-          {activosEmpresa.length} activo{activosEmpresa.length === 1 ? '' : 's'} · {areas.length} área{areas.length === 1 ? '' : 's'}
+          {totalActivosOperativos} activo{totalActivosOperativos === 1 ? '' : 's'} · {areas.length} área{areas.length === 1 ? '' : 's'}
         </div>
       )}
     </div>
@@ -1469,7 +1479,7 @@ export const OrganigramaPage = () => {
       )}
       {empresaSeleccionada && (
         <span style={{ marginLeft: 'auto', fontSize: '0.85rem', color: '#64748b', fontWeight: 600 }}>
-          {activosEmpresa.length} activo{activosEmpresa.length === 1 ? '' : 's'} · {areas.length} área{areas.length === 1 ? '' : 's'}
+          {totalActivosOperativos} activo{totalActivosOperativos === 1 ? '' : 's'} · {areas.length} área{areas.length === 1 ? '' : 's'}
         </span>
       )}
     </div>
@@ -1519,7 +1529,7 @@ export const OrganigramaPage = () => {
                   {empresaSeleccionada.nombre}
                 </div>
                 <div style={{ fontSize: '0.8rem', opacity: 0.9, marginTop: 4 }}>
-                  {activosEmpresa.length} colaborador{activosEmpresa.length === 1 ? '' : 'es'} activo{activosEmpresa.length === 1 ? '' : 's'}
+                  {totalActivosOperativos} colaborador{totalActivosOperativos === 1 ? '' : 'es'} activo{totalActivosOperativos === 1 ? '' : 's'}
                   {empresaSeleccionada.siglas ? ` · ${empresaSeleccionada.siglas}` : ''}
                 </div>
               </div>
@@ -1538,7 +1548,7 @@ export const OrganigramaPage = () => {
               empresa={empresaSeleccionada}
               areas={areas}
               sinDepartamento={sinDepartamento}
-              totalActivos={activosEmpresa.length}
+              totalActivos={totalActivosOperativos}
               directores={liderazgo.directores}
               subdirectores={liderazgo.subdirectores}
               gerentesGenerales={liderazgo.gerentesGenerales}
