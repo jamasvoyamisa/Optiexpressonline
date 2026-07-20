@@ -1,7 +1,9 @@
 // Avisos: imágenes de la carpeta images/Avisos/
 // Quiniela: al cambiar imagen, actualizar ruta aquí y el preload en index.html
 const avisos = [
-    { imagen: 'images/Avisos/quiniela-15a-julio.jpeg', titulo: 'Quiniela Mundialista Grupo Cristal', ampliar: true, destacado: true },
+    { imagen: 'images/Avisos/quiniela-20-julio.png', titulo: 'Quiniela Mundialista — España Campeón · Ganadores 20 julio', ampliar: true, destacado: true },
+    { imagen: 'images/Avisos/jornada-salud-22julio.png', titulo: 'Jornada de Salud y Servicios — 22 de julio', ampliar: true },
+    { imagen: 'images/Avisos/sorteo-tv-21julio.png', titulo: 'Sorteo Televisor — Martes 21 de julio, 6:30 pm', ampliar: true },
     { imagen: 'images/Avisos/cumpleaños-julio.jpeg', titulo: 'Cumpleaños julio' },
     { imagen: 'images/Avisos/dias-feriados-oficiales.jpg', titulo: 'Días Feriados Oficiales' },
     { imagen: 'images/Avisos/dias-feriados-no-oficiales.jpg', titulo: 'Días Feriados No Oficiales' }

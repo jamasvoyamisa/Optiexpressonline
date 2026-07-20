@@ -1352,7 +1352,8 @@ def get_checadas(
     dispositivo_id: Optional[int] = None,
     fecha_inicio: Optional[str] = None,
     fecha_fin: Optional[str] = None,
-    db: Session = Depends(get_db)
+    solo_portal_remoto: bool = Query(False, description="Solo checadas del portal remoto (motivo/geo)"),
+    db: Session = Depends(get_db),
 ):
     """Listar checadas con filtros. Las fechas se interpretan como hora México (CST) y se convierten a UTC."""
     fecha_inicio_dt = _parse_fecha_mexico_a_utc(fecha_inicio) if fecha_inicio else None
@@ -1365,7 +1366,8 @@ def get_checadas(
         empleado_id=empleado_id,
         dispositivo_id=dispositivo_id,
         fecha_inicio=fecha_inicio_dt,
-        fecha_fin=fecha_fin_dt
+        fecha_fin=fecha_fin_dt,
+        solo_portal_remoto=solo_portal_remoto,
     )
 
 
@@ -1382,14 +1384,23 @@ def get_mis_checadas(
     fecha_inicio_dt = _parse_fecha_mexico_a_utc(fecha_inicio) if fecha_inicio else None
     fecha_fin_dt = _parse_fecha_mexico_a_utc(fecha_fin) if fecha_fin else None
     empleado_id = int(current["user_id"])
-    return service.AsistenciaService.get_asistencias(
+    rows = service.AsistenciaService.get_asistencias(
         db,
         skip=skip,
         limit=limit,
         empleado_id=empleado_id,
         fecha_inicio=fecha_inicio_dt,
-        fecha_fin=fecha_fin_dt
+        fecha_fin=fecha_fin_dt,
     )
+    # Motivo/geo del portal son auditoría administrativa: no exponerlos al empleado.
+    for a in rows:
+        a.motivo_remoto = None
+        a.motivo_remoto_detalle = None
+        a.motivo_remoto_label = None
+        a.latitud = None
+        a.longitud = None
+        a.geo_precision_m = None
+    return rows
 
 
 @router.get("/mis-contexto-dias", response_model=List[schemas.DiaContextoLaboralResponse])

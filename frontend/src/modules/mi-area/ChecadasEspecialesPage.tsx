@@ -3,7 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../hooks/useAuth';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import api from '../../services/api';
+import { parseTimestampForMexico } from '../../utils/date';
 import {
+  rhMobileBtnPrimary,
   rhMobileBtnSecondary,
   rhMobileCard,
   rhMobileCardRow,
@@ -12,6 +14,7 @@ import {
 } from '../rh/rhMobileStyles';
 import type {
   AlcanceChecadaEspecial,
+  AsistenciaResponse,
   ChecadaEspecialCreate,
   ChecadaEspecialResponse,
   ChecadaEspecialUpdate,
@@ -92,6 +95,227 @@ function deptoNombre(departamentos: DepartamentoResponse[], id: number | null | 
   return departamentos.find((d) => d.id === id)?.nombre ?? `#${id}`;
 }
 
+const TIPO_CHECADA_LABEL: Record<string, string> = {
+  entrada: 'Entrada',
+  salida_comer: 'Salida comer',
+  regreso_comer: 'Regreso comer',
+  salida: 'Salida',
+};
+
+function mapsUrl(lat: number, lng: number) {
+  return `https://www.google.com/maps?q=${lat},${lng}`;
+}
+
+type VistaChecadasEsp = 'reglas' | 'auditoria';
+
+function tabBtnStyle(active: boolean): React.CSSProperties {
+  return {
+    padding: '8px 14px',
+    border: 'none',
+    borderBottom: active ? '2px solid #0ea5e9' : '2px solid transparent',
+    background: 'transparent',
+    color: active ? '#0f172a' : '#64748b',
+    fontWeight: active ? 700 : 500,
+    fontSize: '0.88rem',
+    cursor: 'pointer',
+  };
+}
+
+/** Auditoría de checadas del portal remoto (motivo + ubicación). Solo admin. */
+function AuditoriaPortalPanel() {
+  const isMobile = useIsMobile();
+  const hoy = formatYmd(new Date());
+  const [fechaInicio, setFechaInicio] = useState(hoy);
+  const [fechaFin, setFechaFin] = useState(hoy);
+  const [busqueda, setBusqueda] = useState('');
+  const [items, setItems] = useState<AsistenciaResponse[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      params.set('limit', '500');
+      params.set('solo_portal_remoto', 'true');
+      if (fechaInicio) params.set('fecha_inicio', `${fechaInicio}T00:00:00`);
+      if (fechaFin) params.set('fecha_fin', `${fechaFin}T23:59:59`);
+      const res = await api.get<AsistenciaResponse[]>(`/asistencia/checadas?${params.toString()}`);
+      setItems(res.data || []);
+    } catch (e) {
+      setError(axiosDetail(e));
+      setItems([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [fechaInicio, fechaFin]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const filtrados = useMemo(() => {
+    const q = busqueda.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter((c) => {
+      const nom = (c.empleado_nombre || '').toLowerCase();
+      const num = (c.empleado_numero || '').toLowerCase();
+      const mot = (c.motivo_remoto_label || c.motivo_remoto || '').toLowerCase();
+      return nom.includes(q) || num.includes(q) || mot.includes(q);
+    });
+  }, [items, busqueda]);
+
+  return (
+    <div>
+      <p style={{ color: '#64748b', fontSize: '0.95rem', maxWidth: 900, marginTop: 0, marginBottom: 16 }}>
+        Checadas registradas por el <strong>portal remoto</strong>: motivo y ubicación al momento de checar.
+        Uso administrativo (auditoría). No sustituye el reporte operativo de RH.
+      </p>
+
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 10,
+          alignItems: 'flex-end',
+          marginBottom: 16,
+          padding: isMobile ? 12 : 16,
+          background: '#fff',
+          borderRadius: 10,
+          border: '1px solid #e5e7eb',
+        }}
+      >
+        <div>
+          <label style={{ display: 'block', fontSize: '0.75rem', color: '#64748b', marginBottom: 4 }}>Desde</label>
+          <input type="date" value={fechaInicio} onChange={(e) => setFechaInicio(e.target.value)} style={{ ...field, width: isMobile ? '100%' : 150 }} />
+        </div>
+        <div>
+          <label style={{ display: 'block', fontSize: '0.75rem', color: '#64748b', marginBottom: 4 }}>Hasta</label>
+          <input type="date" value={fechaFin} onChange={(e) => setFechaFin(e.target.value)} style={{ ...field, width: isMobile ? '100%' : 150 }} />
+        </div>
+        <div style={{ flex: 1, minWidth: isMobile ? '100%' : 180 }}>
+          <label style={{ display: 'block', fontSize: '0.75rem', color: '#64748b', marginBottom: 4 }}>Buscar</label>
+          <input
+            type="search"
+            placeholder="Nombre, número o motivo…"
+            value={busqueda}
+            onChange={(e) => setBusqueda(e.target.value)}
+            style={{ ...field }}
+          />
+        </div>
+        <button type="button" onClick={() => void load()} style={rhMobileBtnPrimary}>
+          {loading ? 'Cargando…' : 'Consultar'}
+        </button>
+      </div>
+
+      {error && (
+        <div style={{ marginBottom: 16, padding: '12px 16px', background: '#fef2f2', color: '#991b1b', borderRadius: 8, border: '1px solid #fecaca' }}>
+          {error}
+        </div>
+      )}
+
+      {loading && items.length === 0 ? (
+        <p style={{ color: '#64748b' }}>Cargando…</p>
+      ) : filtrados.length === 0 ? (
+        <p style={{ color: '#64748b', padding: '12px 0' }}>No hay checadas de portal remoto en el rango.</p>
+      ) : isMobile ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {filtrados.map((c) => {
+            const d = parseTimestampForMexico(c.timestamp);
+            const fecha = d.toLocaleDateString('es-MX', { dateStyle: 'medium', timeZone: 'America/Mexico_City' });
+            const hora = d.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Mexico_City' });
+            const hasGeo = c.latitud != null && c.longitud != null;
+            return (
+              <div key={c.id} style={rhMobileCard}>
+                <div style={rhMobileCardTitle}>{c.empleado_nombre || '—'}</div>
+                <div style={rhMobileCardSub}>#{c.empleado_numero || '—'} · {c.departamento_nombre || '—'}</div>
+                <div style={{ ...rhMobileCardRow, marginTop: 8 }}>
+                  <span>{fecha} · {hora}</span>
+                  <span style={{ fontWeight: 600 }}>{TIPO_CHECADA_LABEL[c.tipo] ?? c.tipo}</span>
+                </div>
+                {(c.motivo_remoto_label || c.motivo_remoto) && (
+                  <div style={{ marginTop: 8, fontSize: '0.82rem', color: '#075985', fontWeight: 600 }}>
+                    Portal: {c.motivo_remoto_label || c.motivo_remoto}
+                  </div>
+                )}
+                {hasGeo && (
+                  <a
+                    href={mapsUrl(Number(c.latitud), Number(c.longitud))}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ display: 'inline-block', marginTop: 8, fontSize: '0.82rem', color: '#0369a1', fontWeight: 600 }}
+                  >
+                    Ver ubicación en mapa
+                    {c.geo_precision_m != null ? ` (±${Math.round(Number(c.geo_precision_m))} m)` : ''}
+                  </a>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div style={{ overflowX: 'auto', background: '#fff', borderRadius: 10, border: '1px solid #e5e7eb' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                <th style={th}>Fecha / hora</th>
+                <th style={th}>No.</th>
+                <th style={th}>Empleado</th>
+                <th style={th}>Depto</th>
+                <th style={th}>Tipo</th>
+                <th style={th}>Motivo</th>
+                <th style={th}>Ubicación</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtrados.map((c) => {
+                const d = parseTimestampForMexico(c.timestamp);
+                const fecha = d.toLocaleString('es-MX', {
+                  dateStyle: 'short',
+                  timeStyle: 'short',
+                  timeZone: 'America/Mexico_City',
+                });
+                const hasGeo = c.latitud != null && c.longitud != null;
+                return (
+                  <tr key={c.id}>
+                    <td style={{ ...td, whiteSpace: 'nowrap' }}>{fecha}</td>
+                    <td style={td}>{c.empleado_numero || '—'}</td>
+                    <td style={{ ...td, fontWeight: 500 }}>{c.empleado_nombre || '—'}</td>
+                    <td style={td}>{c.departamento_nombre || '—'}</td>
+                    <td style={td}>{TIPO_CHECADA_LABEL[c.tipo] ?? c.tipo}</td>
+                    <td style={{ ...td, color: '#075985', fontWeight: 600 }}>
+                      {c.motivo_remoto_label || c.motivo_remoto || '—'}
+                    </td>
+                    <td style={td}>
+                      {hasGeo ? (
+                        <a
+                          href={mapsUrl(Number(c.latitud), Number(c.longitud))}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ color: '#0369a1', fontWeight: 600 }}
+                        >
+                          Mapa
+                          {c.geo_precision_m != null ? ` (±${Math.round(Number(c.geo_precision_m))} m)` : ''}
+                        </a>
+                      ) : (
+                        <span style={{ color: '#94a3b8' }}>Sin geo</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <p style={{ margin: 0, padding: '10px 14px', fontSize: '0.8rem', color: '#64748b' }}>
+            {filtrados.length} checada{filtrados.length !== 1 ? 's' : ''} de portal remoto
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export interface ChecadasEspecialesEditorProps {
   embedded?: boolean;
 }
@@ -99,6 +323,7 @@ export interface ChecadasEspecialesEditorProps {
 export function ChecadasEspecialesEditor({ embedded = false }: ChecadasEspecialesEditorProps) {
   const navigate = useNavigate();
   const isMobile = useIsMobile();
+  const [vista, setVista] = useState<VistaChecadasEsp>('reglas');
   const [empresas, setEmpresas] = useState<EmpresaResponse[]>([]);
   const [departamentos, setDepartamentos] = useState<DepartamentoResponse[]>([]);
   const [items, setItems] = useState<ChecadaEspecialResponse[]>([]);
@@ -283,6 +508,26 @@ export function ChecadasEspecialesEditor({ embedded = false }: ChecadasEspeciale
         </div>
       )}
 
+      <div
+        style={{
+          display: 'flex',
+          gap: 4,
+          marginBottom: 16,
+          borderBottom: '1px solid #e5e7eb',
+        }}
+      >
+        <button type="button" style={tabBtnStyle(vista === 'reglas')} onClick={() => setVista('reglas')}>
+          Reglas de día especial
+        </button>
+        <button type="button" style={tabBtnStyle(vista === 'auditoria')} onClick={() => setVista('auditoria')}>
+          Auditoría portal remoto
+        </button>
+      </div>
+
+      {vista === 'auditoria' ? (
+        <AuditoriaPortalPanel />
+      ) : (
+      <>
       <p
         style={{
           color: '#64748b',
@@ -589,6 +834,8 @@ export function ChecadasEspecialesEditor({ embedded = false }: ChecadasEspeciale
             <p style={{ padding: 24, color: '#64748b', margin: 0 }}>No hay reglas. Crea una arriba.</p>
           )}
         </div>
+      )}
+      </>
       )}
     </div>
   );

@@ -46,7 +46,15 @@ interface ResumenEmpleado {
   puntualidad_pct: number;
 }
 
-interface DetalleChecada { hora: string; tipo: string; }
+interface DetalleChecada {
+  hora: string;
+  tipo: string;
+  motivo_remoto?: string | null;
+  motivo_remoto_detalle?: string | null;
+  motivo_remoto_label?: string | null;
+  latitud?: number | null;
+  longitud?: number | null;
+}
 interface DetalleIncidencia { tipo: string; descripcion: string; justificada: boolean; comentarios?: string | null; justificado_por_nombre?: string | null; origen: string; }
 interface DetalleDia {
   fecha: string;
@@ -105,6 +113,48 @@ const TIPO_CHECADA: Record<string, string> = {
   entrada: 'Entrada', salida_comer: 'Salida comer',
   regreso_comer: 'Regreso comer', salida: 'Salida',
 };
+
+function mapsUrl(lat: number, lng: number) {
+  return `https://www.google.com/maps?q=${lat},${lng}`;
+}
+
+/** Chip de checada; si es portal remoto muestra motivo y enlace a mapa (solo Reportes RH). */
+function ChecadaChip({ c }: { c: DetalleChecada }) {
+  const label = (c.motivo_remoto_label || '').trim();
+  const hasGeo = c.latitud != null && c.longitud != null
+    && Number.isFinite(Number(c.latitud)) && Number.isFinite(Number(c.longitud));
+  return (
+    <span style={{
+      display: 'inline-flex', flexDirection: 'column', gap: 2,
+      backgroundColor: label ? '#e0f2fe' : '#f0fdf4',
+      color: label ? '#075985' : '#166534',
+      borderRadius: 4, padding: '2px 6px', fontSize: '0.72rem', fontWeight: 600,
+      border: label ? '1px solid #bae6fd' : '1px solid transparent',
+    }}>
+      <span>{c.hora} {TIPO_CHECADA[c.tipo] ?? c.tipo}</span>
+      {label && (
+        <span style={{ fontWeight: 500, fontSize: '0.68rem', opacity: 0.95 }}>
+          Portal: {label}
+          {hasGeo && (
+            <>
+              {' · '}
+              <a
+                href={mapsUrl(Number(c.latitud), Number(c.longitud))}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: '#0369a1', textDecoration: 'underline' }}
+                onClick={(e) => e.stopPropagation()}
+              >
+                Mapa
+              </a>
+            </>
+          )}
+        </span>
+      )}
+    </span>
+  );
+}
+
 const TIPO_INC_LABEL: Record<string, { label: string; bg: string; color: string }> = {
   falta: { label: 'Falta', bg: '#fee2e2', color: '#991b1b' },
   incompleta: { label: 'Incompleta', bg: '#fef9c3', color: '#854d0e' },
@@ -726,9 +776,7 @@ export const ReportesAsistenciaPage = ({ embeddedRh = false }: { embeddedRh?: bo
                           ) : (
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                               {d.checadas.map((c, i) => (
-                                <span key={i} style={{ backgroundColor: '#f0fdf4', color: '#166534', borderRadius: 4, padding: '2px 6px', fontSize: '0.72rem', fontWeight: 600 }}>
-                                  {c.hora} {TIPO_CHECADA[c.tipo] ?? c.tipo}
-                                </span>
+                                <ChecadaChip key={i} c={c} />
                               ))}
                             </div>
                           )}
@@ -791,9 +839,7 @@ export const ReportesAsistenciaPage = ({ embeddedRh = false }: { embeddedRh?: bo
                             ) : (
                               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
                                 {d.checadas.map((c, i) => (
-                                  <span key={i} style={{ backgroundColor: '#f0fdf4', color: '#166534', borderRadius: 4, padding: '1px 6px', fontSize: '0.72rem', fontWeight: 600 }}>
-                                    {c.hora} {TIPO_CHECADA[c.tipo] ?? c.tipo}
-                                  </span>
+                                  <ChecadaChip key={i} c={c} />
                                 ))}
                               </div>
                             )}

@@ -563,7 +563,8 @@ class AsistenciaService:
         empleado_id: Optional[int] = None,
         dispositivo_id: Optional[int] = None,
         fecha_inicio: Optional[datetime] = None,
-        fecha_fin: Optional[datetime] = None
+        fecha_fin: Optional[datetime] = None,
+        solo_portal_remoto: bool = False,
     ) -> list:
         """Listar asistencias con filtros, incluye nombre del empleado"""
         query = db.query(models.Asistencia)
@@ -576,6 +577,8 @@ class AsistenciaService:
             query = query.filter(models.Asistencia.timestamp >= fecha_inicio)
         if fecha_fin:
             query = query.filter(models.Asistencia.timestamp <= fecha_fin)
+        if solo_portal_remoto:
+            query = query.filter(models.Asistencia.motivo_remoto.isnot(None))
 
         asistencias = query.order_by(models.Asistencia.timestamp.desc()).offset(skip).limit(limit).all()
 
