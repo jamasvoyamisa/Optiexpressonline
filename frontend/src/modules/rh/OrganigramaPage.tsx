@@ -10,6 +10,26 @@ import {
 } from './rhMobileStyles';
 
 type NivelEtiqueta = 'Director' | 'Subdirector' | 'Gerente General' | 'Gerente' | 'Supervisor' | 'RH' | 'Empleado';
+
+/** Etiqueta de un hijo: subdepartamento por defecto (uso real); sucursal solo si tipo lo dice. */
+function etiquetaHijoDepto(tipo?: string | null): 'Subdepartamento' | 'Sucursal' {
+  return (tipo || '').trim().toLowerCase() === 'sucursal' ? 'Sucursal' : 'Subdepartamento';
+}
+
+/** Resumen de hijos: "N subdepartamento(s)" / "N sucursal(es)" / mixto. */
+function resumenHijos(hijos: { depto: { tipo?: string | null } }[]): string {
+  if (hijos.length === 0) return '';
+  const nSub = hijos.filter(h => etiquetaHijoDepto(h.depto.tipo) === 'Subdepartamento').length;
+  const nSuc = hijos.length - nSub;
+  if (nSuc === 0) {
+    return `${hijos.length} subdepartamento${hijos.length === 1 ? '' : 's'}`;
+  }
+  if (nSub === 0) {
+    return `${hijos.length} sucursal${hijos.length === 1 ? '' : 'es'}`;
+  }
+  return `${nSub} sub · ${nSuc} sucursal${nSuc === 1 ? '' : 'es'}`;
+}
+
 type VistaModo = 'arbol' | 'interactivo' | 'lista';
 
 type AreaNodo = {
@@ -446,9 +466,7 @@ function VistaArbol({
     const tieneStaff = staff.length > 0;
     const tieneHijos = hijos.length > 0;
     const esSub = !!depto.padre_id;
-    const etiquetaTipo = esSub
-      ? (depto.tipo === 'subdepartamento' ? 'Subdepartamento' : 'Sucursal')
-      : null;
+    const etiquetaTipo = esSub ? etiquetaHijoDepto(depto.tipo) : null;
 
     // Raíz: gerente (jefe_id). Hijo: encargados (varios). Sin encargados → hereda gerente padre.
     const tieneEncargados = esSub && encargados.length > 0;
@@ -483,7 +501,7 @@ function VistaArbol({
     );
 
     const extrasGerente: string[] = [];
-    if (tieneHijos) extrasGerente.push(`${hijos.length} sucursal${hijos.length === 1 ? '' : 'es'}`);
+    if (tieneHijos) extrasGerente.push(resumenHijos(hijos));
     if (tieneStaff) extrasGerente.push(`${staff.length} en equipo`);
 
     const nodoGerenteRaiz = !dibujarGerenteRaiz || esSub ? null : jefePropio ? (
@@ -544,7 +562,7 @@ function VistaArbol({
     const subtituloDepto = [
       etiquetaTipo,
       `${total} activo${total === 1 ? '' : 's'}`,
-      tieneHijos ? `${hijos.length} sucursal${hijos.length === 1 ? '' : 'es'}` : null,
+      tieneHijos ? resumenHijos(hijos) : null,
       tieneEncargados ? `${encargados.length} encargado${encargados.length === 1 ? '' : 's'}` : null,
       heredaJefe
         ? (jefeSuperior
@@ -989,10 +1007,7 @@ function VistaLista({
               : heredaJefe
                 ? `Gerente: ${jefeSuperior ? fmtNombreEmpleado(jefeSuperior) : jefeSuperiorNombre}`
                 : 'Sin encargados';
-          const tipoLabel = esSub
-            ? (depto.tipo === 'subdepartamento' ? 'Subdepartamento' : 'Sucursal')
-            : 'Departamento';
-          return (
+          const tipoLabel = esSub ? etiquetaHijoDepto(depto.tipo) : 'Departamento';          return (
             <div
               key={depto.id}
               style={{
@@ -1030,7 +1045,7 @@ function VistaLista({
                   </div>
                   <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: 2 }}>
                     {textoJefe}
-                    {tieneHijos ? ` · ${hijos.length} sucursal${hijos.length === 1 ? '' : 'es'}` : ''}
+                    {tieneHijos ? ` · ${resumenHijos(hijos)}` : ''}
                   </div>
                 </div>
                 <span
@@ -1096,7 +1111,7 @@ function VistaLista({
                   {tieneHijos && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
                       <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#0f766e', textTransform: 'uppercase', letterSpacing: 0.3 }}>
-                        Sucursales a su cargo
+                        Subdepartamentos a su cargo
                       </div>
                       {hijos.map(h =>
                         renderAreaLista(

@@ -532,7 +532,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
   const [editingSubPendienteIdx, setEditingSubPendienteIdx] = useState<number | null>(null);
   const [subForm, setSubForm] = useState({
     nombre: '',
-    tipo: 'sucursal' as 'subdepartamento' | 'sucursal',
+    tipo: 'subdepartamento' as 'subdepartamento' | 'sucursal',
     encargados_ids: [] as number[],
     padre_id: null as number | null,
     empresa_id: undefined as number | undefined,
@@ -1127,7 +1127,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
     setEditingSubPendienteIdx(null);
     setSubForm({
       nombre: '',
-      tipo: 'sucursal',
+      tipo: 'subdepartamento',
       encargados_ids: [],
       padre_id: padreId,
       empresa_id: empresaId ?? deptoForm.empresa_id,
@@ -4245,8 +4245,8 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                       tipo: e.target.value === 'subdepartamento' ? 'subdepartamento' : 'sucursal',
                     }))}
                   >
-                    <option value="sucursal">Sucursal</option>
                     <option value="subdepartamento">Subdepartamento</option>
+                    <option value="sucursal">Sucursal</option>
                   </select>
                 </div>
                 {(editingDeptoId || subForm.padre_id) && (

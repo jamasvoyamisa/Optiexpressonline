@@ -148,7 +148,7 @@ class PersonalService:
 
         if padre_id is None:
             return None, []
-        t = (tipo or "sucursal").strip().lower()
+        t = (tipo or "subdepartamento").strip().lower()
         if t not in TIPOS_HIJO_DEPTO:
             raise ValueError("El tipo debe ser 'subdepartamento' o 'sucursal'.")
         ids = []
