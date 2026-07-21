@@ -1,4 +1,6 @@
-import { Children, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { Children, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react';
+import { flushSync } from 'react-dom';
+import { toJpeg } from 'html-to-image';
 import api from '../../services/api';
 import { cmpNombreEmpleado, fmtNombreEmpleado } from '../../utils/format';
 import type { DepartamentoResponse, EmpleadoResponse, EmpresaResponse } from '../../types';
@@ -9,7 +11,94 @@ import {
   rhMobileSelect,
 } from './rhMobileStyles';
 
-type NivelEtiqueta = 'Director' | 'Subdirector' | 'Gerente General' | 'Gerente' | 'Supervisor' | 'RH' | 'Empleado';
+const JPG_4K_W = 3840;
+const JPG_4K_H = 2160;
+
+function slugArchivo(texto: string): string {
+  return (texto || 'empresa')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w\-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_|_$/g, '')
+    .slice(0, 48) || 'empresa';
+}
+
+async function esperarFrames(n = 2): Promise<void> {
+  for (let i = 0; i < n; i += 1) {
+    await new Promise<void>(r => requestAnimationFrame(() => r()));
+  }
+}
+
+/** Encaja una imagen en canvas 4K (contain) y descarga JPEG. */
+async function descargarJpeg4kDesdeDataUrl(
+  dataUrl: string,
+  nombreArchivo: string,
+): Promise<void> {
+  const img = new Image();
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve();
+    img.onerror = () => reject(new Error('No se pudo leer la captura del organigrama'));
+    img.src = dataUrl;
+  });
+
+  const canvas = document.createElement('canvas');
+  canvas.width = JPG_4K_W;
+  canvas.height = JPG_4K_H;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas no disponible en este navegador');
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, JPG_4K_W, JPG_4K_H);
+
+  const scale = Math.min(JPG_4K_W / img.width, JPG_4K_H / img.height);
+  const dw = img.width * scale;
+  const dh = img.height * scale;
+  const dx = (JPG_4K_W - dw) / 2;
+  const dy = (JPG_4K_H - dh) / 2;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(img, dx, dy, dw, dh);
+
+  const blob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      b => (b ? resolve(b) : reject(new Error('No se pudo generar el JPEG 4K'))),
+      'image/jpeg',
+      0.92,
+    );
+  });
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = nombreArchivo;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+type NivelEtiqueta =
+  | 'Director'
+  | 'Subdirector'
+  | 'Gerente General'
+  | 'Gerente'
+  | 'Supervisor'
+  | 'Líder'
+  | 'RH'
+  | 'Empleado';
+
+/** Paleta «Colores Organigrama» (PDF Grupo Cristal). */
+const ORG_PALETTE = {
+  directivo: '#04334c',
+  gerenteGeneral: '#0b546d',
+  subdirector: '#4a7b89',
+  departamento: '#007884',
+  subDepartamento: '#00aaaa',
+  gerente: '#00b2cb',
+  supervisor: '#66d1e0',
+  lider: '#9ec6cc',
+  colaborador: '#ccf0f5',
+} as const;
 
 /** Etiqueta de un hijo: subdepartamento por defecto (uso real); sucursal solo si tipo lo dice. */
 function etiquetaHijoDepto(tipo?: string | null): 'Subdepartamento' | 'Sucursal' {
@@ -52,17 +141,19 @@ function etiquetaNivel(puestoNombre?: string | null): NivelEtiqueta {
   if (n === 'rh' || n === 'recursos humanos') return 'RH';
   if (n.includes('gerente')) return 'Gerente';
   if (n.includes('supervisor')) return 'Supervisor';
+  if (n.includes('lider') || n.includes('líder')) return 'Líder';
   return 'Empleado';
 }
 
-const NIVEL_STYLE: Record<NivelEtiqueta, { bg: string; color: string }> = {
-  Director: { bg: '#ede9fe', color: '#5b21b6' },
-  Subdirector: { bg: '#f3e8ff', color: '#6b21a8' },
-  'Gerente General': { bg: '#e0e7ff', color: '#3730a3' },
-  Gerente: { bg: '#e0f2fe', color: '#0369a1' },
-  Supervisor: { bg: '#ecfdf5', color: '#047857' },
-  RH: { bg: '#fce7f3', color: '#9d174d' },
-  Empleado: { bg: '#f1f5f9', color: '#475569' },
+const NIVEL_STYLE: Record<NivelEtiqueta, { bg: string; color: string; border: string }> = {
+  Director: { bg: '#fff', color: ORG_PALETTE.directivo, border: ORG_PALETTE.directivo },
+  'Gerente General': { bg: '#fff', color: ORG_PALETTE.gerenteGeneral, border: ORG_PALETTE.gerenteGeneral },
+  Subdirector: { bg: '#fff', color: ORG_PALETTE.subdirector, border: ORG_PALETTE.subdirector },
+  Gerente: { bg: '#fff', color: ORG_PALETTE.gerente, border: ORG_PALETTE.gerente },
+  Supervisor: { bg: '#fff', color: ORG_PALETTE.supervisor, border: ORG_PALETTE.supervisor },
+  Líder: { bg: '#fff', color: ORG_PALETTE.gerenteGeneral, border: ORG_PALETTE.lider },
+  RH: { bg: '#fff', color: ORG_PALETTE.departamento, border: ORG_PALETTE.departamento },
+  Empleado: { bg: '#fff', color: ORG_PALETTE.gerenteGeneral, border: ORG_PALETTE.colaborador },
 };
 
 function relacionadoConEmpresa(
@@ -118,10 +209,10 @@ const btnSecondary: CSSProperties = {
 
 const btnVista = (active: boolean): CSSProperties => ({
   padding: '7px 14px',
-  border: active ? '1px solid #0284c7' : '1px solid #cbd5e1',
+  border: active ? `1px solid ${ORG_PALETTE.departamento}` : '1px solid #cbd5e1',
   borderRadius: 6,
-  backgroundColor: active ? '#e0f2fe' : '#fff',
-  color: active ? '#0369a1' : '#334155',
+  backgroundColor: active ? '#fff' : '#fff',
+  color: active ? ORG_PALETTE.departamento : '#334155',
   fontWeight: active ? 700 : 600,
   fontSize: '0.85rem',
   cursor: 'pointer',
@@ -141,6 +232,7 @@ function BadgeNivel({ puesto }: { puesto?: string | null }) {
         fontWeight: 700,
         backgroundColor: st.bg,
         color: st.color,
+        border: `1px solid ${st.border}`,
         whiteSpace: 'nowrap',
       }}
     >
@@ -166,8 +258,8 @@ function PersonaRow({
         gap: 10,
         padding: destacado ? '10px 12px' : '8px 12px',
         borderRadius: 8,
-        backgroundColor: destacado ? '#f0f9ff' : '#fff',
-        border: destacado ? '1px solid #bae6fd' : '1px solid #e2e8f0',
+        backgroundColor: '#fff',
+        border: destacado ? `1px solid ${ORG_PALETTE.gerente}` : '1px solid #e2e8f0',
       }}
     >
       <div style={{ minWidth: 0 }}>
@@ -205,19 +297,62 @@ function NodoArbol({
   titulo: string;
   subtitulo?: string;
   badge?: ReactNode;
-  variante?: 'empresa' | 'depto' | 'jefe' | 'persona' | 'hueco' | 'direccion';
+  variante?: 'empresa' | 'depto' | 'subdepto' | 'jefe' | 'persona' | 'hueco' | 'direccion';
   ancho?: number;
   expandible?: boolean;
   abierto?: boolean;
   onToggle?: () => void;
 }) {
-  const styles: Record<string, { bg: string; border: string; title: string }> = {
-    empresa: { bg: 'linear-gradient(135deg, #0c4a6e 0%, #0369a1 55%, #0ea5e9 100%)', border: 'transparent', title: '#fff' },
-    depto: { bg: '#fff', border: '#7dd3fc', title: '#0c4a6e' },
-    jefe: { bg: '#f0f9ff', border: '#38bdf8', title: '#0f172a' },
-    persona: { bg: '#fff', border: '#e2e8f0', title: '#0f172a' },
-    hueco: { bg: '#f8fafc', border: '#cbd5e1', title: '#94a3b8' },
-    direccion: { bg: '#faf5ff', border: '#c4b5fd', title: '#5b21b6' },
+  const styles: Record<string, { bg: string; border: string; title: string; muted: string; chevron: string }> = {
+    empresa: {
+      bg: 'linear-gradient(135deg, #0c4a6e 0%, #0369a1 55%, #0ea5e9 100%)',
+      border: 'transparent',
+      title: '#fff',
+      muted: 'rgba(255,255,255,0.88)',
+      chevron: 'rgba(255,255,255,0.9)',
+    },
+    depto: {
+      bg: '#fff',
+      border: ORG_PALETTE.departamento,
+      title: ORG_PALETTE.departamento,
+      muted: '#64748b',
+      chevron: ORG_PALETTE.departamento,
+    },
+    subdepto: {
+      bg: '#fff',
+      border: ORG_PALETTE.subDepartamento,
+      title: ORG_PALETTE.gerenteGeneral,
+      muted: '#64748b',
+      chevron: ORG_PALETTE.subDepartamento,
+    },
+    jefe: {
+      bg: '#fff',
+      border: ORG_PALETTE.gerente,
+      title: '#0f172a',
+      muted: '#64748b',
+      chevron: ORG_PALETTE.gerente,
+    },
+    persona: {
+      bg: '#fff',
+      border: ORG_PALETTE.lider,
+      title: '#0f172a',
+      muted: '#64748b',
+      chevron: ORG_PALETTE.departamento,
+    },
+    hueco: {
+      bg: '#f8fafc',
+      border: ORG_PALETTE.lider,
+      title: '#94a3b8',
+      muted: '#94a3b8',
+      chevron: ORG_PALETTE.lider,
+    },
+    direccion: {
+      bg: '#fff',
+      border: ORG_PALETTE.directivo,
+      title: ORG_PALETTE.directivo,
+      muted: '#64748b',
+      chevron: ORG_PALETTE.directivo,
+    },
   };
   const s = styles[variante];
   const clicable = Boolean(expandible && onToggle);
@@ -236,15 +371,15 @@ function NodoArbol({
       } : undefined}
       title={clicable ? (abierto ? 'Clic para contraer' : 'Clic para expandir') : undefined}
       style={{
-        width: ancho ?? (variante === 'empresa' ? 260 : variante === 'depto' ? 180 : 150),
+        width: ancho ?? (variante === 'empresa' ? 260 : variante === 'depto' || variante === 'subdepto' ? 180 : 150),
         maxWidth: '100%',
         padding: variante === 'empresa' ? '12px 14px' : '10px 11px',
         borderRadius: 10,
         background: s.bg,
         border: `1px solid ${s.border}`,
         boxShadow: clicable && abierto === false
-          ? '0 0 0 2px rgba(14,165,233,0.25), 0 1px 3px rgba(15,23,42,0.06)'
-          : '0 1px 3px rgba(15,23,42,0.06)',
+          ? `0 0 0 2px ${ORG_PALETTE.subDepartamento}40, 0 1px 3px rgba(4,51,76,0.08)`
+          : '0 1px 3px rgba(4,51,76,0.08)',
         textAlign: 'center',
         boxSizing: 'border-box',
         cursor: clicable ? 'pointer' : 'inherit',
@@ -258,7 +393,7 @@ function NodoArbol({
             style={{
               fontSize: '0.7rem',
               fontWeight: 800,
-              color: variante === 'empresa' ? 'rgba(255,255,255,0.9)' : '#0369a1',
+              color: s.chevron,
               lineHeight: 1,
             }}
           >
@@ -274,7 +409,7 @@ function NodoArbol({
           style={{
             fontSize: '0.7rem',
             marginTop: 3,
-            color: variante === 'empresa' ? 'rgba(255,255,255,0.85)' : '#64748b',
+            color: s.muted,
             lineHeight: 1.25,
           }}
         >
@@ -288,7 +423,7 @@ function NodoArbol({
             marginTop: 6,
             fontSize: '0.68rem',
             fontWeight: 600,
-            color: variante === 'empresa' ? 'rgba(255,255,255,0.75)' : '#0284c7',
+            color: variante === 'empresa' ? 'rgba(255,255,255,0.75)' : ORG_PALETTE.departamento,
           }}
         >
           Clic para expandir
@@ -363,6 +498,14 @@ function RamaHijos({ children }: { children: ReactNode }) {
   );
 }
 
+function colorEtiquetaLiderazgo(etiqueta: string): string {
+  const e = etiqueta.toLowerCase();
+  if (e.includes('gerente general')) return ORG_PALETTE.gerenteGeneral;
+  if (e.includes('subdirector')) return ORG_PALETTE.subdirector;
+  if (e.includes('director')) return ORG_PALETTE.directivo;
+  return ORG_PALETTE.departamento;
+}
+
 function NivelLiderazgo({
   etiqueta,
   personas,
@@ -377,6 +520,7 @@ function NivelLiderazgo({
   onToggle?: () => void;
 }) {
   if (personas.length === 0) return null;
+  const colorEtiqueta = colorEtiquetaLiderazgo(etiqueta);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '100%' }}>
       {interactivo && onToggle ? (
@@ -386,7 +530,7 @@ function NivelLiderazgo({
           style={{
             border: 'none',
             background: 'transparent',
-            color: '#64748b',
+            color: colorEtiqueta,
             fontSize: '0.72rem',
             fontWeight: 700,
             textTransform: 'uppercase',
@@ -399,7 +543,7 @@ function NivelLiderazgo({
           {abierto ? '▾' : '▸'} {etiqueta}
         </button>
       ) : (
-        <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 6, marginTop: 4 }}>
+        <div style={{ fontSize: '0.72rem', fontWeight: 700, color: colorEtiqueta, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 6, marginTop: 4 }}>
           {etiqueta}
         </div>
       )}
@@ -432,6 +576,8 @@ function VistaArbol({
   interactivo = false,
   abiertos = {},
   onToggle,
+  captura = false,
+  contentRef,
 }: {
   empresa: EmpresaResponse;
   areas: AreaNodo[];
@@ -443,6 +589,9 @@ function VistaArbol({
   interactivo?: boolean;
   abiertos?: Record<string, boolean>;
   onToggle?: (key: string) => void;
+  /** Sin viewport/zoom: solo el árbol expandido (export JPG). */
+  captura?: boolean;
+  contentRef?: RefObject<HTMLDivElement>;
 }) {
   const estaAbierto = (key: string) => !interactivo || abiertos[key] !== false;
   const puedeToggle = interactivo && typeof onToggle === 'function';
@@ -574,7 +723,7 @@ function VistaArbol({
     return (
       <div key={depto.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
         <NodoArbol
-          variante="depto"
+          variante={esSub ? 'subdepto' : 'depto'}
           titulo={depto.nombre}
           subtitulo={subtituloDepto}
           ancho={170}
@@ -705,12 +854,14 @@ function VistaArbol({
   }, []);
 
   useEffect(() => {
+    if (captura) return;
     // Al cambiar de empresa (o al montar), enfocar el banner
     const t = window.setTimeout(() => centrarEnEmpresa(), 80);
     return () => window.clearTimeout(t);
-  }, [empresa.id, centrarEnEmpresa]);
+  }, [empresa.id, centrarEnEmpresa, captura]);
 
   useEffect(() => {
+    if (captura) return;
     const el = viewportRef.current;
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
@@ -723,7 +874,7 @@ function VistaArbol({
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
-  }, []);
+  }, [captura]);
 
   const iniciarArrastre = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
@@ -786,6 +937,82 @@ function VistaArbol({
     }
   };
 
+  const arbolContenido = (
+    <div
+      ref={contentRef}
+      style={{
+        display: 'inline-flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        width: 'max-content',
+        minWidth: captura ? undefined : '100%',
+        padding: captura ? '32px 56px 40px' : '20px 48px 28px',
+        boxSizing: 'border-box',
+        backgroundColor: '#ffffff',
+        ...(captura ? {} : { zoom }),
+      } as CSSProperties}
+    >
+      <div ref={captura ? undefined : empresaNodoRef} data-org-empresa="1">
+        <NodoArbol
+          variante="empresa"
+          titulo={empresa.nombre}
+          subtitulo={`${totalActivos} colaborador${totalActivos === 1 ? '' : 'es'} en estructura${empresa.siglas ? ` · ${empresa.siglas}` : ''}`}
+          ancho={280}
+          expandible={puedeToggle && hayContenido}
+          abierto={empresaAbierta}
+          onToggle={puedeToggle && hayContenido ? () => onToggle!('empresa') : undefined}
+        />
+      </div>
+      {empresaAbierta && hayContenido ? (
+        <RamaHijos>
+          {(directores.length > 0 || subdirectores.length > 0 || gerentesGenerales.length > 0) && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+              <NivelLiderazgo
+                etiqueta={directores.length > 1 ? 'Directores' : 'Director'}
+                personas={directores}
+                interactivo={!!puedeToggle}
+                abierto={dirsAbiertos}
+                onToggle={puedeToggle ? () => onToggle!('dirs') : undefined}
+              />
+              <NivelLiderazgo
+                etiqueta={subdirectores.length > 1 ? 'Subdirectores' : 'Subdirector'}
+                personas={subdirectores}
+                interactivo={!!puedeToggle}
+                abierto={subsAbiertos}
+                onToggle={puedeToggle ? () => onToggle!('subs') : undefined}
+              />
+              <NivelLiderazgo
+                etiqueta="Gerente General"
+                personas={gerentesGenerales}
+                interactivo={!!puedeToggle}
+                abierto={ggAbiertos}
+                onToggle={puedeToggle ? () => onToggle!('gg') : undefined}
+              />
+              {ramasDepto.length > 0 && <RamaHijos>{ramasDepto}</RamaHijos>}
+            </div>
+          )}
+          {directores.length === 0 &&
+            subdirectores.length === 0 &&
+            gerentesGenerales.length === 0 &&
+            ramasDepto.length > 0 &&
+            ramasDepto}
+        </RamaHijos>
+      ) : interactivo && !empresaAbierta ? (
+        <div style={{ marginTop: 12, color: '#64748b', fontSize: '0.82rem' }}>
+          Empresa contraída · clic en el nodo para ver la cadena
+        </div>
+      ) : (
+        <div style={{ marginTop: 16, color: '#94a3b8', fontSize: '0.9rem' }}>
+          No hay estructura para mostrar en esta empresa.
+        </div>
+      )}
+    </div>
+  );
+
+  if (captura) {
+    return arbolContenido;
+  }
+
   return (
     <div style={{ position: 'relative' }}>
       <div
@@ -814,9 +1041,9 @@ function VistaArbol({
           type="button"
           onClick={() => centrarEnEmpresa()}
           style={{
-            border: 'none',
-            background: '#e0f2fe',
-            color: '#0369a1',
+            background: '#fff',
+            color: ORG_PALETTE.departamento,
+            border: `1px solid ${ORG_PALETTE.departamento}`,
             borderRadius: 5,
             padding: '2px 8px',
             fontSize: '0.72rem',
@@ -850,73 +1077,7 @@ function VistaArbol({
             willChange: arrastrando ? 'transform' : undefined,
           }}
         >
-          <div
-            style={{
-              display: 'inline-flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              width: 'max-content',
-              minWidth: '100%',
-              padding: '20px 48px 28px',
-              boxSizing: 'border-box',
-              zoom,
-            } as CSSProperties}
-          >
-          <div ref={empresaNodoRef} data-org-empresa="1">
-            <NodoArbol
-              variante="empresa"
-              titulo={empresa.nombre}
-              subtitulo={`${totalActivos} colaborador${totalActivos === 1 ? '' : 'es'} en estructura${empresa.siglas ? ` · ${empresa.siglas}` : ''}`}
-              ancho={280}
-              expandible={puedeToggle && hayContenido}
-              abierto={empresaAbierta}
-              onToggle={puedeToggle && hayContenido ? () => onToggle!('empresa') : undefined}
-            />
-          </div>
-          {empresaAbierta && hayContenido ? (
-            <RamaHijos>
-              {(directores.length > 0 || subdirectores.length > 0 || gerentesGenerales.length > 0) && (
-                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                  <NivelLiderazgo
-                    etiqueta={directores.length > 1 ? 'Directores' : 'Director'}
-                    personas={directores}
-                    interactivo={!!puedeToggle}
-                    abierto={dirsAbiertos}
-                    onToggle={puedeToggle ? () => onToggle!('dirs') : undefined}
-                  />
-                  <NivelLiderazgo
-                    etiqueta={subdirectores.length > 1 ? 'Subdirectores' : 'Subdirector'}
-                    personas={subdirectores}
-                    interactivo={!!puedeToggle}
-                    abierto={subsAbiertos}
-                    onToggle={puedeToggle ? () => onToggle!('subs') : undefined}
-                  />
-                  <NivelLiderazgo
-                    etiqueta="Gerente General"
-                    personas={gerentesGenerales}
-                    interactivo={!!puedeToggle}
-                    abierto={ggAbiertos}
-                    onToggle={puedeToggle ? () => onToggle!('gg') : undefined}
-                  />
-                  {ramasDepto.length > 0 && <RamaHijos>{ramasDepto}</RamaHijos>}
-                </div>
-              )}
-              {directores.length === 0 &&
-                subdirectores.length === 0 &&
-                gerentesGenerales.length === 0 &&
-                ramasDepto.length > 0 &&
-                ramasDepto}
-            </RamaHijos>
-          ) : interactivo && !empresaAbierta ? (
-            <div style={{ marginTop: 12, color: '#64748b', fontSize: '0.82rem' }}>
-              Empresa contraída · clic en el nodo para ver la cadena
-            </div>
-          ) : (
-            <div style={{ marginTop: 16, color: '#94a3b8', fontSize: '0.9rem' }}>
-              No hay estructura para mostrar en esta empresa.
-            </div>
-          )}
-          </div>
+          {arbolContenido}
         </div>
       </div>
     </div>
@@ -946,7 +1107,7 @@ function VistaLista({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 4 }}>
           {directores.length > 0 && (
             <div>
-              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#5b21b6', marginBottom: 6, textTransform: 'uppercase' }}>
+              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: ORG_PALETTE.directivo, marginBottom: 6, textTransform: 'uppercase' }}>
                 Directores
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -956,7 +1117,7 @@ function VistaLista({
           )}
           {subdirectores.length > 0 && (
             <div>
-              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#6b21a8', marginBottom: 6, textTransform: 'uppercase' }}>
+              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: ORG_PALETTE.subdirector, marginBottom: 6, textTransform: 'uppercase' }}>
                 Subdirector
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -966,7 +1127,7 @@ function VistaLista({
           )}
           {gerentesGenerales.length > 0 && (
             <div>
-              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#3730a3', marginBottom: 6, textTransform: 'uppercase' }}>
+              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: ORG_PALETTE.gerenteGeneral, marginBottom: 6, textTransform: 'uppercase' }}>
                 Gerente General
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -1033,13 +1194,13 @@ function VistaLista({
                   textAlign: 'left',
                 }}
               >
-                <span style={{ color: '#0369a1', fontWeight: 800, fontSize: '0.85rem', width: 16 }}>
+                <span style={{ color: ORG_PALETTE.departamento, fontWeight: 800, fontSize: '0.85rem', width: 16 }}>
                   {open ? '▾' : '▸'}
                 </span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 700, color: '#0f172a', fontSize: '0.95rem' }}>
                     {depto.nombre}
-                    <span style={{ marginLeft: 8, fontSize: '0.72rem', fontWeight: 600, color: '#64748b' }}>
+                    <span style={{ marginLeft: 8, fontSize: '0.72rem', fontWeight: 600, color: esSub ? ORG_PALETTE.subDepartamento : ORG_PALETTE.departamento }}>
                       {tipoLabel}
                     </span>
                   </div>
@@ -1052,8 +1213,9 @@ function VistaLista({
                   style={{
                     padding: '3px 9px',
                     borderRadius: 999,
-                    backgroundColor: '#e0f2fe',
-                    color: '#0369a1',
+                    backgroundColor: '#fff',
+                    color: ORG_PALETTE.departamento,
+                    border: `1px solid ${ORG_PALETTE.departamento}`,
                     fontSize: '0.75rem',
                     fontWeight: 700,
                   }}
@@ -1066,7 +1228,7 @@ function VistaLista({
                 <div style={{ padding: '0 12px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
                   {jefe && (
                     <div>
-                      <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#0369a1', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.3 }}>
+                      <div style={{ fontSize: '0.72rem', fontWeight: 700, color: ORG_PALETTE.gerente, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.3 }}>
                         Gerente de área
                       </div>
                       <PersonaRow emp={jefe} destacado />
@@ -1074,7 +1236,7 @@ function VistaLista({
                   )}
                   {encargados.length > 0 && (
                     <div>
-                      <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#0369a1', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.3 }}>
+                      <div style={{ fontSize: '0.72rem', fontWeight: 700, color: ORG_PALETTE.subDepartamento, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.3 }}>
                         Encargados
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -1110,7 +1272,7 @@ function VistaLista({
 
                   {tieneHijos && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
-                      <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#0f766e', textTransform: 'uppercase', letterSpacing: 0.3 }}>
+                      <div style={{ fontSize: '0.72rem', fontWeight: 700, color: ORG_PALETTE.subDepartamento, textTransform: 'uppercase', letterSpacing: 0.3 }}>
                         Subdepartamentos a su cargo
                       </div>
                       {hijos.map(h =>
@@ -1200,6 +1362,8 @@ export const OrganigramaPage = () => {
   const [error, setError] = useState<string | null>(null);
   const [abiertos, setAbiertos] = useState<Record<string, boolean>>({});
   const [vista, setVista] = useState<VistaModo>('arbol');
+  const [exportando, setExportando] = useState(false);
+  const exportRef = useRef<HTMLDivElement>(null);
 
   const cargar = useCallback(async () => {
     setCargando(true);
@@ -1410,6 +1574,39 @@ export const OrganigramaPage = () => {
     setAbiertos(next);
   };
 
+  const exportarJpg4k = async () => {
+    if (!empresaSeleccionada || exportando) return;
+    flushSync(() => setExportando(true));
+    try {
+      await esperarFrames(3);
+      await new Promise(r => setTimeout(r, 150));
+      const nodo = exportRef.current;
+      if (!nodo) throw new Error('No se pudo preparar el organigrama para exportar');
+
+      const w = Math.max(nodo.scrollWidth, nodo.offsetWidth, 1);
+      const h = Math.max(nodo.scrollHeight, nodo.offsetHeight, 1);
+      // Suficientes píxeles para reescalar a 4K sin saturar memoria en árboles muy anchos.
+      const pixelRatio = Math.min(2.5, Math.max(1, Math.min(JPG_4K_W / w, JPG_4K_H / h) * 1.6));
+
+      const dataUrl = await toJpeg(nodo, {
+        quality: 0.95,
+        pixelRatio,
+        backgroundColor: '#ffffff',
+        cacheBust: true,
+        width: w,
+        height: h,
+      });
+
+      const slug = slugArchivo(empresaSeleccionada.siglas || empresaSeleccionada.nombre);
+      await descargarJpeg4kDesdeDataUrl(dataUrl, `organigrama-${slug}-4k.jpg`);
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Error al exportar JPG 4K';
+      alert(msg);
+    } finally {
+      setExportando(false);
+    }
+  };
+
   const selectorVista = (
     <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
       <button type="button" style={btnVista(vista === 'arbol')} onClick={() => setVista('arbol')}>
@@ -1443,6 +1640,14 @@ export const OrganigramaPage = () => {
       <div style={{ display: 'flex', gap: 8 }}>
         <button type="button" style={{ ...rhMobileBtnSecondary, flex: 1 }} onClick={() => void cargar()} disabled={cargando}>
           {cargando ? 'Cargando…' : 'Actualizar'}
+        </button>
+        <button
+          type="button"
+          style={{ ...rhMobileBtnSecondary, flex: 1 }}
+          onClick={() => void exportarJpg4k()}
+          disabled={!empresaSeleccionada || exportando}
+        >
+          {exportando ? 'Generando…' : 'JPG 4K'}
         </button>
         {mostrarExpandir && (
           <>
@@ -1486,6 +1691,19 @@ export const OrganigramaPage = () => {
       <button type="button" style={btnSecondary} onClick={() => void cargar()} disabled={cargando}>
         {cargando ? 'Cargando…' : 'Actualizar'}
       </button>
+      <button
+        type="button"
+        style={{
+          ...btnSecondary,
+          borderColor: ORG_PALETTE.departamento,
+          color: ORG_PALETTE.departamento,
+        }}
+        onClick={() => void exportarJpg4k()}
+        disabled={!empresaSeleccionada || exportando}
+        title="Descarga el organigrama completo en JPG 3840×2160"
+      >
+        {exportando ? 'Generando JPG…' : 'Exportar JPG 4K'}
+      </button>
       {mostrarExpandir && (
         <>
           <button type="button" style={btnSecondary} onClick={expandirTodo}>Expandir todo</button>
@@ -1510,6 +1728,34 @@ export const OrganigramaPage = () => {
       </div>
 
       {toolbar}
+
+      {exportando && empresaSeleccionada && (
+        <div
+          aria-hidden
+          style={{
+            position: 'fixed',
+            left: 0,
+            top: 0,
+            opacity: 0,
+            pointerEvents: 'none',
+            zIndex: -1,
+            overflow: 'visible',
+          }}
+        >
+          <VistaArbol
+            empresa={empresaSeleccionada}
+            areas={areas}
+            sinDepartamento={sinDepartamento}
+            totalActivos={totalActivosOperativos}
+            directores={liderazgo.directores}
+            subdirectores={liderazgo.subdirectores}
+            gerentesGenerales={liderazgo.gerentesGenerales}
+            interactivo={false}
+            captura
+            contentRef={exportRef}
+          />
+        </div>
+      )}
 
       {error && (
         <div style={{ padding: 12, borderRadius: 8, backgroundColor: '#fef2f2', color: '#991b1b', marginBottom: 12, fontSize: '0.88rem' }}>
