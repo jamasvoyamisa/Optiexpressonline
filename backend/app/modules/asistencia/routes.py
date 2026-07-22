@@ -1687,6 +1687,7 @@ def get_incidencias_mi_area(
 def update_incidencia(
     incidencia_id: int,
     body: schemas.IncidenciaUpdate,
+    request: Request,
     current_extra: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db)
 ):
@@ -1738,6 +1739,25 @@ def update_incidencia(
     if body.justificada:
         update_data["justificado_por_id"] = current_id
     updated = service.AsistenciaService.update_incidencia(db, incidencia_id, update_data)
+    from app.modules.audit.negocio import registrar_accion_rh
+    emp = db.query(personal_models.Empleado).filter(personal_models.Empleado.id == inc.empleado_id).first()
+    registrar_accion_rh(
+        db,
+        current=current_extra,
+        request=request,
+        accion="actualizar_incidencia",
+        mensaje=(
+            f"Incidencia id={incidencia_id} "
+            f"{'justificada' if body.justificada else 'actualizada'} "
+            f"No. {getattr(emp, 'numero_empleado', inc.empleado_id)}"
+        ),
+        empleado_afectado=emp,
+        empleado_afectado_id=inc.empleado_id,
+        cambios=update_data,
+        extras={"incidencia_id": incidencia_id, "tipo": getattr(inc, "tipo", None)},
+        metodo_http="PATCH",
+        ruta=f"{settings.API_V1_PREFIX}/asistencia/incidencias/{incidencia_id}",
+    )
     return updated
 
 
@@ -2019,12 +2039,29 @@ def listar_checadas_especiales(
 @router.post("/checadas-especiales", response_model=schemas.ChecadaEspecialResponse, status_code=status.HTTP_201_CREATED)
 def crear_checada_especial(
     body: schemas.ChecadaEspecialCreate,
+    request: Request,
     db: Session = Depends(get_db),
     current: dict = Depends(get_current_empleado_with_rol),
 ):
     _require_superuser_checadas_especiales(current)
     try:
         ce = service.AsistenciaService.crear_checada_especial(db, body)
+        from app.modules.audit.negocio import registrar_accion_rh
+        from app.modules.personal import models as pers_models
+        emp = db.query(pers_models.Empleado).filter(pers_models.Empleado.id == body.empleado_id).first() if getattr(body, "empleado_id", None) else None
+        registrar_accion_rh(
+            db,
+            current=current,
+            request=request,
+            accion="crear_checada_especial",
+            mensaje=f"Checada especial creada id={ce.id} No. {getattr(emp, 'numero_empleado', getattr(body, 'empleado_id', None))}",
+            empleado_afectado=emp,
+            empleado_afectado_id=getattr(body, "empleado_id", None),
+            extras={"checada_especial_id": ce.id, "tipo": getattr(body, "tipo", None)},
+            metodo_http="POST",
+            ruta=f"{settings.API_V1_PREFIX}/asistencia/checadas-especiales",
+            codigo_http=201,
+        )
         return service.AsistenciaService.map_checada_especial_response(ce)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -2034,6 +2071,7 @@ def crear_checada_especial(
 def actualizar_checada_especial(
     checada_id: int,
     body: schemas.ChecadaEspecialUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     current: dict = Depends(get_current_empleado_with_rol),
 ):
@@ -2042,6 +2080,24 @@ def actualizar_checada_especial(
         row = service.AsistenciaService.actualizar_checada_especial(db, checada_id, body)
         if not row:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro no encontrado")
+        from app.modules.audit.negocio import registrar_accion_rh
+        from app.modules.personal import models as pers_models
+        emp_id = getattr(row, "empleado_id", None)
+        emp = db.query(pers_models.Empleado).filter(pers_models.Empleado.id == emp_id).first() if emp_id else None
+        cambios = body.model_dump(exclude_unset=True) if hasattr(body, "model_dump") else {}
+        registrar_accion_rh(
+            db,
+            current=current,
+            request=request,
+            accion="actualizar_checada_especial",
+            mensaje=f"Checada especial actualizada id={checada_id} No. {getattr(emp, 'numero_empleado', emp_id)}",
+            empleado_afectado=emp,
+            empleado_afectado_id=emp_id,
+            cambios=cambios,
+            extras={"checada_especial_id": checada_id},
+            metodo_http="PUT",
+            ruta=f"{settings.API_V1_PREFIX}/asistencia/checadas-especiales/{checada_id}",
+        )
         return service.AsistenciaService.map_checada_especial_response(row)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
@@ -2050,12 +2106,36 @@ def actualizar_checada_especial(
 @router.delete("/checadas-especiales/{checada_id}", status_code=status.HTTP_204_NO_CONTENT)
 def eliminar_checada_especial(
     checada_id: int,
+    request: Request,
     db: Session = Depends(get_db),
     current: dict = Depends(get_current_empleado_with_rol),
 ):
     _require_superuser_checadas_especiales(current)
+    from app.modules.audit.negocio import registrar_accion_rh
+    from app.modules.personal import models as pers_models
+    prev = None
+    try:
+        items = service.AsistenciaService.listar_checadas_especiales(db)
+        prev = next((x for x in items if getattr(x, "id", None) == checada_id), None)
+    except Exception:
+        prev = None
+    emp_id = getattr(prev, "empleado_id", None) if prev else None
+    emp = db.query(pers_models.Empleado).filter(pers_models.Empleado.id == emp_id).first() if emp_id else None
     if not service.AsistenciaService.eliminar_checada_especial(db, checada_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Registro no encontrado")
+    registrar_accion_rh(
+        db,
+        current=current,
+        request=request,
+        accion="eliminar_checada_especial",
+        mensaje=f"Checada especial eliminada id={checada_id} No. {getattr(emp, 'numero_empleado', emp_id)}",
+        empleado_afectado=emp,
+        empleado_afectado_id=emp_id,
+        extras={"checada_especial_id": checada_id},
+        metodo_http="DELETE",
+        ruta=f"{settings.API_V1_PREFIX}/asistencia/checadas-especiales/{checada_id}",
+        codigo_http=204,
+    )
 
 
 # ========== REPORTES ==========

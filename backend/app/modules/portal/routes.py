@@ -112,6 +112,7 @@ def listar_empresas_checadas_remotas(db: Session = Depends(get_db)):
 @limiter.limit("10/minute")
 def registrar_checada(data: schemas.ChecadaRemotaRequest, request: Request, db: Session = Depends(get_db)):
     """Registra una checada remota. Autentica con empresa + usuario + contraseña de la app."""
+    from app.modules.audit.middleware import _client_ip
     return service.registrar_checada_remota(
         db,
         empresa_id=data.empresa_id,
@@ -122,6 +123,7 @@ def registrar_checada(data: schemas.ChecadaRemotaRequest, request: Request, db: 
         latitud=data.latitud,
         longitud=data.longitud,
         geo_precision_m=data.geo_precision_m,
+        ip_cliente=_client_ip(request) or None,
     )
 
 
@@ -129,9 +131,11 @@ def registrar_checada(data: schemas.ChecadaRemotaRequest, request: Request, db: 
 @limiter.limit("10/minute")
 def estado_hoy(data: schemas.ChecadaRemotaRequest, request: Request, db: Session = Depends(get_db)):
     """Consulta checadas de hoy vs requeridas (4 lun–vie, 2 sábado si aplica) sin registrar."""
+    from app.modules.audit.middleware import _client_ip
     return service.estado_checada_remota(
         db,
         empresa_id=data.empresa_id,
         username=data.username,
         password=data.password,
+        ip_cliente=_client_ip(request) or None,
     )

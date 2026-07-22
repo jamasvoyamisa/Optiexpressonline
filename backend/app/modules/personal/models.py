@@ -169,6 +169,9 @@ class Empleado(Base):
     password_hash = Column(String(255), nullable=True)
     # Fase A alineación LFT: True tras alta o reset temporal; el colaborador debe cambiarla.
     must_change_password = Column(Boolean, default=False, nullable=False)
+    # Anti-fuerza bruta (corto plazo): fallos consecutivos y bloqueo temporal de login.
+    login_fallos_consecutivos = Column(Integer, nullable=False, default=0, server_default="0")
+    login_bloqueado_hasta = Column(DateTime(timezone=True), nullable=True)
 
     puesto_id = Column(Integer, ForeignKey("puestos.id"), nullable=True)
     curp = Column(String(18), nullable=True)

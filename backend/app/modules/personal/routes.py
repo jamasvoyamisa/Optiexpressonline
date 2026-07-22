@@ -9,6 +9,7 @@ from app.core.security import get_current_user
 from app.core.deps import get_current_empleado_with_rol, require_superuser, require_superuser_or_rh, require_superuser_download
 from app.modules.audit.middleware import _client_ip
 from app.modules.audit.service import ActividadService
+from app.modules.audit.negocio import registrar_accion_rh
 from . import schemas, service, models
 from .regimen_fiscal_sat import REGIMENES_FISCALES_SAT
 
@@ -118,7 +119,12 @@ def get_regimenes_fiscales_sat(_current: dict = Depends(get_current_user)):
 # ========== RUTAS DE DEPARTAMENTOS ==========
 
 @router.post("/departamentos", response_model=schemas.DepartamentoResponse, status_code=status.HTTP_201_CREATED)
-def create_departamento(depto: schemas.DepartamentoCreate, db: Session = Depends(get_db), _admin: dict = Depends(require_superuser_or_rh)):
+def create_departamento(
+    depto: schemas.DepartamentoCreate,
+    request: Request,
+    current: dict = Depends(require_superuser_or_rh),
+    db: Session = Depends(get_db),
+):
     empresa = service.PersonalService.get_empresa(db, depto.empresa_id)
     if not empresa:
         raise HTTPException(status_code=400, detail="La empresa especificada no existe")
@@ -131,7 +137,72 @@ def create_departamento(depto: schemas.DepartamentoCreate, db: Session = Depends
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     loaded = service.PersonalService.get_departamento(db, db_depto.id)
+    registrar_accion_rh(
+        db,
+        current=current,
+        request=request,
+        accion="crear_departamento",
+        mensaje=f"Departamento creado id={db_depto.id} «{getattr(loaded or db_depto, 'nombre', depto.nombre)}»",
+        extras={"departamento_id": db_depto.id, "nombre": getattr(loaded or db_depto, "nombre", None)},
+        metodo_http="POST",
+        ruta=f"{settings.API_V1_PREFIX}/personal/departamentos",
+        codigo_http=201,
+    )
     return _depto_to_response(loaded)
+
+
+@router.put("/departamentos/{depto_id}", response_model=schemas.DepartamentoResponse)
+def update_departamento(
+    depto_id: int,
+    depto: schemas.DepartamentoUpdate,
+    request: Request,
+    current: dict = Depends(require_superuser_or_rh),
+    db: Session = Depends(get_db),
+):
+    try:
+        updated = service.PersonalService.update_departamento(db, depto_id, depto)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not updated:
+        raise HTTPException(status_code=404, detail="Departamento no encontrado")
+    loaded = service.PersonalService.get_departamento(db, depto_id)
+    cambios = depto.model_dump(exclude_unset=True) if hasattr(depto, "model_dump") else {}
+    registrar_accion_rh(
+        db,
+        current=current,
+        request=request,
+        accion="actualizar_departamento",
+        mensaje=f"Departamento actualizado id={depto_id} «{getattr(loaded or updated, 'nombre', '')}»",
+        cambios=cambios,
+        extras={"departamento_id": depto_id},
+        metodo_http="PUT",
+        ruta=f"{settings.API_V1_PREFIX}/personal/departamentos/{depto_id}",
+    )
+    return _depto_to_response(loaded)
+
+
+@router.delete("/departamentos/{depto_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_departamento(
+    depto_id: int,
+    request: Request,
+    current: dict = Depends(require_superuser_or_rh),
+    db: Session = Depends(get_db),
+):
+    prev = service.PersonalService.get_departamento(db, depto_id)
+    nombre = getattr(prev, "nombre", None) if prev else None
+    if not service.PersonalService.delete_departamento(db, depto_id):
+        raise HTTPException(status_code=404, detail="Departamento no encontrado")
+    registrar_accion_rh(
+        db,
+        current=current,
+        request=request,
+        accion="eliminar_departamento",
+        mensaje=f"Departamento eliminado id={depto_id}" + (f" «{nombre}»" if nombre else ""),
+        extras={"departamento_id": depto_id, "nombre": nombre},
+        metodo_http="DELETE",
+        ruta=f"{settings.API_V1_PREFIX}/personal/departamentos/{depto_id}",
+        codigo_http=204,
+    )
 
 
 @router.get("/departamentos", response_model=List[schemas.DepartamentoResponse])
@@ -155,24 +226,6 @@ def get_departamento(depto_id: int, db: Session = Depends(get_db), _current: dic
     return _depto_to_response(depto)
 
 
-@router.put("/departamentos/{depto_id}", response_model=schemas.DepartamentoResponse)
-def update_departamento(depto_id: int, depto: schemas.DepartamentoUpdate, db: Session = Depends(get_db), _admin: dict = Depends(require_superuser_or_rh)):
-    try:
-        updated = service.PersonalService.update_departamento(db, depto_id, depto)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    if not updated:
-        raise HTTPException(status_code=404, detail="Departamento no encontrado")
-    loaded = service.PersonalService.get_departamento(db, depto_id)
-    return _depto_to_response(loaded)
-
-
-@router.delete("/departamentos/{depto_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_departamento(depto_id: int, db: Session = Depends(get_db), _admin: dict = Depends(require_superuser_or_rh)):
-    if not service.PersonalService.delete_departamento(db, depto_id):
-        raise HTTPException(status_code=404, detail="Departamento no encontrado")
-
-
 # ========== RUTAS DE PUESTOS ==========
 
 def _puesto_to_response(p):
@@ -194,11 +247,27 @@ def get_puestos(
 
 
 @router.post("/puestos", response_model=schemas.PuestoResponse, status_code=status.HTTP_201_CREATED)
-def create_puesto(data: schemas.PuestoCreate, db: Session = Depends(get_db), _admin: dict = Depends(require_superuser_or_rh)):
+def create_puesto(
+    data: schemas.PuestoCreate,
+    request: Request,
+    current: dict = Depends(require_superuser_or_rh),
+    db: Session = Depends(get_db),
+):
     """Crear puesto por empresa y departamento. No se pueden crear puestos reservados del sistema."""
     try:
         p = service.PersonalService.create_puesto(db, data)
         p = service.PersonalService.get_puesto(db, p.id)
+        registrar_accion_rh(
+            db,
+            current=current,
+            request=request,
+            accion="crear_puesto",
+            mensaje=f"Puesto creado id={p.id} «{p.nombre}»",
+            extras={"puesto_id": p.id, "nombre": p.nombre},
+            metodo_http="POST",
+            ruta=f"{settings.API_V1_PREFIX}/personal/puestos",
+            codigo_http=201,
+        )
         return _puesto_to_response(p)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -208,6 +277,7 @@ def create_puesto(data: schemas.PuestoCreate, db: Session = Depends(get_db), _ad
 def update_puesto(
     puesto_id: int,
     data: schemas.PuestoUpdate,
+    request: Request,
     current_extra: dict = Depends(require_superuser_or_rh),
     db: Session = Depends(get_db)
 ):
@@ -225,19 +295,49 @@ def update_puesto(
         if not updated:
             raise HTTPException(status_code=404, detail="Puesto no encontrado")
         updated = service.PersonalService.get_puesto(db, puesto_id)
+        cambios = data.model_dump(exclude_unset=True) if hasattr(data, "model_dump") else {}
+        registrar_accion_rh(
+            db,
+            current=current_extra,
+            request=request,
+            accion="actualizar_puesto",
+            mensaje=f"Puesto actualizado id={puesto_id} «{getattr(updated, 'nombre', '')}»",
+            cambios=cambios,
+            extras={"puesto_id": puesto_id},
+            metodo_http="PUT",
+            ruta=f"{settings.API_V1_PREFIX}/personal/puestos/{puesto_id}",
+        )
         return _puesto_to_response(updated)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.delete("/puestos/{puesto_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_puesto(puesto_id: int, db: Session = Depends(get_db), _admin: dict = Depends(require_superuser_or_rh)):
+def delete_puesto(
+    puesto_id: int,
+    request: Request,
+    current: dict = Depends(require_superuser_or_rh),
+    db: Session = Depends(get_db),
+):
     """Eliminar puesto. No se pueden eliminar puestos reservados ni puestos con empleados asignados."""
+    prev = service.PersonalService.get_puesto(db, puesto_id)
+    nombre = getattr(prev, "nombre", None) if prev else None
     try:
         if not service.PersonalService.delete_puesto(db, puesto_id):
             raise HTTPException(status_code=404, detail="Puesto no encontrado")
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    registrar_accion_rh(
+        db,
+        current=current,
+        request=request,
+        accion="eliminar_puesto",
+        mensaje=f"Puesto eliminado id={puesto_id}" + (f" «{nombre}»" if nombre else ""),
+        extras={"puesto_id": puesto_id, "nombre": nombre},
+        metodo_http="DELETE",
+        ruta=f"{settings.API_V1_PREFIX}/personal/puestos/{puesto_id}",
+        codigo_http=204,
+    )
 
 
 # ========== RUTAS DE ROLES ==========
@@ -343,6 +443,7 @@ def suggest_username(nombre: str, apellido_paterno: str, exclude_id: int = None,
 @router.post("/empleados", response_model=schemas.EmpleadoResponse, status_code=status.HTTP_201_CREATED)
 def create_empleado(
     empleado: schemas.EmpleadoCreate,
+    request: Request,
     current_extra: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db)
 ):
@@ -430,6 +531,22 @@ def create_empleado(
         except Exception as e:
             logger.warning(f"Empleado creado pero fallo enqueue en checadores: {e}")
 
+    registrar_accion_rh(
+        db,
+        current=current_extra,
+        request=request,
+        accion="crear_empleado",
+        mensaje=f"Empleado creado No. {db_empleado.numero_empleado}",
+        empleado_afectado=db_empleado,
+        extras={
+            "empresa_id": db_empleado.empresa_id,
+            "departamento_id": db_empleado.departamento_id,
+            "puesto_id": db_empleado.puesto_id,
+        },
+        metodo_http="POST",
+        ruta=f"{settings.API_V1_PREFIX}/personal/empleados",
+        codigo_http=201,
+    )
     return db_empleado
 
 
@@ -566,6 +683,7 @@ def get_empleado(empleado_id: int, db: Session = Depends(get_db), _current: dict
 def update_empleado(
     empleado_id: int,
     empleado: schemas.EmpleadoUpdate,
+    request: Request,
     current_extra: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db)
 ):
@@ -589,6 +707,19 @@ def update_empleado(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Empleado no encontrado"
         )
+    cambios = empleado.model_dump(exclude_unset=True) if hasattr(empleado, "model_dump") else {}
+    registrar_accion_rh(
+        db,
+        current=current_extra,
+        request=request,
+        accion="actualizar_empleado",
+        mensaje=f"Empleado actualizado No. {db_empleado.numero_empleado}",
+        empleado_afectado=db_empleado,
+        cambios=cambios,
+        extras={"campos": list(cambios.keys())},
+        metodo_http="PUT",
+        ruta=f"{settings.API_V1_PREFIX}/personal/empleados/{empleado_id}",
+    )
     return db_empleado
 
 
@@ -659,6 +790,7 @@ def restablecer_password_empleado(
 def set_permisos_especiales(
     empleado_id: int,
     body: schemas.PermisosEspecialesUpdate,
+    request: Request,
     current_extra: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db),
 ):
@@ -671,18 +803,38 @@ def set_permisos_especiales(
     emp = service.PersonalService.get_empleado(db, empleado_id)
     if not emp:
         raise HTTPException(status_code=404, detail="Empleado no encontrado")
+    antes = {
+        "exento_incidencias": bool(emp.exento_incidencias),
+        "puede_checar_remoto": bool(getattr(emp, "puede_checar_remoto", False)),
+    }
     if body.exento_incidencias is not None:
         emp.exento_incidencias = body.exento_incidencias
     if body.puede_checar_remoto is not None:
         emp.puede_checar_remoto = body.puede_checar_remoto
     db.commit()
     db.refresh(emp)
+    despues = {
+        "exento_incidencias": bool(emp.exento_incidencias),
+        "puede_checar_remoto": bool(getattr(emp, "puede_checar_remoto", False)),
+    }
+    registrar_accion_rh(
+        db,
+        current=current_extra,
+        request=request,
+        accion="permisos_especiales",
+        mensaje=f"Permisos especiales actualizados No. {emp.numero_empleado}",
+        empleado_afectado=emp,
+        cambios={"antes": antes, "despues": despues},
+        metodo_http="PATCH",
+        ruta=f"{settings.API_V1_PREFIX}/personal/empleados/{empleado_id}/permisos-especiales",
+    )
     return emp
 
 
 @router.post("/usuarios-especiales", response_model=schemas.EmpleadoResponse, status_code=status.HTTP_201_CREATED)
 def create_usuario_especial(
     data: schemas.UsuarioEspecialCreate,
+    request: Request,
     current_extra: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db),
 ):
@@ -725,20 +877,50 @@ def create_usuario_especial(
                 raise HTTPException(status_code=400, detail=f"La empresa {eid} no existe")
 
     try:
-        return service.PersonalService.create_usuario_especial(db, data)
+        emp = service.PersonalService.create_usuario_especial(db, data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    registrar_accion_rh(
+        db,
+        current=current_extra,
+        request=request,
+        accion="crear_usuario_especial",
+        mensaje=f"Usuario especial creado No. {emp.numero_empleado}",
+        empleado_afectado=emp,
+        metodo_http="POST",
+        ruta=f"{settings.API_V1_PREFIX}/personal/usuarios-especiales",
+        codigo_http=201,
+    )
+    return emp
 
 
 @router.delete("/empleados/{empleado_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_empleado(empleado_id: int, db: Session = Depends(get_db), _admin: dict = Depends(require_superuser_or_rh)):
+def delete_empleado(
+    empleado_id: int,
+    request: Request,
+    current: dict = Depends(require_superuser_or_rh),
+    db: Session = Depends(get_db),
+):
     """Eliminar empleado (dar de baja)"""
+    prev = service.PersonalService.get_empleado(db, empleado_id)
     success = service.PersonalService.delete_empleado(db, empleado_id)
     if not success:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Empleado no encontrado"
         )
+    registrar_accion_rh(
+        db,
+        current=current,
+        request=request,
+        accion="baja_empleado",
+        mensaje=f"Empleado dado de baja No. {getattr(prev, 'numero_empleado', empleado_id)}",
+        empleado_afectado=prev,
+        empleado_afectado_id=empleado_id,
+        metodo_http="DELETE",
+        ruta=f"{settings.API_V1_PREFIX}/personal/empleados/{empleado_id}",
+        codigo_http=204,
+    )
 
 
 @router.get("/empleados/{jefe_id}/subordinados", response_model=List[schemas.EmpleadoResponse])
@@ -845,11 +1027,12 @@ def descargar_plantilla_xlsx(
 
 @router.post("/importar/xlsx")
 async def importar_empleados_xlsx(
+    request: Request,
     file: UploadFile = File(...),
     empresa_id: int = Form(...),
     actualizar_existentes: bool = Form(False),
     db: Session = Depends(get_db),
-    _su: dict = Depends(require_superuser),
+    current: dict = Depends(require_superuser),
 ):
     """
     Importa empleados desde un archivo XLSX.
@@ -1155,7 +1338,7 @@ async def importar_empleados_xlsx(
 
     wb.close()
 
-    return {
+    resumen = {
         "total_filas": len(creados) + len(actualizados) + len(omitidos) + len(errores),
         "creados": len(creados),
         "actualizados": len(actualizados),
@@ -1166,6 +1349,29 @@ async def importar_empleados_xlsx(
         "detalle_omitidos": omitidos,
         "detalle_errores": errores,
     }
+    registrar_accion_rh(
+        db,
+        current=current,
+        request=request,
+        accion="importar_empleados_xlsx",
+        mensaje=(
+            f"Importación XLSX empleados empresa_id={empresa_id}: "
+            f"{len(creados)} creados, {len(actualizados)} actualizados, "
+            f"{len(omitidos)} omitidos, {len(errores)} errores"
+        ),
+        extras={
+            "empresa_id": empresa_id,
+            "archivo": file.filename,
+            "actualizar_existentes": actualizar_existentes,
+            "creados": len(creados),
+            "actualizados": len(actualizados),
+            "omitidos": len(omitidos),
+            "errores": len(errores),
+        },
+        metodo_http="POST",
+        ruta=f"{settings.API_V1_PREFIX}/personal/importar/xlsx",
+    )
+    return resumen
 
 
 @router.get("/exportar/empleados")

@@ -95,19 +95,47 @@ def _auth_portal_checada(
     empresa_id: int,
     username: str,
     password: str,
-) -> Tuple[Optional[personal_models.Empleado], Optional[str]]:
-    """Valida empresa + usuario + contraseña + permiso remoto. Devuelve (empleado, None) o (None, mensaje_error)."""
+    *,
+    ip_cliente: Optional[str] = None,
+) -> Tuple[Optional[personal_models.Empleado], Optional[str], int]:
+    """
+    Valida empresa + usuario + contraseña + permiso remoto.
+    Devuelve (empleado, None, 200) o (None, mensaje_error, 401|429).
+    """
+    from app.core.config import settings
+    from app.core.login_protection import (
+        MSG_CREDENCIALES,
+        MSG_DEMASIADOS,
+        account_is_locked,
+        clear_account_failures,
+        clear_user_failures,
+        is_user_rate_limited,
+        log_account_lock,
+        log_bruteforce_ip_alert,
+        register_account_failure,
+        register_auth_failure,
+    )
+
+    ruta = f"{settings.API_V1_PREFIX}/portal"
+    login_key = username or ""
+
+    if is_user_rate_limited(login_key):
+        return None, MSG_DEMASIADOS, 429
+
     empresa = db.query(personal_models.Empresa).filter(
         personal_models.Empresa.id == empresa_id,
         personal_models.Empresa.activo == True,
         personal_models.Empresa.checadas_remotas == True,
     ).first()
     if not empresa:
-        return None, "Empresa no disponible para checadas remotas."
+        return None, "Empresa no disponible para checadas remotas.", 400
 
     user = (username or "").strip().lower()
     if not user:
-        return None, "Credenciales incorrectas."
+        user_limited, alert_ip = register_auth_failure(login_key, ip_cliente)
+        if alert_ip and ip_cliente:
+            log_bruteforce_ip_alert(db, ip=ip_cliente, ruta=ruta)
+        return None, (MSG_DEMASIADOS if user_limited else MSG_CREDENCIALES), (429 if user_limited else 401)
 
     empleado = db.query(personal_models.Empleado).filter(
         personal_models.Empleado.empresa_id == empresa_id,
@@ -115,19 +143,36 @@ def _auth_portal_checada(
         personal_models.Empleado.estado == personal_models.EstadoEmpleado.ACTIVO,
     ).first()
     if not empleado:
-        return None, "Credenciales incorrectas."
+        user_limited, alert_ip = register_auth_failure(login_key, ip_cliente)
+        if alert_ip and ip_cliente:
+            log_bruteforce_ip_alert(db, ip=ip_cliente, ruta=ruta)
+        return None, (MSG_DEMASIADOS if user_limited else MSG_CREDENCIALES), (429 if user_limited else 401)
+
+    if account_is_locked(empleado):
+        return None, MSG_DEMASIADOS, 401
 
     # Regla de negocio: usuarios especiales no deben registrar checadas.
     if getattr(empleado, "exento_incidencias", False):
-        return None, "Usuario especial: no requiere registrar checadas."
+        return None, "Usuario especial: no requiere registrar checadas.", 403
 
     if not empleado.puede_checar_remoto:
-        return None, "No tienes permiso para checar de forma remota."
+        return None, "No tienes permiso para checar de forma remota.", 403
 
     if not _verificar_password(db, empleado, password):
-        return None, "Credenciales incorrectas."
+        user_limited, alert_ip = register_auth_failure(login_key, ip_cliente)
+        if alert_ip and ip_cliente:
+            log_bruteforce_ip_alert(db, ip=ip_cliente, ruta=ruta)
+        was_unlocked = not account_is_locked(empleado)
+        locked = register_account_failure(db, empleado)
+        if locked and was_unlocked:
+            log_account_lock(db, empleado=empleado, ip=ip_cliente, ruta=ruta)
+        detail = MSG_DEMASIADOS if (user_limited or locked) else MSG_CREDENCIALES
+        code = 429 if user_limited else 401
+        return None, detail, code
 
-    return empleado, None
+    clear_user_failures(login_key)
+    clear_account_failures(db, empleado)
+    return empleado, None, 200
 
 
 def estado_checada_remota(
@@ -135,10 +180,17 @@ def estado_checada_remota(
     empresa_id: int,
     username: str,
     password: str,
+    *,
+    ip_cliente: Optional[str] = None,
 ) -> EstadoChecadaRemotaResponse:
     """Consulta cuántas checadas llevas hoy vs las requeridas (sin registrar)."""
-    empleado, err = _auth_portal_checada(db, empresa_id, username, password)
+    empleado, err, code = _auth_portal_checada(
+        db, empresa_id, username, password, ip_cliente=ip_cliente
+    )
     if err or not empleado:
+        # El portal (checadas_remotas.html) lee `mensaje`/`ok` y NO inspecciona el status HTTP.
+        # Devolvemos 200 con ok=False para conservar el mensaje (credenciales, bloqueo, permiso, etc.).
+        # La protección anti-fuerza bruta ya se aplicó dentro de _auth_portal_checada.
         return EstadoChecadaRemotaResponse(ok=False, mensaje=err or "Error.")
 
     ts_mex = to_mexico(datetime.now(timezone.utc))
@@ -185,14 +237,21 @@ def registrar_checada_remota(
     latitud: Optional[float] = None,
     longitud: Optional[float] = None,
     geo_precision_m: Optional[float] = None,
+    *,
+    ip_cliente: Optional[str] = None,
 ) -> ChecadaRemotaResponse:
     """
     Autentica al empleado y registra una checada remota.
     Fase D: exige motivo (HO/TFO/OTRO) y ubicación (lat/lng) solo al momento de checar.
     No permite más registros cuando ya se alcanzaron las checadas requeridas del día.
     """
-    empleado, err = _auth_portal_checada(db, empresa_id, username, password)
+    empleado, err, code = _auth_portal_checada(
+        db, empresa_id, username, password, ip_cliente=ip_cliente
+    )
     if err or not empleado:
+        # El portal (checadas_remotas.html) lee `mensaje`/`ok` y NO inspecciona el status HTTP.
+        # Devolvemos 200 con ok=False para conservar el mensaje (credenciales, bloqueo, permiso, etc.).
+        # La protección anti-fuerza bruta ya se aplicó dentro de _auth_portal_checada.
         return ChecadaRemotaResponse(ok=False, mensaje=err or "Error.")
 
     dispositivo = _get_dispositivo_portal(db)

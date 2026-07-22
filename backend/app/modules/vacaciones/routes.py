@@ -10,6 +10,8 @@ from app.core.security import get_current_user, verify_empleado_password
 from app.core.deps import get_current_empleado_with_rol, require_superuser, require_superuser_or_rh
 from app.modules.audit.negocio import registrar_negocio
 from app.modules.audit.middleware import _client_ip
+from app.modules.audit.service import ActividadService
+from app.modules.personal import models as personal_models
 
 from . import schemas, service
 
@@ -27,6 +29,71 @@ def _require_superuser_vacaciones_generales(current: dict):
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Solo el administrador puede gestionar vacaciones generales",
         )
+
+
+def _nombre_empleado(emp: Optional[personal_models.Empleado]) -> Optional[str]:
+    if not emp:
+        return None
+    return (
+        " ".join(
+            p for p in [emp.nombre, emp.apellido_paterno, emp.apellido_materno]
+            if p and str(p).strip()
+        )
+        or None
+    )
+
+
+def _actor_rol(current: dict) -> str:
+    if current.get("is_superuser"):
+        return "admin"
+    if current.get("is_rh"):
+        return "rh"
+    return "otro"
+
+
+def _registrar_ajuste_saldo_vacaciones(
+    db: Session,
+    *,
+    request: Request,
+    current: dict,
+    empleado_id: int,
+    accion: str,
+    mensaje: str,
+    valor_anterior,
+    valor_nuevo,
+    ruta: str,
+) -> None:
+    actor_id = int(current["user_id"])
+    afectado = (
+        db.query(personal_models.Empleado)
+        .filter(personal_models.Empleado.id == empleado_id)
+        .first()
+    )
+    num_afectado = (afectado.numero_empleado if afectado else None) or str(empleado_id)
+    empresa_afectado = (
+        afectado.empresa.nombre if afectado and getattr(afectado, "empresa", None) else None
+    )
+    ActividadService.registrar(
+        db,
+        nivel="info",
+        categoria="negocio",
+        mensaje=mensaje,
+        empleado_id=actor_id,
+        ip_cliente=_client_ip(request) or None,
+        metodo_http="PUT",
+        ruta=ruta[:500],
+        codigo_http=200,
+        contexto={
+            "accion": accion,
+            "actor_rol": _actor_rol(current),
+            "empleado_afectado_id": empleado_id,
+            "empleado_afectado_numero": num_afectado,
+            "empleado_afectado_nombre": _nombre_empleado(afectado),
+            "empleado_afectado_empresa": empresa_afectado,
+            "valor_anterior": str(valor_anterior),
+            "valor_nuevo": str(valor_nuevo),
+        },
+    )
 
 
 from .models import SolicitudVacaciones
@@ -598,18 +665,42 @@ def actualizar_dias_disponibles(
 def admin_actualizar_saldo_lft_neto(
     empleado_id: int,
     body: schemas.SaldoLftNetoAdminBody,
-    _ctx: dict = Depends(require_superuser),
+    request: Request,
+    current: dict = Depends(require_superuser_or_rh),
     db: Session = Depends(get_db),
 ):
-    """Ajusta el saldo LFT neto del empleado (misma lógica que importación de personal). Solo administrador."""
+    """Ajusta el saldo LFT neto del empleado (misma lógica que importación de personal). Admin o RH."""
+    año_val = dt.now().year
+    prev = service.VacacionesService.get_balance_con_periodos(db, empleado_id, año_val)
+    valor_anterior = prev.get("saldo_dias_lft_neto", Decimal("0"))
     try:
         service.VacacionesService.aplicar_saldo_lft_neto_import(
             db, empleado_id, body.saldo_lft_neto, do_commit=True
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    año_val = dt.now().year
     data = service.VacacionesService.get_balance_con_periodos(db, empleado_id, año_val)
+    valor_nuevo = data.get("saldo_dias_lft_neto", body.saldo_lft_neto)
+    afectado = (
+        db.query(personal_models.Empleado)
+        .filter(personal_models.Empleado.id == empleado_id)
+        .first()
+    )
+    num = (afectado.numero_empleado if afectado else None) or str(empleado_id)
+    _registrar_ajuste_saldo_vacaciones(
+        db,
+        request=request,
+        current=current,
+        empleado_id=empleado_id,
+        accion="ajuste_saldo_lft_neto",
+        mensaje=(
+            f"Ajuste saldo LFT neto vacaciones: No. {num} "
+            f"de {valor_anterior} a {valor_nuevo} ({_actor_rol(current)})"
+        ),
+        valor_anterior=valor_anterior,
+        valor_nuevo=valor_nuevo,
+        ruta=f"{settings.API_V1_PREFIX}/vacaciones/admin/empleado/{empleado_id}/saldo-lft-neto",
+    )
     return _balance_con_periodos_schema(data)
 
 
@@ -620,13 +711,22 @@ def admin_actualizar_saldo_lft_neto(
 def admin_actualizar_saldo_migracion_vacaciones(
     empleado_id: int,
     body: schemas.SaldoMigracionVacacionesAdminBody,
-    _ctx: dict = Depends(require_superuser),
+    request: Request,
+    current: dict = Depends(require_superuser_or_rh),
     db: Session = Depends(get_db),
 ):
     """
-    Fija el saldo de migración (días fuera de la tabla LFT). Solo administrador.
+    Fija el saldo de migración (días fuera de la tabla LFT). Admin o RH.
     Los nuevos periodos por aniversario siguen calculándose solo con la LFT.
     """
+    afectado_prev = (
+        db.query(personal_models.Empleado)
+        .filter(personal_models.Empleado.id == empleado_id)
+        .first()
+    )
+    valor_anterior = Decimal(
+        str(afectado_prev.dias_saldo_migracion_vacaciones or 0) if afectado_prev else 0
+    )
     try:
         service.VacacionesService.aplicar_saldo_migracion_vacaciones_admin(
             db, empleado_id, body.dias_saldo_migracion_vacaciones, do_commit=True
@@ -635,6 +735,25 @@ def admin_actualizar_saldo_migracion_vacaciones(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     año_val = dt.now().year
     data = service.VacacionesService.get_balance_con_periodos(db, empleado_id, año_val)
+    valor_nuevo = data.get("dias_saldo_migracion_vacaciones", body.dias_saldo_migracion_vacaciones)
+    num = (afectado_prev.numero_empleado if afectado_prev else None) or str(empleado_id)
+    _registrar_ajuste_saldo_vacaciones(
+        db,
+        request=request,
+        current=current,
+        empleado_id=empleado_id,
+        accion="ajuste_saldo_migracion_vacaciones",
+        mensaje=(
+            f"Ajuste bolsa vacaciones (migración): No. {num} "
+            f"de {valor_anterior} a {valor_nuevo} ({_actor_rol(current)})"
+        ),
+        valor_anterior=valor_anterior,
+        valor_nuevo=valor_nuevo,
+        ruta=(
+            f"{settings.API_V1_PREFIX}/vacaciones/admin/empleado/"
+            f"{empleado_id}/saldo-migracion-vacaciones"
+        ),
+    )
     return _balance_con_periodos_schema(data)
 
 

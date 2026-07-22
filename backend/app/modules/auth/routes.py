@@ -16,6 +16,18 @@ from app.modules.auth.schemas import (
 )
 from app.core.config import settings
 from app.core.rate_limit import limiter
+from app.core.login_protection import (
+    MSG_CREDENCIALES,
+    MSG_DEMASIADOS,
+    account_is_locked,
+    clear_account_failures,
+    clear_user_failures,
+    is_user_rate_limited,
+    log_account_lock,
+    log_bruteforce_ip_alert,
+    register_account_failure,
+    register_auth_failure,
+)
 from app.core.security import (
     verify_and_upgrade_password,
     create_access_token,
@@ -97,17 +109,36 @@ def login(
     """
     Endpoint de login usando username (email o número de empleado) y password
     """
+    ip_login = _client_ip(request) or None
+    login_key = login_data.username or ""
+    ruta_login = f"{settings.API_V1_PREFIX}/auth/login"
+
+    if is_user_rate_limited(login_key):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=MSG_DEMASIADOS,
+        )
+
     # Buscar empleado por email, número de empleado o username (con puesto para Mi Área)
     empleado = db.query(Empleado).options(joinedload(Empleado.puesto_rel), joinedload(Empleado.departamento_rel)).filter(
         (Empleado.email == login_data.username) |
         (Empleado.numero_empleado == login_data.username) |
         (Empleado.username == login_data.username)
     ).first()
-    
+
     if not empleado:
+        user_limited, alert_ip = register_auth_failure(login_key, ip_login)
+        if alert_ip and ip_login:
+            log_bruteforce_ip_alert(db, ip=ip_login, ruta=ruta_login)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS if user_limited else status.HTTP_401_UNAUTHORIZED,
+            detail=MSG_DEMASIADOS if user_limited else MSG_CREDENCIALES,
+        )
+
+    if account_is_locked(empleado):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Credenciales incorrectas"
+            detail=MSG_DEMASIADOS,
         )
 
     # Bloqueo temporal opcional por mantenimiento.
@@ -116,15 +147,25 @@ def login(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Acceso suspendido temporalmente: solo Administrador, Gerente o Supervisor puede ingresar."
         )
-    
+
     # Verificar contraseña (legacy SHA-256 con upgrade transparente a bcrypt, o bcrypt directo).
     # Sin password_hash = sin acceso: ya no existe contraseña por defecto/backdoor.
     if not verify_and_upgrade_password(db, empleado, login_data.password):
+        user_limited, alert_ip = register_auth_failure(login_key, ip_login)
+        if alert_ip and ip_login:
+            log_bruteforce_ip_alert(db, ip=ip_login, ruta=ruta_login)
+        was_unlocked = not account_is_locked(empleado)
+        locked = register_account_failure(db, empleado)
+        if locked and was_unlocked:
+            log_account_lock(db, empleado=empleado, ip=ip_login, ruta=ruta_login)
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Credenciales incorrectas"
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS if user_limited else status.HTTP_401_UNAUTHORIZED,
+            detail=MSG_DEMASIADOS if (user_limited or locked) else MSG_CREDENCIALES,
         )
-    
+
+    clear_user_failures(login_key)
+    clear_account_failures(db, empleado)
+
     # Generar session_id único para esta sesión (invalida cualquier sesión anterior)
     session_id = str(uuid.uuid4()).replace("-", "")
     empleado.session_id = session_id
@@ -188,7 +229,6 @@ def login(
     access_token = create_access_token(data=token_data)
     refresh_token = create_refresh_token(data=token_data)
 
-    ip_login = _client_ip(request)
     ActividadService.registrar(
         db,
         nivel="info",

@@ -1,13 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from datetime import date
 
 from app.core.database import get_db
 from app.core.security import get_current_user
-from app.core.deps import require_superuser_or_rh
+from app.core.deps import require_superuser_or_rh, get_current_empleado_with_rol
 from app.core.config import settings
-from app.modules.audit.negocio import registrar_negocio
+from app.modules.audit.negocio import registrar_accion_rh
+from app.modules.personal import models as personal_models
 from . import service, schemas
 
 # Datos médicos/sensibles: solo Administrador o RH (antes cualquier empleado autenticado
@@ -17,6 +18,12 @@ router = APIRouter(
     tags=["incapacidades"],
     dependencies=[Depends(require_superuser_or_rh)],
 )
+
+
+def _emp(db: Session, empleado_id: Optional[int]):
+    if not empleado_id:
+        return None
+    return db.query(personal_models.Empleado).filter(personal_models.Empleado.id == empleado_id).first()
 
 
 @router.get("", response_model=List[schemas.IncapacidadResponse])
@@ -36,7 +43,8 @@ def listar(
 @router.post("", response_model=schemas.IncapacidadCreateResponse, status_code=status.HTTP_201_CREATED)
 def crear(
     data: schemas.IncapacidadCreate,
-    current: dict = Depends(get_current_user),
+    request: Request,
+    current: dict = Depends(get_current_empleado_with_rol),
     db: Session = Depends(get_db),
 ):
     registrado_por = int(current["user_id"])
@@ -44,10 +52,28 @@ def crear(
         out = service.crear_incapacidad(db, data, registrado_por)
         inc = out.get("incapacidad")
         iid = getattr(inc, "id", None) if inc is not None else None
-        registrar_negocio(
+        afectado = _emp(db, data.empleado_id)
+        registrar_accion_rh(
             db,
-            empleado_id=registrado_por,
-            mensaje=f"Incapacidad registrada id={iid} empleado_afectado={data.empleado_id} período {data.fecha_inicio}–{data.fecha_fin}",
+            current=current,
+            request=request,
+            accion="crear_incapacidad",
+            mensaje=(
+                f"Incapacidad registrada id={iid} No. "
+                f"{getattr(afectado, 'numero_empleado', data.empleado_id)} "
+                f"período {data.fecha_inicio}–{data.fecha_fin}"
+            ),
+            empleado_afectado=afectado,
+            empleado_afectado_id=data.empleado_id,
+            extras={
+                "incapacidad_id": iid,
+                "fecha_inicio": str(data.fecha_inicio),
+                "fecha_fin": str(data.fecha_fin),
+                "tipo": getattr(data, "tipo", None),
+            },
+            metodo_http="POST",
+            ruta=f"{settings.API_V1_PREFIX}/incapacidades",
+            codigo_http=201,
         )
         return out
     except ValueError as e:
@@ -70,16 +96,31 @@ def obtener(
 def actualizar(
     incapacidad_id: int,
     data: schemas.IncapacidadUpdate,
+    request: Request,
     db: Session = Depends(get_db),
-    current: dict = Depends(get_current_user),
+    current: dict = Depends(get_current_empleado_with_rol),
 ):
+    prev = service.get_incapacidad(db, incapacidad_id)
+    if not prev:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incapacidad no encontrada")
+    emp_id = getattr(prev, "empleado_id", None)
     inc = service.actualizar_incapacidad(db, incapacidad_id, data)
     if not inc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incapacidad no encontrada")
-    registrar_negocio(
+    cambios = data.model_dump(exclude_unset=True) if hasattr(data, "model_dump") else {}
+    afectado = _emp(db, emp_id)
+    registrar_accion_rh(
         db,
-        empleado_id=int(current["user_id"]),
-        mensaje=f"Incapacidad actualizada id={incapacidad_id}",
+        current=current,
+        request=request,
+        accion="actualizar_incapacidad",
+        mensaje=f"Incapacidad actualizada id={incapacidad_id} No. {getattr(afectado, 'numero_empleado', emp_id)}",
+        empleado_afectado=afectado,
+        empleado_afectado_id=emp_id,
+        cambios=cambios,
+        extras={"incapacidad_id": incapacidad_id},
+        metodo_http="PUT",
+        ruta=f"{settings.API_V1_PREFIX}/incapacidades/{incapacidad_id}",
     )
     return inc
 
@@ -87,14 +128,28 @@ def actualizar(
 @router.delete("/{incapacidad_id}", status_code=status.HTTP_204_NO_CONTENT)
 def cancelar(
     incapacidad_id: int,
+    request: Request,
     db: Session = Depends(get_db),
-    current: dict = Depends(get_current_user),
+    current: dict = Depends(get_current_empleado_with_rol),
 ):
+    prev = service.get_incapacidad(db, incapacidad_id)
+    if not prev:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incapacidad no encontrada")
+    emp_id = getattr(prev, "empleado_id", None)
     inc = service.cancelar_incapacidad(db, incapacidad_id)
     if not inc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Incapacidad no encontrada")
-    registrar_negocio(
+    afectado = _emp(db, emp_id)
+    registrar_accion_rh(
         db,
-        empleado_id=int(current["user_id"]),
-        mensaje=f"Incapacidad cancelada id={incapacidad_id}",
+        current=current,
+        request=request,
+        accion="cancelar_incapacidad",
+        mensaje=f"Incapacidad cancelada id={incapacidad_id} No. {getattr(afectado, 'numero_empleado', emp_id)}",
+        empleado_afectado=afectado,
+        empleado_afectado_id=emp_id,
+        extras={"incapacidad_id": incapacidad_id},
+        metodo_http="DELETE",
+        ruta=f"{settings.API_V1_PREFIX}/incapacidades/{incapacidad_id}",
+        codigo_http=204,
     )

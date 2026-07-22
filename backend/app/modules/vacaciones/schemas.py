@@ -135,12 +135,12 @@ class BalanceConPeriodosResponse(BaseModel):
 
 
 class SaldoLftNetoAdminBody(BaseModel):
-    """Ajuste manual del saldo LFT neto (solo administrador)."""
+    """Ajuste manual del saldo LFT neto (administrador o RH)."""
     saldo_lft_neto: Decimal
 
 
 class SaldoMigracionVacacionesAdminBody(BaseModel):
-    """Saldo de días de migración (fuera de LFT). Solo administrador; no sustituye periodos LFT en siguientes aniversarios."""
+    """Saldo de días de migración (fuera de LFT). Admin o RH; no sustituye periodos LFT en siguientes aniversarios."""
     dias_saldo_migracion_vacaciones: Decimal
 
 

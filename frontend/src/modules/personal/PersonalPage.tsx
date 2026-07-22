@@ -3151,11 +3151,11 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                         </div>
                       )}
 
-                      {isAdmin ? (
+                      {isAdmin || isRH ? (
                         <div style={{ marginBottom: '18px', padding: '14px', borderRadius: '8px', border: '1px solid #fde68a', backgroundColor: '#fffbeb' }}>
-                          <h4 style={{ margin: '0 0 8px 0', fontSize: '0.95rem', color: '#92400e' }}>Ajuste manual de saldo (administrador)</h4>
+                          <h4 style={{ margin: '0 0 8px 0', fontSize: '0.95rem', color: '#92400e' }}>Ajuste manual de saldo (RH / administrador)</h4>
                           <p style={{ margin: '0 0 12px 0', fontSize: '0.78rem', color: '#92400e', lineHeight: 1.45 }}>
-                            El número grande arriba es LFT neto + bolsa manual. Los días de bolsa se guardan aparte y se suman al saldo mostrado; el LFT neto sigue la misma regla que el import de empleados (puede ser negativo).
+                            El número grande arriba es LFT neto + bolsa manual. Los días de bolsa se guardan aparte y se suman al saldo mostrado; el LFT neto sigue la misma regla que el import de empleados (puede ser negativo). Los cambios quedan registrados en el log de actividad.
                           </p>
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
@@ -3196,7 +3196,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                         </div>
                       ) : (
                         <p style={{ margin: '0 0 16px 0', fontSize: '0.78rem', color: '#6b7280' }}>
-                          El ajuste manual del saldo LFT solo puede hacerlo un administrador.
+                          El ajuste manual del saldo de vacaciones solo puede hacerlo RH o un administrador.
                         </p>
                       )}
 
