@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form, Request, Response
 from sqlalchemy.orm import Session
 from typing import Dict, List, Optional, Tuple
 from decimal import Decimal, InvalidOperation
@@ -550,14 +550,35 @@ def create_empleado(
     return db_empleado
 
 
+@router.get("/empleados/conteos", response_model=schemas.EmpleadosConteosResponse)
+def get_empleados_conteos(
+    search: Optional[str] = None,
+    empresa_id: Optional[int] = None,
+    departamento_id: Optional[int] = None,
+    incluir_exentos: bool = Query(False),
+    db: Session = Depends(get_db),
+    _current: dict = Depends(get_current_user),
+):
+    """Contadores Total/Activos/Inactivos/Bajas (sin traer el listado completo)."""
+    return service.PersonalService.conteos_empleados_por_estado(
+        db,
+        search=search,
+        empresa_id=empresa_id,
+        departamento_id=departamento_id,
+        incluir_exentos=incluir_exentos,
+    )
+
+
 @router.get("/empleados", response_model=List[schemas.EmpleadoResponse])
 def get_empleados(
+    response: Response,
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=5000),
     estado: Optional[str] = None,
     rol_id: Optional[int] = None,
     jefe_id: Optional[int] = None,
     departamento_id: Optional[int] = None,
+    empresa_id: Optional[int] = None,
     search: Optional[str] = None,
     exento_incidencias: Optional[bool] = None,
     incluir_exentos: bool = Query(
@@ -568,7 +589,7 @@ def get_empleados(
     _current: dict = Depends(get_current_user),
 ):
     """Listar empleados con filtros. Por defecto excluye usuarios especiales. exento_incidencias=true lista solo especiales."""
-    return service.PersonalService.get_empleados(
+    items = service.PersonalService.get_empleados(
         db,
         skip=skip,
         limit=limit,
@@ -576,10 +597,25 @@ def get_empleados(
         rol_id=rol_id,
         jefe_id=jefe_id,
         departamento_id=departamento_id,
+        empresa_id=empresa_id,
         search=search,
         exento_incidencias=exento_incidencias,
         incluir_exentos=incluir_exentos,
     )
+    total = service.PersonalService.count_empleados(
+        db,
+        estado=estado,
+        rol_id=rol_id,
+        jefe_id=jefe_id,
+        departamento_id=departamento_id,
+        empresa_id=empresa_id,
+        search=search,
+        exento_incidencias=exento_incidencias,
+        incluir_exentos=incluir_exentos,
+    )
+    response.headers["X-Total-Count"] = str(total)
+    response.headers["Access-Control-Expose-Headers"] = "X-Total-Count"
+    return items
 
 
 @router.post("/mi-area/ausencias-del-dia", response_model=List[schemas.MiAreaAusenciasDelDiaItem])
@@ -869,7 +905,14 @@ def create_usuario_especial(
     if puesto.departamento_id is not None and puesto.departamento_id != data.departamento_id:
         raise HTTPException(status_code=400, detail="El puesto no pertenece al departamento seleccionado")
 
-    if (puesto.nombre or "").strip().lower() in ("director", "subdirector", "gerente general"):
+    if (puesto.nombre or "").strip().lower() in (
+        "director",
+        "director general",
+        "director general adjunto",
+        "subdirector",
+        "gerente general",
+        "gerente administrativo y operaciones",
+    ):
         ids = set(data.empresas_supervision_ids or [data.empresa_id])
         ids.add(data.empresa_id)
         for eid in ids:

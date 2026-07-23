@@ -569,8 +569,12 @@ export const ConfiguracionPage = () => {
 
   const populateUsuarioEspecialFormFromEmpleado = (emp: EmpleadoResponse): UsuarioEspecialFormState => {
     const puestoN = (emp.puesto?.nombre || '').trim().toLowerCase();
-    const esDir = puestoN === 'director';
-    const usaSupervision = esDir || puestoN === 'subdirector' || puestoN === 'gerente general';
+    const esDir = puestoN === 'director' || puestoN === 'director general' || puestoN === 'director general adjunto';
+    const usaSupervision =
+      esDir ||
+      puestoN === 'subdirector' ||
+      puestoN === 'gerente general' ||
+      puestoN === 'gerente administrativo y operaciones';
     const sup =
       emp.empresas_supervisadas_ids && emp.empresas_supervisadas_ids.length > 0
         ? [...emp.empresas_supervisadas_ids]
@@ -693,7 +697,13 @@ export const ConfiguracionPage = () => {
         }
         const pr = puestos.find((x) => x.id === Number(usuarioEspecialForm.puesto_id));
         const puestoN = (pr?.nombre || '').trim().toLowerCase();
-        const usaSupervision = puestoN === 'director' || puestoN === 'subdirector' || puestoN === 'gerente general';
+        const usaSupervision =
+          puestoN === 'director' ||
+          puestoN === 'director general' ||
+          puestoN === 'director general adjunto' ||
+          puestoN === 'subdirector' ||
+          puestoN === 'gerente general' ||
+          puestoN === 'gerente administrativo y operaciones';
         const payload: UsuarioEspecialCreate = {
           ...base,
           empresa_id: Number(usuarioEspecialForm.empresa_id),
@@ -2480,7 +2490,13 @@ export const ConfiguracionPage = () => {
                               const pid = e.target.value ? Number(e.target.value) : '';
                               const pr = puestos.find((x) => x.id === pid);
                               const pn = (pr?.nombre || '').trim().toLowerCase();
-                              const usaSup = pn === 'subdirector' || pn === 'gerente general' || pn === 'director';
+                              const usaSup =
+                                pn === 'subdirector' ||
+                                pn === 'gerente general' ||
+                                pn === 'gerente administrativo y operaciones' ||
+                                pn === 'director' ||
+                                pn === 'director general' ||
+                                pn === 'director general adjunto';
                               setUsuarioEspecialForm(p => ({
                                 ...p,
                                 puesto_id: pid,
@@ -2499,7 +2515,13 @@ export const ConfiguracionPage = () => {
                         {(() => {
                           const pr = puestos.find((x) => x.id === Number(usuarioEspecialForm.puesto_id));
                           const pn = (pr?.nombre || '').trim().toLowerCase();
-                          const showSup = pn === 'subdirector' || pn === 'gerente general';
+                          const showSup =
+                            pn === 'subdirector' ||
+                            pn === 'gerente general' ||
+                            pn === 'gerente administrativo y operaciones' ||
+                            pn === 'director' ||
+                            pn === 'director general' ||
+                            pn === 'director general adjunto';
                           if (!showSup) return null;
                           return (
                             <div style={{ gridColumn: '1 / -1' }}>

@@ -405,6 +405,14 @@ class EmpleadoResponse(EmpleadoBase):
         from_attributes = True
 
 
+class EmpleadosConteosResponse(BaseModel):
+    """Contadores livianos para tarjetas del listado de personal (sin payload de empleados)."""
+    total: int = 0
+    activos: int = 0
+    inactivos: int = 0
+    bajas: int = 0
+
+
 class MiAreaAusenciasDelDiaRequest(BaseModel):
     """IDs de empleados ya listados en Mi área; el servidor filtra al alcance del usuario."""
     empleado_ids: List[int] = Field(default_factory=list, max_length=900)

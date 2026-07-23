@@ -45,9 +45,9 @@ def build_empleado_rol_context(empleado_id: int, db: Session) -> dict:
                     is_gerente_general = True
         if empleado.puesto_rel:
             puesto_lower = (empleado.puesto_rel.nombre or "").strip().lower()
-            if puesto_lower == "director":
+            if puesto_lower in ("director", "director general", "director general adjunto"):
                 is_director = True
-            if puesto_lower == "gerente general":
+            if puesto_lower in ("gerente general", "gerente administrativo y operaciones"):
                 is_gerente_general = True
             if puesto_lower in ("rh", "recursos humanos"):
                 is_rh = True

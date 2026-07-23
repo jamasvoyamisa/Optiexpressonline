@@ -1,6 +1,7 @@
 import { Children, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react';
 import { flushSync } from 'react-dom';
-import { toJpeg } from 'html-to-image';
+import { toPng } from 'html-to-image';
+import { jsPDF } from 'jspdf';
 import api from '../../services/api';
 import { cmpNombreEmpleado, fmtNombreEmpleado } from '../../utils/format';
 import type { DepartamentoResponse, EmpleadoResponse, EmpresaResponse } from '../../types';
@@ -11,8 +12,13 @@ import {
   rhMobileSelect,
 } from './rhMobileStyles';
 
-const JPG_4K_W = 3840;
-const JPG_4K_H = 2160;
+/** Lienzo objetivo 8K UHD (landscape). No se reduce si la captura ya es mayor. */
+const PDF_TARGET_W = 7680;
+const PDF_TARGET_H = 4320;
+/** Resolución de impresión del PDF (píxeles / pulgada = ppp). */
+const PDF_PPP = 300;
+/** Tope de pixelRatio al capturar el DOM (más = más nítido, más memoria). */
+const PDF_PIXEL_RATIO_MAX = 4;
 
 function slugArchivo(texto: string): string {
   return (texto || 'empresa')
@@ -30,8 +36,12 @@ async function esperarFrames(n = 2): Promise<void> {
   }
 }
 
-/** Encaja una imagen en canvas 4K (contain) y descarga JPEG. */
-async function descargarJpeg4kDesdeDataUrl(
+/**
+ * Genera PDF a 300 ppp desde la captura.
+ * - Escala hacia 8K si la imagen es más chica (nunca reduce si ya es más grande).
+ * - PNG sin compresión FAST de jsPDF.
+ */
+async function descargarPdfAltaRes300pppDesdeDataUrl(
   dataUrl: string,
   nombreArchivo: string,
 ): Promise<void> {
@@ -42,45 +52,40 @@ async function descargarJpeg4kDesdeDataUrl(
     img.src = dataUrl;
   });
 
+  const fitScale = Math.min(PDF_TARGET_W / img.width, PDF_TARGET_H / img.height);
+  const scale = Math.max(1, fitScale);
+  const cw = Math.max(1, Math.round(img.width * scale));
+  const ch = Math.max(1, Math.round(img.height * scale));
+
   const canvas = document.createElement('canvas');
-  canvas.width = JPG_4K_W;
-  canvas.height = JPG_4K_H;
+  canvas.width = cw;
+  canvas.height = ch;
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas no disponible en este navegador');
   ctx.fillStyle = '#ffffff';
-  ctx.fillRect(0, 0, JPG_4K_W, JPG_4K_H);
-
-  const scale = Math.min(JPG_4K_W / img.width, JPG_4K_H / img.height);
-  const dw = img.width * scale;
-  const dh = img.height * scale;
-  const dx = (JPG_4K_W - dw) / 2;
-  const dy = (JPG_4K_H - dh) / 2;
+  ctx.fillRect(0, 0, cw, ch);
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
-  ctx.drawImage(img, dx, dy, dw, dh);
+  ctx.drawImage(img, 0, 0, cw, ch);
 
-  const blob = await new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob(
-      b => (b ? resolve(b) : reject(new Error('No se pudo generar el JPEG 4K'))),
-      'image/jpeg',
-      0.92,
-    );
+  const pngDataUrl = canvas.toDataURL('image/png');
+  const pageWIn = cw / PDF_PPP;
+  const pageHIn = ch / PDF_PPP;
+  const pdf = new jsPDF({
+    orientation: pageWIn >= pageHIn ? 'landscape' : 'portrait',
+    unit: 'in',
+    format: [pageWIn, pageHIn],
+    compress: true,
   });
-
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = nombreArchivo;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  pdf.addImage(pngDataUrl, 'PNG', 0, 0, pageWIn, pageHIn, undefined, 'NONE');
+  pdf.save(nombreArchivo);
 }
 
 type NivelEtiqueta =
-  | 'Director'
+  | 'Director General'
+  | 'Director General Adjunto'
   | 'Subdirector'
-  | 'Gerente General'
+  | 'Gerente Administrativo y Operaciones'
   | 'Gerente'
   | 'Supervisor'
   | 'Líder'
@@ -135,9 +140,12 @@ type AreaNodo = {
 
 function etiquetaNivel(puestoNombre?: string | null): NivelEtiqueta {
   const n = (puestoNombre || '').trim().toLowerCase();
-  if (n === 'director') return 'Director';
+  if (n === 'director' || n === 'director general') return 'Director General';
+  if (n === 'director general adjunto') return 'Director General Adjunto';
   if (n === 'subdirector') return 'Subdirector';
-  if (n === 'gerente general') return 'Gerente General';
+  if (n === 'gerente general' || n === 'gerente administrativo y operaciones') {
+    return 'Gerente Administrativo y Operaciones';
+  }
   if (n === 'rh' || n === 'recursos humanos') return 'RH';
   if (n.includes('gerente')) return 'Gerente';
   if (n.includes('supervisor')) return 'Supervisor';
@@ -146,8 +154,9 @@ function etiquetaNivel(puestoNombre?: string | null): NivelEtiqueta {
 }
 
 const NIVEL_STYLE: Record<NivelEtiqueta, { bg: string; color: string; border: string }> = {
-  Director: { bg: '#fff', color: ORG_PALETTE.directivo, border: ORG_PALETTE.directivo },
-  'Gerente General': { bg: '#fff', color: ORG_PALETTE.gerenteGeneral, border: ORG_PALETTE.gerenteGeneral },
+  'Director General': { bg: '#fff', color: ORG_PALETTE.directivo, border: ORG_PALETTE.directivo },
+  'Director General Adjunto': { bg: '#fff', color: ORG_PALETTE.gerenteGeneral, border: ORG_PALETTE.gerenteGeneral },
+  'Gerente Administrativo y Operaciones': { bg: '#fff', color: ORG_PALETTE.gerenteGeneral, border: ORG_PALETTE.gerenteGeneral },
   Subdirector: { bg: '#fff', color: ORG_PALETTE.subdirector, border: ORG_PALETTE.subdirector },
   Gerente: { bg: '#fff', color: ORG_PALETTE.gerente, border: ORG_PALETTE.gerente },
   Supervisor: { bg: '#fff', color: ORG_PALETTE.supervisor, border: ORG_PALETTE.supervisor },
@@ -177,10 +186,11 @@ function puestoKey(emp: EmpleadoResponse): string {
   return (emp.puesto?.nombre || '').trim().toLowerCase();
 }
 
-function esPuestoLiderazgo(key: string): 'director' | 'subdirector' | 'gerente general' | null {
-  if (key === 'director') return 'director';
+function esPuestoLiderazgo(key: string): 'director' | 'director general adjunto' | 'subdirector' | 'gerente general' | null {
+  if (key === 'director' || key === 'director general') return 'director';
+  if (key === 'director general adjunto') return 'director general adjunto';
   if (key === 'subdirector') return 'subdirector';
-  if (key === 'gerente general') return 'gerente general';
+  if (key === 'gerente general' || key === 'gerente administrativo y operaciones') return 'gerente general';
   return null;
 }
 
@@ -226,14 +236,20 @@ function BadgeNivel({ puesto }: { puesto?: string | null }) {
     <span
       style={{
         display: 'inline-block',
-        padding: '2px 8px',
+        maxWidth: '100%',
+        boxSizing: 'border-box',
+        padding: '3px 8px',
         borderRadius: 6,
-        fontSize: '0.72rem',
+        fontSize: '0.68rem',
         fontWeight: 700,
         backgroundColor: st.bg,
         color: st.color,
         border: `1px solid ${st.border}`,
-        whiteSpace: 'nowrap',
+        whiteSpace: 'normal',
+        overflowWrap: 'break-word',
+        wordBreak: 'break-word',
+        lineHeight: 1.25,
+        textAlign: 'center',
       }}
     >
       {nivel}
@@ -278,7 +294,12 @@ function PersonaRow({
           {puesto ? ` · ${puesto}` : ''}
         </div>
       </div>
-      <BadgeNivel puesto={puesto} />
+      {!destacado && <BadgeNivel puesto={puesto} />}
+      {destacado && (
+        <div style={{ flexShrink: 1, maxWidth: '42%', minWidth: 0 }}>
+          <BadgeNivel puesto={puesto} />
+        </div>
+      )}
     </div>
   );
 }
@@ -382,6 +403,7 @@ function NodoArbol({
           : '0 1px 3px rgba(4,51,76,0.08)',
         textAlign: 'center',
         boxSizing: 'border-box',
+        overflow: 'hidden',
         cursor: clicable ? 'pointer' : 'inherit',
         userSelect: 'none',
         transition: 'box-shadow 0.15s',
@@ -411,12 +433,28 @@ function NodoArbol({
             marginTop: 3,
             color: s.muted,
             lineHeight: 1.25,
+            overflowWrap: 'break-word',
+            wordBreak: 'break-word',
           }}
         >
           {subtitulo}
         </div>
       )}
-      {badge && <div style={{ marginTop: 6, display: 'flex', justifyContent: 'center' }}>{badge}</div>}
+      {badge && (
+        <div
+          style={{
+            marginTop: 6,
+            display: 'flex',
+            justifyContent: 'center',
+            width: '100%',
+            maxWidth: '100%',
+            minWidth: 0,
+            boxSizing: 'border-box',
+          }}
+        >
+          {badge}
+        </div>
+      )}
       {clicable && abierto === false && (
         <div
           style={{
@@ -500,7 +538,10 @@ function RamaHijos({ children }: { children: ReactNode }) {
 
 function colorEtiquetaLiderazgo(etiqueta: string): string {
   const e = etiqueta.toLowerCase();
-  if (e.includes('gerente general')) return ORG_PALETTE.gerenteGeneral;
+  if (e.includes('adjunto')) return ORG_PALETTE.gerenteGeneral;
+  if (e.includes('gerente general') || e.includes('administrativo y operaciones')) {
+    return ORG_PALETTE.gerenteGeneral;
+  }
   if (e.includes('subdirector')) return ORG_PALETTE.subdirector;
   if (e.includes('director')) return ORG_PALETTE.directivo;
   return ORG_PALETTE.departamento;
@@ -556,7 +597,7 @@ function NivelLiderazgo({
               titulo={fmtNombreEmpleado(emp)}
               subtitulo={emp.puesto?.nombre || undefined}
               badge={<BadgeNivel puesto={emp.puesto?.nombre} />}
-              ancho={170}
+              ancho={210}
             />
           ))}
         </div>
@@ -571,6 +612,7 @@ function VistaArbol({
   sinDepartamento,
   totalActivos,
   directores,
+  directoresAdjuntos,
   subdirectores,
   gerentesGenerales,
   interactivo = false,
@@ -584,12 +626,13 @@ function VistaArbol({
   sinDepartamento: EmpleadoResponse[];
   totalActivos: number;
   directores: EmpleadoResponse[];
+  directoresAdjuntos: EmpleadoResponse[];
   subdirectores: EmpleadoResponse[];
   gerentesGenerales: EmpleadoResponse[];
   interactivo?: boolean;
   abiertos?: Record<string, boolean>;
   onToggle?: (key: string) => void;
-  /** Sin viewport/zoom: solo el árbol expandido (export JPG). */
+  /** Sin viewport/zoom: solo el árbol expandido (export PDF). */
   captura?: boolean;
   contentRef?: RefObject<HTMLDivElement>;
 }) {
@@ -597,6 +640,7 @@ function VistaArbol({
   const puedeToggle = interactivo && typeof onToggle === 'function';
   const empresaAbierta = estaAbierto('empresa');
   const dirsAbiertos = estaAbierto('dirs');
+  const dirsAdjAbiertos = estaAbierto('dirsAdj');
   const subsAbiertos = estaAbierto('subs');
   const ggAbiertos = estaAbierto('gg');
 
@@ -813,6 +857,7 @@ function VistaArbol({
 
   const hayContenido =
     directores.length > 0 ||
+    directoresAdjuntos.length > 0 ||
     subdirectores.length > 0 ||
     gerentesGenerales.length > 0 ||
     ramasDepto.length > 0;
@@ -965,14 +1010,21 @@ function VistaArbol({
       </div>
       {empresaAbierta && hayContenido ? (
         <RamaHijos>
-          {(directores.length > 0 || subdirectores.length > 0 || gerentesGenerales.length > 0) && (
+          {(directores.length > 0 || directoresAdjuntos.length > 0 || subdirectores.length > 0 || gerentesGenerales.length > 0) && (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
               <NivelLiderazgo
-                etiqueta={directores.length > 1 ? 'Directores' : 'Director'}
+                etiqueta={directores.length > 1 ? 'Directores Generales' : 'Director General'}
                 personas={directores}
                 interactivo={!!puedeToggle}
                 abierto={dirsAbiertos}
                 onToggle={puedeToggle ? () => onToggle!('dirs') : undefined}
+              />
+              <NivelLiderazgo
+                etiqueta={directoresAdjuntos.length > 1 ? 'Directores Generales Adjuntos' : 'Director General Adjunto'}
+                personas={directoresAdjuntos}
+                interactivo={!!puedeToggle}
+                abierto={dirsAdjAbiertos}
+                onToggle={puedeToggle ? () => onToggle!('dirsAdj') : undefined}
               />
               <NivelLiderazgo
                 etiqueta={subdirectores.length > 1 ? 'Subdirectores' : 'Subdirector'}
@@ -982,7 +1034,7 @@ function VistaArbol({
                 onToggle={puedeToggle ? () => onToggle!('subs') : undefined}
               />
               <NivelLiderazgo
-                etiqueta="Gerente General"
+                etiqueta="Gerente Administrativo y Operaciones"
                 personas={gerentesGenerales}
                 interactivo={!!puedeToggle}
                 abierto={ggAbiertos}
@@ -992,6 +1044,7 @@ function VistaArbol({
             </div>
           )}
           {directores.length === 0 &&
+            directoresAdjuntos.length === 0 &&
             subdirectores.length === 0 &&
             gerentesGenerales.length === 0 &&
             ramasDepto.length > 0 &&
@@ -1090,6 +1143,7 @@ function VistaLista({
   abiertos,
   toggle,
   directores,
+  directoresAdjuntos,
   subdirectores,
   gerentesGenerales,
 }: {
@@ -1098,12 +1152,13 @@ function VistaLista({
   abiertos: Record<string, boolean>;
   toggle: (key: string) => void;
   directores: EmpleadoResponse[];
+  directoresAdjuntos: EmpleadoResponse[];
   subdirectores: EmpleadoResponse[];
   gerentesGenerales: EmpleadoResponse[];
 }) {
   return (
     <div style={{ padding: '14px 16px 18px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {(directores.length > 0 || subdirectores.length > 0 || gerentesGenerales.length > 0) && (
+      {(directores.length > 0 || directoresAdjuntos.length > 0 || subdirectores.length > 0 || gerentesGenerales.length > 0) && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 4 }}>
           {directores.length > 0 && (
             <div>
@@ -1112,6 +1167,16 @@ function VistaLista({
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {directores.map(e => <PersonaRow key={e.id} emp={e} destacado />)}
+              </div>
+            </div>
+          )}
+          {directoresAdjuntos.length > 0 && (
+            <div>
+              <div style={{ fontSize: '0.72rem', fontWeight: 700, color: ORG_PALETTE.gerenteGeneral, marginBottom: 6, textTransform: 'uppercase' }}>
+                Director General Adjunto
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {directoresAdjuntos.map(e => <PersonaRow key={e.id} emp={e} destacado />)}
               </div>
             </div>
           )}
@@ -1128,7 +1193,7 @@ function VistaLista({
           {gerentesGenerales.length > 0 && (
             <div>
               <div style={{ fontSize: '0.72rem', fontWeight: 700, color: ORG_PALETTE.gerenteGeneral, marginBottom: 6, textTransform: 'uppercase' }}>
-                Gerente General
+                Gerente Administrativo y Operaciones
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {gerentesGenerales.map(e => <PersonaRow key={e.id} emp={e} destacado />)}
@@ -1433,6 +1498,7 @@ export const OrganigramaPage = () => {
     if (!empresaId) {
       return {
         directores: [] as EmpleadoResponse[],
+        directoresAdjuntos: [] as EmpleadoResponse[],
         subdirectores: [] as EmpleadoResponse[],
         gerentesGenerales: [] as EmpleadoResponse[],
       };
@@ -1442,18 +1508,26 @@ export const OrganigramaPage = () => {
     const directores = enAlcance
       .filter(e => esPuestoLiderazgo(puestoKey(e)) === 'director')
       .sort(cmpNombreEmpleado);
+    const directoresAdjuntos = enAlcance
+      .filter(e => esPuestoLiderazgo(puestoKey(e)) === 'director general adjunto')
+      .sort(cmpNombreEmpleado);
     const subdirectores = enAlcance
       .filter(e => esPuestoLiderazgo(puestoKey(e)) === 'subdirector')
       .sort(cmpNombreEmpleado);
     const gerentesGenerales = enAlcance
       .filter(e => esPuestoLiderazgo(puestoKey(e)) === 'gerente general')
       .sort(cmpNombreEmpleado);
-    return { directores, subdirectores, gerentesGenerales };
+    return { directores, directoresAdjuntos, subdirectores, gerentesGenerales };
   }, [empleados, empresaId, departamentos]);
 
   const idsLiderazgo = useMemo(() => {
     const s = new Set<number>();
-    for (const e of [...liderazgo.directores, ...liderazgo.subdirectores, ...liderazgo.gerentesGenerales]) {
+    for (const e of [
+      ...liderazgo.directores,
+      ...liderazgo.directoresAdjuntos,
+      ...liderazgo.subdirectores,
+      ...liderazgo.gerentesGenerales,
+    ]) {
       s.add(e.id);
     }
     return s;
@@ -1478,22 +1552,20 @@ export const OrganigramaPage = () => {
         e => e.departamento_id === d.id && !idsLiderazgo.has(e.id) && !e.exento_incidencias,
       );
       const jefeEmp = !esHijo && d.jefe_id ? porId.get(d.jefe_id) || null : null;
-      const jefe =
-        jefeEmp && !idsLiderazgo.has(jefeEmp.id) && !jefeEmp.exento_incidencias ? jefeEmp : null;
+      // Incluye usuarios especiales: si son jefe_id deben verse como Job (negrita), no en gris.
+      const jefe = jefeEmp;
       const encargados = esHijo
         ? (d.encargados_ids || [])
             .map(id => porId.get(id))
-            .filter(
-              (e): e is EmpleadoResponse =>
-                !!e && !idsLiderazgo.has(e.id) && !e.exento_incidencias,
-            )
+            .filter((e): e is EmpleadoResponse => !!e)
             .sort(cmpNombreEmpleado)
         : [];
       const idsExcluirStaff = new Set<number>();
       if (d.jefe_id) idsExcluirStaff.add(d.jefe_id);
       encIds.forEach(id => idsExcluirStaff.add(id));
+      // Staff operativo: sin dirección/liderazgo ni usuarios especiales
       const staff = delArea
-        .filter(e => !idsExcluirStaff.has(e.id))
+        .filter(e => !idsExcluirStaff.has(e.id) && !idsLiderazgo.has(e.id) && !e.exento_incidencias)
         .sort(cmpNombreEmpleado);
       const hijos = deptosEmpresa
         .filter(h => h.padre_id === d.id)
@@ -1536,6 +1608,7 @@ export const OrganigramaPage = () => {
       const next: Record<string, boolean> = {
         empresa: prev.empresa ?? true,
         dirs: prev.dirs ?? true,
+        dirsAdj: prev.dirsAdj ?? true,
         subs: prev.subs ?? true,
         gg: prev.gg ?? true,
       };
@@ -1555,7 +1628,7 @@ export const OrganigramaPage = () => {
   };
 
   const expandirTodo = () => {
-    const next: Record<string, boolean> = { empresa: true, dirs: true, subs: true, gg: true };
+    const next: Record<string, boolean> = { empresa: true, dirs: true, dirsAdj: true, subs: true, gg: true };
     visitarAreas(areas, a => {
       next[`d-${a.depto.id}`] = true;
       next[`j-${a.depto.id}`] = true;
@@ -1565,7 +1638,7 @@ export const OrganigramaPage = () => {
   };
 
   const colapsarTodo = () => {
-    const next: Record<string, boolean> = { empresa: true, dirs: false, subs: false, gg: false };
+    const next: Record<string, boolean> = { empresa: true, dirs: false, dirsAdj: false, subs: false, gg: false };
     visitarAreas(areas, a => {
       next[`d-${a.depto.id}`] = false;
       next[`j-${a.depto.id}`] = false;
@@ -1574,7 +1647,26 @@ export const OrganigramaPage = () => {
     setAbiertos(next);
   };
 
-  const exportarJpg4k = async () => {
+  const clavesExpandibles = useMemo(() => {
+    const keys = ['dirs', 'dirsAdj', 'subs', 'gg'];
+    visitarAreas(areas, a => {
+      keys.push(`d-${a.depto.id}`, `j-${a.depto.id}`);
+    });
+    if (sinDepartamento.length) keys.push('sin-depto');
+    return keys;
+  }, [areas, sinDepartamento.length]);
+
+  const todoExpandido = useMemo(
+    () => clavesExpandibles.length > 0 && clavesExpandibles.every(k => abiertos[k] !== false),
+    [abiertos, clavesExpandibles],
+  );
+
+  const toggleExpandirColapsar = () => {
+    if (todoExpandido) colapsarTodo();
+    else expandirTodo();
+  };
+
+  const exportarPdf4k = async () => {
     if (!empresaSeleccionada || exportando) return;
     flushSync(() => setExportando(true));
     try {
@@ -1585,11 +1677,12 @@ export const OrganigramaPage = () => {
 
       const w = Math.max(nodo.scrollWidth, nodo.offsetWidth, 1);
       const h = Math.max(nodo.scrollHeight, nodo.offsetHeight, 1);
-      // Suficientes píxeles para reescalar a 4K sin saturar memoria en árboles muy anchos.
-      const pixelRatio = Math.min(2.5, Math.max(1, Math.min(JPG_4K_W / w, JPG_4K_H / h) * 1.6));
+      const pixelRatio = Math.min(
+        PDF_PIXEL_RATIO_MAX,
+        Math.max(2, Math.min(PDF_TARGET_W / w, PDF_TARGET_H / h)),
+      );
 
-      const dataUrl = await toJpeg(nodo, {
-        quality: 0.95,
+      const dataUrl = await toPng(nodo, {
         pixelRatio,
         backgroundColor: '#ffffff',
         cacheBust: true,
@@ -1598,9 +1691,9 @@ export const OrganigramaPage = () => {
       });
 
       const slug = slugArchivo(empresaSeleccionada.siglas || empresaSeleccionada.nombre);
-      await descargarJpeg4kDesdeDataUrl(dataUrl, `organigrama-${slug}-4k.jpg`);
+      await descargarPdfAltaRes300pppDesdeDataUrl(dataUrl, `organigrama-${slug}-8k-300ppp.pdf`);
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'Error al exportar JPG 4K';
+      const msg = e instanceof Error ? e.message : 'Error al exportar PDF';
       alert(msg);
     } finally {
       setExportando(false);
@@ -1623,6 +1716,34 @@ export const OrganigramaPage = () => {
 
   const mostrarExpandir = vista === 'interactivo' || vista === 'lista';
 
+  const btnExportPdf = (
+    <button
+      type="button"
+      style={{
+        ...(isMobile ? rhMobileBtnSecondary : btnSecondary),
+        borderColor: ORG_PALETTE.departamento,
+        color: ORG_PALETTE.departamento,
+        ...(isMobile ? { flex: 1 } : {}),
+      }}
+      onClick={() => void exportarPdf4k()}
+      disabled={!empresaSeleccionada || exportando}
+      title="Descarga el organigrama en PDF alta resolución (hasta 8K) a 300 ppp"
+    >
+      {exportando ? (isMobile ? 'Generando…' : 'Generando PDF…') : (isMobile ? 'PDF 8K' : 'Exportar PDF 8K')}
+    </button>
+  );
+
+  const btnToggleExpand = mostrarExpandir ? (
+    <button
+      type="button"
+      style={isMobile ? rhMobileBtnSecondary : btnSecondary}
+      onClick={toggleExpandirColapsar}
+      title={todoExpandido ? 'Colapsar todos los nodos' : 'Expandir todos los nodos'}
+    >
+      {todoExpandido ? (isMobile ? 'Colapsar' : 'Colapsar todo') : (isMobile ? 'Expandir' : 'Expandir todo')}
+    </button>
+  ) : null;
+
   const toolbar = isMobile ? (
     <div style={rhMobileFilterStack}>
       <select
@@ -1637,24 +1758,12 @@ export const OrganigramaPage = () => {
         ))}
       </select>
       {selectorVista}
-      <div style={{ display: 'flex', gap: 8 }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button type="button" style={{ ...rhMobileBtnSecondary, flex: 1 }} onClick={() => void cargar()} disabled={cargando}>
           {cargando ? 'Cargando…' : 'Actualizar'}
         </button>
-        <button
-          type="button"
-          style={{ ...rhMobileBtnSecondary, flex: 1 }}
-          onClick={() => void exportarJpg4k()}
-          disabled={!empresaSeleccionada || exportando}
-        >
-          {exportando ? 'Generando…' : 'JPG 4K'}
-        </button>
-        {mostrarExpandir && (
-          <>
-            <button type="button" style={rhMobileBtnSecondary} onClick={expandirTodo}>Abrir</button>
-            <button type="button" style={rhMobileBtnSecondary} onClick={colapsarTodo}>Cerrar</button>
-          </>
-        )}
+        {btnToggleExpand}
+        {btnExportPdf}
       </div>
       {empresaSeleccionada && (
         <div style={{ fontSize: '0.82rem', color: '#64748b', fontWeight: 600 }}>
@@ -1691,30 +1800,15 @@ export const OrganigramaPage = () => {
       <button type="button" style={btnSecondary} onClick={() => void cargar()} disabled={cargando}>
         {cargando ? 'Cargando…' : 'Actualizar'}
       </button>
-      <button
-        type="button"
-        style={{
-          ...btnSecondary,
-          borderColor: ORG_PALETTE.departamento,
-          color: ORG_PALETTE.departamento,
-        }}
-        onClick={() => void exportarJpg4k()}
-        disabled={!empresaSeleccionada || exportando}
-        title="Descarga el organigrama completo en JPG 3840×2160"
-      >
-        {exportando ? 'Generando JPG…' : 'Exportar JPG 4K'}
-      </button>
-      {mostrarExpandir && (
-        <>
-          <button type="button" style={btnSecondary} onClick={expandirTodo}>Expandir todo</button>
-          <button type="button" style={btnSecondary} onClick={colapsarTodo}>Colapsar todo</button>
-        </>
-      )}
-      {empresaSeleccionada && (
-        <span style={{ marginLeft: 'auto', fontSize: '0.85rem', color: '#64748b', fontWeight: 600 }}>
-          {totalActivosOperativos} activo{totalActivosOperativos === 1 ? '' : 's'} · {areas.length} área{areas.length === 1 ? '' : 's'}
-        </span>
-      )}
+      {btnToggleExpand}
+      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        {empresaSeleccionada && (
+          <span style={{ fontSize: '0.85rem', color: '#64748b', fontWeight: 600 }}>
+            {totalActivosOperativos} activo{totalActivosOperativos === 1 ? '' : 's'} · {areas.length} área{areas.length === 1 ? '' : 's'}
+          </span>
+        )}
+        {btnExportPdf}
+      </div>
     </div>
   );
 
@@ -1748,6 +1842,7 @@ export const OrganigramaPage = () => {
             sinDepartamento={sinDepartamento}
             totalActivos={totalActivosOperativos}
             directores={liderazgo.directores}
+            directoresAdjuntos={liderazgo.directoresAdjuntos}
             subdirectores={liderazgo.subdirectores}
             gerentesGenerales={liderazgo.gerentesGenerales}
             interactivo={false}
@@ -1800,6 +1895,7 @@ export const OrganigramaPage = () => {
                 abiertos={abiertos}
                 toggle={toggle}
                 directores={liderazgo.directores}
+                directoresAdjuntos={liderazgo.directoresAdjuntos}
                 subdirectores={liderazgo.subdirectores}
                 gerentesGenerales={liderazgo.gerentesGenerales}
               />
@@ -1811,6 +1907,7 @@ export const OrganigramaPage = () => {
               sinDepartamento={sinDepartamento}
               totalActivos={totalActivosOperativos}
               directores={liderazgo.directores}
+              directoresAdjuntos={liderazgo.directoresAdjuntos}
               subdirectores={liderazgo.subdirectores}
               gerentesGenerales={liderazgo.gerentesGenerales}
               interactivo={vista === 'interactivo'}

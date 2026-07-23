@@ -4,7 +4,7 @@ from typing import Optional
 MOTIVOS_REMOTOS_VALIDOS = frozenset({"HO", "TFO", "OTRO"})
 MOTIVO_REMOTO_LABELS = {
     "HO": "Home Office",
-    "TFO": "Trabajo fuera de oficina",
+    "TFO": "Trabajo Fuera de Oficina",
     "OTRO": "Otro",
 }
 

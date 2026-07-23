@@ -18,6 +18,19 @@ from .biometric.agent_auth import require_device_api_key_or_superuser
 logger = logging.getLogger(__name__)
 
 
+def _nombre_empleado_sistema(emp) -> str:
+    """Nombre completo como en la UI: Apellido(s) + Nombre(s)."""
+    ap = (getattr(emp, "apellido_paterno", None) or "").strip()
+    am = (getattr(emp, "apellido_materno", None) or "").strip()
+    n = (getattr(emp, "nombre", None) or "").strip()
+    apellidos = " ".join(x for x in (ap, am) if x)
+    if not apellidos:
+        return n
+    if not n:
+        return apellidos
+    return f"{apellidos} {n}"
+
+
 def _parse_fecha_mexico_a_utc(fecha_str: str, es_fin: bool = False) -> Optional[datetime]:
     """
     Convierte un string de fecha/hora ingresado como hora México a UTC.
@@ -1520,8 +1533,12 @@ def get_checadas_mi_area(
     is_superuser = current_extra.get("is_superuser") is True
 
     if is_superuser and departamento_id is not None:
+        from app.modules.personal import service as personal_service
+        depto_ids = personal_service.PersonalService.get_departamento_ids_con_descendientes(
+            db, [departamento_id]
+        )
         empleados = db.query(personal_models.Empleado).filter(
-            personal_models.Empleado.departamento_id == departamento_id
+            personal_models.Empleado.departamento_id.in_(depto_ids or [departamento_id])
         ).all()
         empleado_ids = [e.id for e in empleados]
         if not empleado_ids:
@@ -1609,8 +1626,12 @@ def get_incidencias_mi_area(
     is_superuser = current_extra.get("is_superuser") is True
 
     if is_superuser and departamento_id is not None:
+        from app.modules.personal import service as personal_service
+        depto_ids = personal_service.PersonalService.get_departamento_ids_con_descendientes(
+            db, [departamento_id]
+        )
         empleados = db.query(personal_models.Empleado).filter(
-            personal_models.Empleado.departamento_id == departamento_id
+            personal_models.Empleado.departamento_id.in_(depto_ids or [departamento_id])
         ).all()
         empleado_ids = [e.id for e in empleados]
         if not empleado_ids:
@@ -1618,7 +1639,7 @@ def get_incidencias_mi_area(
     elif is_superuser:
         empleado_ids = None
     else:
-        # Área que administro: departamentos donde soy jefe (gerente) o donde soy supervisor
+        # Área que administro: departamentos donde soy jefe (gerente), encargado, o supervisor
         from app.modules.personal import service as personal_service
         depto_ids = personal_service.PersonalService.get_departamento_ids_que_administro(db, current_emp_id)
         if not depto_ids:
@@ -2417,7 +2438,9 @@ def reporte_export_detalle(
         pm.Empleado.exento_incidencias == False,
     )
     if departamento_id:
-        q = q.filter(pm.Empleado.departamento_id == departamento_id)
+        from app.modules.personal.service import PersonalService
+        depto_ids = PersonalService.get_departamento_ids_con_descendientes(db, [departamento_id])
+        q = q.filter(pm.Empleado.departamento_id.in_(depto_ids or [departamento_id]))
     elif empresa_id:
         q = q.filter(pm.Empleado.empresa_id == empresa_id)
 
@@ -2549,7 +2572,7 @@ def reporte_export_detalle(
         resultado.append({
             "empleado_id": emp.id,
             "numero_empleado": emp.numero_empleado,
-            "nombre": f"{emp.nombre} {emp.apellido_paterno or ''}".strip(),
+            "nombre": _nombre_empleado_sistema(emp),
             "empresa": empresas_map.get(emp.empresa_id, "") if emp.empresa_id else "",
             "departamento": deptos_map.get(emp.departamento_id, "") if emp.departamento_id else "",
             "dias": dias,
@@ -2598,7 +2621,9 @@ def reporte_export_xlsx(
         pm.Empleado.exento_incidencias == False,
     )
     if departamento_id:
-        q = q.filter(pm.Empleado.departamento_id == departamento_id)
+        from app.modules.personal.service import PersonalService
+        depto_ids = PersonalService.get_departamento_ids_con_descendientes(db, [departamento_id])
+        q = q.filter(pm.Empleado.departamento_id.in_(depto_ids or [departamento_id]))
     elif empresa_id:
         q = q.filter(pm.Empleado.empresa_id == empresa_id)
     empleados = q.options(joinedload(pm.Empleado.empresa)).order_by(pm.Empleado.apellido_paterno, pm.Empleado.nombre).all()
@@ -2902,7 +2927,7 @@ def reporte_export_xlsx(
     ws_res = wb.active
     ws_res.title = "Resumen"
     RES_COLS = 13
-    res_widths = [6, 10, 28, 20, 18, 10, 10, 10, 10, 10, 10, 11, 10]
+    res_widths = [6, 10, 42, 20, 18, 10, 10, 10, 10, 10, 10, 11, 10]
     for i, w in enumerate(res_widths, 1):
         ws_res.column_dimensions[get_column_letter(i)].width = w
 
@@ -2941,7 +2966,7 @@ def reporte_export_xlsx(
         vals = [
             idx,
             emp.numero_empleado,
-            f"{emp.nombre} {emp.apellido_paterno or ''}".strip(),
+            _nombre_empleado_sistema(emp),
             empresas_label.get(emp.empresa_id, "") if emp.empresa_id else "",
             deptos_map.get(emp.departamento_id, "") if emp.departamento_id else "",
             len(dias_con_checada.get(emp.id, set())),
@@ -3049,7 +3074,7 @@ def reporte_export_xlsx(
                 continue
 
             emp = item[1]
-            emp_name = f"{emp.nombre} {emp.apellido_paterno or ''}".strip()
+            emp_name = _nombre_empleado_sistema(emp)
             emp_depto = deptos_map.get(emp.departamento_id, "") if emp.departamento_id else ""
             emp_empresa = empresas_label.get(emp.empresa_id, "") if emp.empresa_id else ""
             emp_ch = checadas_idx.get(emp.id, {})
@@ -3097,7 +3122,7 @@ def reporte_export_xlsx(
                     cmap[cc["tipo"]] = cc["hora"]
                     lbl_rem = (cc.get("motivo_remoto_label") or "").strip()
                     if lbl_rem and lbl_rem not in motivos:
-                        motivos.append(f"Portal: {lbl_rem}")
+                        motivos.append(lbl_rem)
 
                 inc_text = ""
                 just_text = ""

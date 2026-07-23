@@ -1033,7 +1033,10 @@ class AsistenciaService:
         if empleado_id:
             q = q.filter(personal_models.Empleado.id == empleado_id)
         elif departamento_id:
-            q = q.filter(personal_models.Empleado.departamento_id == departamento_id)
+            # Incluir subdepartamentos (mismo alcance visual que el organigrama).
+            from app.modules.personal.service import PersonalService
+            depto_ids = PersonalService.get_departamento_ids_con_descendientes(db, [departamento_id])
+            q = q.filter(personal_models.Empleado.departamento_id.in_(depto_ids or [departamento_id]))
         elif empresa_id:
             q = q.filter(personal_models.Empleado.empresa_id == empresa_id)
 

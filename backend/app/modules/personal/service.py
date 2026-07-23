@@ -304,15 +304,43 @@ class PersonalService:
             joinedload(models.Puesto.departamento),
         ).filter(models.Puesto.id == puesto_id).first()
 
-    PUESTOS_RESERVADOS = {"director", "subdirector", "gerente general", "rh", "gerente", "supervisor"}
+    PUESTOS_RESERVADOS = {
+        "director",  # legado; preferir "director general"
+        "director general",
+        "director general adjunto",
+        "subdirector",
+        "gerente general",  # legado; preferir "gerente administrativo y operaciones"
+        "gerente administrativo y operaciones",
+        "rh",
+        "gerente",
+        "supervisor",
+    }
     PUESTOS_RESERVADOS_ORDEN = [
-        ("director", 1),
-        ("subdirector", 2),
-        ("gerente general", 3),
-        ("rh", 4),
-        ("gerente", 5),
-        ("supervisor", 6),
+        ("director general", 1),
+        ("director general adjunto", 2),
+        ("subdirector", 3),
+        ("gerente administrativo y operaciones", 4),
+        ("rh", 5),
+        ("gerente", 6),
+        ("supervisor", 7),
     ]
+    NOMBRE_GG_ACTUAL = "Gerente Administrativo y Operaciones"
+    NOMBRES_GG_PUESTO = frozenset({
+        "gerente general",
+        "gerente administrativo y operaciones",
+    })
+
+    @staticmethod
+    def _nombre_es_director_top(nombre: Optional[str]) -> bool:
+        """Director General (incluye legado «Director»). No incluye Adjunto."""
+        n = (nombre or "").strip().lower()
+        return n in ("director", "director general")
+
+    @staticmethod
+    def _nombre_es_gerente_general(nombre: Optional[str]) -> bool:
+        """Puesto de liderazgo GG (incluye legado «Gerente General»)."""
+        n = (nombre or "").strip().lower()
+        return n in PersonalService.NOMBRES_GG_PUESTO
 
     @staticmethod
     def _nombre_reservado(nombre: str) -> bool:
@@ -322,21 +350,40 @@ class PersonalService:
     @staticmethod
     def ensure_puestos_reservados(db: Session) -> None:
         """Garantiza la existencia de puestos globales reservados del sistema."""
-        existentes = {
-            (p.nombre or "").strip().lower()
-            for p in db.query(models.Puesto).filter(
-                models.Puesto.empresa_id.is_(None),
-                models.Puesto.departamento_id.is_(None),
-            ).all()
-        }
+        globales = db.query(models.Puesto).filter(
+            models.Puesto.empresa_id.is_(None),
+            models.Puesto.departamento_id.is_(None),
+        ).all()
+        existentes = {(p.nombre or "").strip().lower(): p for p in globales}
+        # Migrar legado «Director» → «Director General» (mismo registro, sin duplicar)
+        if "director" in existentes and "director general" not in existentes:
+            antiguos = existentes["director"]
+            antiguos.nombre = "Director General"
+            antiguos.orden = 1
+            existentes["director general"] = antiguos
+            del existentes["director"]
+            db.commit()
+        # Migrar legado «Gerente General» → «Gerente Administrativo y Operaciones»
+        clave_gg = "gerente administrativo y operaciones"
+        if "gerente general" in existentes and clave_gg not in existentes:
+            antiguos = existentes["gerente general"]
+            antiguos.nombre = PersonalService.NOMBRE_GG_ACTUAL
+            antiguos.orden = 4
+            existentes[clave_gg] = antiguos
+            del existentes["gerente general"]
+            db.commit()
         created = False
         for nombre, orden in PersonalService.PUESTOS_RESERVADOS_ORDEN:
             if nombre in existentes:
                 continue
             if nombre == "rh":
                 display = "RH"
-            elif nombre == "gerente general":
-                display = "Gerente General"
+            elif nombre == clave_gg:
+                display = PersonalService.NOMBRE_GG_ACTUAL
+            elif nombre == "director general":
+                display = "Director General"
+            elif nombre == "director general adjunto":
+                display = "Director General Adjunto"
             else:
                 display = nombre.title()
             db.add(models.Puesto(
@@ -652,9 +699,16 @@ class PersonalService:
     @staticmethod
     def _puesto_es_director(db: Session, puesto_id: int) -> bool:
         p = db.query(models.Puesto).filter(models.Puesto.id == puesto_id).first()
-        return bool(p and (p.nombre or "").strip().lower() == "director")
+        return bool(p and PersonalService._nombre_es_director_top(p.nombre))
 
-    PUESTOS_CON_SUPERVISION_EMPRESAS = frozenset({"director", "subdirector", "gerente general"})
+    PUESTOS_CON_SUPERVISION_EMPRESAS = frozenset({
+        "director",
+        "director general",
+        "director general adjunto",
+        "subdirector",
+        "gerente general",
+        "gerente administrativo y operaciones",
+    })
 
     @staticmethod
     def _puesto_usa_supervision_empresas(db: Session, puesto_id: Optional[int]) -> bool:
@@ -750,26 +804,22 @@ class PersonalService:
         return q
 
     @staticmethod
-    def get_empleados(
+    def _empleados_filtered_query(
         db: Session,
-        skip: int = 0,
-        limit: int = 100,
+        *,
         estado: Optional[str] = None,
         rol_id: Optional[int] = None,
         jefe_id: Optional[int] = None,
         departamento_id: Optional[int] = None,
+        empresa_id: Optional[int] = None,
         search: Optional[str] = None,
         exento_incidencias: Optional[bool] = None,
         incluir_exentos: bool = False,
-    ) -> List[models.Empleado]:
-        """Listar empleados con filtros.
-        Por defecto no incluye usuarios especiales (exento_incidencias=True); use incluir_exentos=True
-        para listados que deben incluirlos (p. ej. candidatos a gerente de departamento).
-        exento_incidencias=true lista solo especiales; false solo no especiales.
-        """
+        with_relations: bool = True,
+    ):
+        """Query base de empleados con filtros (sin offset/limit)."""
         from sqlalchemy import or_
 
-        # IDs de roles de administrador/superuser (solo excluir cuando no filtramos por exento)
         admin_rol_ids = []
         if exento_incidencias is None:
             admin_rol_ids = [
@@ -778,23 +828,22 @@ class PersonalService:
                 ).all()
             ]
 
-        # selectinload(jefe): evita que joinedload+jefe falle o quede vacío con limit/offset (lista grande).
-        # Incluye jefe aunque sea usuario especial (exento_incidencias) o rol administrativo.
-        query = db.query(models.Empleado).options(
-            joinedload(models.Empleado.empresa),
-            joinedload(models.Empleado.departamento_rel).joinedload(models.Departamento.jefe),
-            joinedload(models.Empleado.departamento_rel).joinedload(models.Departamento.padre),
-            joinedload(models.Empleado.puesto_rel),
-            selectinload(models.Empleado.jefe).selectinload(models.Empleado.puesto_rel),
-            joinedload(models.Empleado.horarios_asignados),
-            selectinload(models.Empleado.supervision_empresas_rel),
-        )
+        if with_relations:
+            query = db.query(models.Empleado).options(
+                joinedload(models.Empleado.empresa),
+                joinedload(models.Empleado.departamento_rel).joinedload(models.Departamento.jefe),
+                joinedload(models.Empleado.departamento_rel).joinedload(models.Departamento.padre),
+                joinedload(models.Empleado.puesto_rel),
+                selectinload(models.Empleado.jefe).selectinload(models.Empleado.puesto_rel),
+                joinedload(models.Empleado.horarios_asignados),
+                selectinload(models.Empleado.supervision_empresas_rel),
+            )
+        else:
+            query = db.query(models.Empleado)
 
-        # Excluir siempre cuentas de sistema (sin empresa asignada)
         query = query.filter(models.Empleado.empresa_id.isnot(None))
 
         def _no_es_usuario_especial():
-            """Excluye solo quienes tienen exento_incidencias=True (compat. MySQL 0/1/NULL)."""
             return func.coalesce(models.Empleado.exento_incidencias, False) == False
 
         if exento_incidencias is not None:
@@ -805,8 +854,6 @@ class PersonalService:
         elif not incluir_exentos:
             query = query.filter(_no_es_usuario_especial())
 
-        # Ocultar cuentas Administrador/Superuser solo en el listado “operativo” reducido.
-        # Si incluir_exentos=True (p. ej. módulo Personal), mostrar también a administradores.
         if exento_incidencias is None and admin_rol_ids and not incluir_exentos:
             query = query.filter(
                 or_(
@@ -834,8 +881,14 @@ class PersonalService:
             query = query.filter(models.Empleado.rol_id == rol_id)
         if jefe_id:
             query = query.filter(models.Empleado.jefe_id == jefe_id)
+        if empresa_id:
+            query = query.filter(models.Empleado.empresa_id == empresa_id)
         if departamento_id:
-            query = query.filter(models.Empleado.departamento_id == departamento_id)
+            # Incluir subdepartamentos (mismo criterio que organigrama / reportes).
+            depto_ids = PersonalService.get_departamento_ids_con_descendientes(db, [departamento_id])
+            query = query.filter(
+                models.Empleado.departamento_id.in_(depto_ids or [departamento_id])
+            )
         if search:
             search_filter = or_(
                 models.Empleado.nombre.ilike(f"%{search}%"),
@@ -845,7 +898,39 @@ class PersonalService:
                 models.Empleado.email.ilike(f"%{search}%")
             )
             query = query.filter(search_filter)
-        
+        return query
+
+    @staticmethod
+    def get_empleados(
+        db: Session,
+        skip: int = 0,
+        limit: int = 100,
+        estado: Optional[str] = None,
+        rol_id: Optional[int] = None,
+        jefe_id: Optional[int] = None,
+        departamento_id: Optional[int] = None,
+        empresa_id: Optional[int] = None,
+        search: Optional[str] = None,
+        exento_incidencias: Optional[bool] = None,
+        incluir_exentos: bool = False,
+    ) -> List[models.Empleado]:
+        """Listar empleados con filtros.
+        Por defecto no incluye usuarios especiales (exento_incidencias=True); use incluir_exentos=True
+        para listados que deben incluirlos (p. ej. candidatos a gerente de departamento).
+        exento_incidencias=true lista solo especiales; false solo no especiales.
+        """
+        query = PersonalService._empleados_filtered_query(
+            db,
+            estado=estado,
+            rol_id=rol_id,
+            jefe_id=jefe_id,
+            departamento_id=departamento_id,
+            empresa_id=empresa_id,
+            search=search,
+            exento_incidencias=exento_incidencias,
+            incluir_exentos=incluir_exentos,
+            with_relations=True,
+        )
         query = query.order_by(
             models.Empleado.apellido_paterno.asc(),
             models.Empleado.apellido_materno.asc(),
@@ -853,6 +938,82 @@ class PersonalService:
         )
         return query.offset(skip).limit(limit).all()
 
+    @staticmethod
+    def count_empleados(
+        db: Session,
+        *,
+        estado: Optional[str] = None,
+        rol_id: Optional[int] = None,
+        jefe_id: Optional[int] = None,
+        departamento_id: Optional[int] = None,
+        empresa_id: Optional[int] = None,
+        search: Optional[str] = None,
+        exento_incidencias: Optional[bool] = None,
+        incluir_exentos: bool = False,
+    ) -> int:
+        q = PersonalService._empleados_filtered_query(
+            db,
+            estado=estado,
+            rol_id=rol_id,
+            jefe_id=jefe_id,
+            departamento_id=departamento_id,
+            empresa_id=empresa_id,
+            search=search,
+            exento_incidencias=exento_incidencias,
+            incluir_exentos=incluir_exentos,
+            with_relations=False,
+        )
+        return q.count()
+
+    @staticmethod
+    def conteos_empleados_por_estado(
+        db: Session,
+        *,
+        departamento_id: Optional[int] = None,
+        empresa_id: Optional[int] = None,
+        search: Optional[str] = None,
+        incluir_exentos: bool = False,
+    ) -> dict:
+        """Contadores Total/Activos/Inactivos/Bajas sin traer filas completas."""
+        from sqlalchemy import case, or_
+
+        q = PersonalService._empleados_filtered_query(
+            db,
+            estado=None,
+            departamento_id=departamento_id,
+            empresa_id=empresa_id,
+            search=search,
+            incluir_exentos=incluir_exentos,
+            with_relations=False,
+        )
+        # estado NULL se trata como activo (misma regla que el listado)
+        rows = q.with_entities(
+            func.sum(
+                case(
+                    (
+                        or_(
+                            models.Empleado.estado == models.EstadoEmpleado.ACTIVO,
+                            models.Empleado.estado.is_(None),
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ).label("activos"),
+            func.sum(
+                case((models.Empleado.estado == models.EstadoEmpleado.INACTIVO, 1), else_=0)
+            ).label("inactivos"),
+            func.sum(
+                case((models.Empleado.estado == models.EstadoEmpleado.BAJA, 1), else_=0)
+            ).label("bajas"),
+            func.count().label("total"),
+        ).one()
+        return {
+            "total": int(rows.total or 0),
+            "activos": int(rows.activos or 0),
+            "inactivos": int(rows.inactivos or 0),
+            "bajas": int(rows.bajas or 0),
+        }
     @staticmethod
     def update_empleado(db: Session, empleado_id: int, empleado: schemas.EmpleadoUpdate) -> Optional[models.Empleado]:
         """Actualizar empleado"""
@@ -1008,15 +1169,15 @@ class PersonalService:
             rol = db.query(models.Rol).filter(models.Rol.id == emp.rol_id).first()
             if rol and rol.nombre in PersonalService.GERENTE_GENERAL_ROL_NAMES:
                 return True
-        if emp.puesto_rel and (emp.puesto_rel.nombre or "").strip().lower() == "gerente general":
+        if emp.puesto_rel and PersonalService._nombre_es_gerente_general(emp.puesto_rel.nombre):
             return True
         return False
 
     @staticmethod
     def get_es_director(db: Session, empleado_id: int) -> bool:
-        """True si el empleado tiene puesto Director (aprueba vacaciones solo de gerentes/supervisores)."""
+        """True si el empleado tiene puesto Director General (aprueba vacaciones solo de gerentes/supervisores)."""
         emp = db.query(models.Empleado).options(joinedload(models.Empleado.puesto_rel)).filter(models.Empleado.id == empleado_id).first()
-        return emp is not None and emp.puesto_rel is not None and (emp.puesto_rel.nombre or "").strip().lower() == "director"
+        return emp is not None and emp.puesto_rel is not None and PersonalService._nombre_es_director_top(emp.puesto_rel.nombre)
 
     @staticmethod
     def get_es_gerente_o_director(db: Session, empleado_id: int) -> bool:
@@ -1093,30 +1254,75 @@ class PersonalService:
         return ids
 
     @staticmethod
-    def get_departamento_ids_que_administro(db: Session, empleado_id: int) -> List[int]:
-        """Departamentos que este empleado administra: donde es jefe (incluye hijos/sucursales), o donde es supervisor/gerente por puesto."""
-        deptos_como_jefe = db.query(models.Departamento).filter(
-            models.Departamento.jefe_id == empleado_id
-        ).all()
-        ids: List[int] = []
-        for d in deptos_como_jefe:
-            if d.id not in ids:
-                ids.append(d.id)
-            # Si administra el padre, también las sucursales hijas
+    def get_departamento_ids_con_descendientes(db: Session, raiz_ids: List[int]) -> List[int]:
+        """
+        Incluye cada ID raíz y todos sus descendientes por padre_id (BFS, cualquier profundidad).
+        Alineado al árbol del organigrama (departamento → subdepartamento → …).
+        """
+        roots = [int(x) for x in (raiz_ids or []) if x is not None]
+        if not roots:
+            return []
+        seen: set[int] = set()
+        ordered: List[int] = []
+        queue: List[int] = []
+        for rid in roots:
+            if rid not in seen:
+                seen.add(rid)
+                ordered.append(rid)
+                queue.append(rid)
+        while queue:
+            parent_id = queue.pop(0)
             hijos = (
                 db.query(models.Departamento.id)
-                .filter(models.Departamento.padre_id == d.id)
+                .filter(models.Departamento.padre_id == parent_id)
                 .all()
             )
             for (hid,) in hijos:
-                if hid not in ids:
-                    ids.append(hid)
+                if hid not in seen:
+                    seen.add(hid)
+                    ordered.append(hid)
+                    queue.append(hid)
+        return ordered
+
+    @staticmethod
+    def get_departamento_ids_que_administro(db: Session, empleado_id: int) -> List[int]:
+        """
+        Departamentos que este empleado administra (alineado al organigrama):
+        - donde es jefe_id (incluye todos los descendientes por padre_id)
+        - donde es encargado (encargados_ids / departamento_encargados), con descendientes
+        - si el puesto es gerente/supervisor: su departamento_id + descendientes
+        """
+        raices: List[int] = []
+        deptos_como_jefe = (
+            db.query(models.Departamento.id)
+            .filter(models.Departamento.jefe_id == empleado_id)
+            .all()
+        )
+        for (did,) in deptos_como_jefe:
+            raices.append(did)
+
+        enc_deptos = (
+            db.query(models.DepartamentoEncargado.departamento_id)
+            .filter(models.DepartamentoEncargado.empleado_id == empleado_id)
+            .all()
+        )
+        for (did,) in enc_deptos:
+            raices.append(did)
+
         emp = db.query(models.Empleado).options(joinedload(models.Empleado.puesto_rel)).filter(
             models.Empleado.id == empleado_id
         ).first()
-        if emp and emp.departamento_id and emp.departamento_id not in ids:
+        if emp and emp.departamento_id:
             puesto_nombre = (emp.puesto_rel.nombre or "").strip().lower() if emp.puesto_rel else ""
             # Aceptar "Gerente", "Supervisor" o variantes (ej. "Gerente de Diseño", "Supervisor de Área")
             if "gerente" in puesto_nombre or "supervisor" in puesto_nombre:
-                ids.append(emp.departamento_id)
-        return ids
+                raices.append(emp.departamento_id)
+
+        # Deduplicar preservando orden antes de expandir
+        uniq: List[int] = []
+        seen_r: set[int] = set()
+        for rid in raices:
+            if rid not in seen_r:
+                seen_r.add(rid)
+                uniq.append(rid)
+        return PersonalService.get_departamento_ids_con_descendientes(db, uniq)

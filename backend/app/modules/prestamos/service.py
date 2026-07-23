@@ -148,7 +148,12 @@ def _notificar_gerentes(
         from app.modules.personal.models import Empleado, Rol, Puesto
 
         NOMBRES_ROL = ("Administrador", "Superuser", "Gerente General", "Gerente general", "Director")
-        NOMBRES_PUESTO = ("gerente general", "director")
+        NOMBRES_PUESTO = (
+            "gerente general",
+            "gerente administrativo y operaciones",
+            "director",
+            "director general",
+        )
 
         ids_a_notificar: set[int] = set()
 
@@ -453,14 +458,18 @@ def listar_pendientes_departamento(
 def listar_pendientes_gerente_general(
     db: Session, skip: int = 0, limit: int = 200
 ) -> List[models.SolicitudPrestamo]:
-    """Solicitudes pendientes cuyo solicitante tiene puesto 'Gerente General'."""
+    """Solicitudes pendientes cuyo solicitante tiene puesto GG (legado o nombre actual)."""
+    from sqlalchemy import func
+
     q = (
         db.query(models.SolicitudPrestamo)
         .join(pm.Empleado, models.SolicitudPrestamo.empleado_id == pm.Empleado.id)
         .join(pm.Puesto, pm.Empleado.puesto_id == pm.Puesto.id)
         .filter(
             models.SolicitudPrestamo.estado == models.EstadoSolicitudPrestamo.PENDIENTE,
-            pm.Puesto.nombre == "Gerente General",
+            func.lower(func.trim(pm.Puesto.nombre)).in_(
+                ("gerente general", "gerente administrativo y operaciones")
+            ),
         )
         .options(
             joinedload(models.SolicitudPrestamo.empleado).joinedload(pm.Empleado.empresa),
@@ -472,11 +481,13 @@ def listar_pendientes_gerente_general(
 
 
 def empleado_es_gerente_general(db: Session, empleado_id: int) -> bool:
-    """Valida si el empleado tiene puesto Gerente General."""
+    """Valida si el empleado tiene el puesto de liderazgo GG (legado o actual)."""
+    from app.modules.personal.service import PersonalService
+
     emp = db.query(pm.Empleado).options(joinedload(pm.Empleado.puesto_rel)).filter(pm.Empleado.id == empleado_id).first()
     if not emp or not emp.puesto_rel:
         return False
-    return (emp.puesto_rel.nombre or "").strip().lower() == "gerente general"
+    return PersonalService._nombre_es_gerente_general(emp.puesto_rel.nombre)
 
 
 def listar_solicitudes_mi_area(

@@ -288,10 +288,17 @@ const emptyForm: FormData = {
   empresas_supervision_ids: [],
 };
 
-/** Director / Subdirector / Gerente General: eligen en qué empresas aparecen en el organigrama. */
+/** Director General / Adjunto / Subdirector / GG: eligen en qué empresas aparecen en el organigrama. */
 const puestoUsaEmpresasOrganigrama = (nombre?: string | null) => {
   const n = (nombre || '').trim().toLowerCase();
-  return n === 'director' || n === 'subdirector' || n === 'gerente general';
+  return (
+    n === 'director' ||
+    n === 'director general' ||
+    n === 'director general adjunto' ||
+    n === 'subdirector' ||
+    n === 'gerente general' ||
+    n === 'gerente administrativo y operaciones'
+  );
 };
 
 const normalizeStr = (s: string) =>
@@ -451,17 +458,27 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
   const canEditNomina = canAccessNomina(isAdmin);
   const [mainTab, setMainTab] = useState<'empleados' | 'departamentos' | 'puestos'>('empleados');
   const [empleados, setEmpleados] = useState<Empleado[]>([]);
-  /** Todos los estados (sin filtro estado) para contadores Total/Activos/Inactivos/Bajas. */
-  const [empleadosParaStats, setEmpleadosParaStats] = useState<Empleado[]>([]);
-  /** Incluye usuarios especiales (p. ej. directores) para asignar gerente de departamento. */
+  /** Contadores de tarjetas (desde /empleados/conteos, sin listado completo). */
+  const [stats, setStats] = useState({ total: 0, activos: 0, inactivos: 0, bajas: 0 });
+  /** Total del listado filtrado actual (paginación server-side). */
+  const [totalEmpleados, setTotalEmpleados] = useState(0);
+  /** Incluye usuarios especiales (p. ej. directores) para asignar gerente de departamento. Carga lazy. */
   const [empleadosCandidatosGerente, setEmpleadosCandidatosGerente] = useState<Empleado[]>([]);
+  const [candidatosGerenteLoaded, setCandidatosGerenteLoaded] = useState(false);
+  /** Activos para conteos de deptos / encargados. Solo al abrir tab Departamentos. */
+  const [empleadosParaDeptos, setEmpleadosParaDeptos] = useState<Empleado[]>([]);
+  const [empleadosDeptosLoaded, setEmpleadosDeptosLoaded] = useState(false);
   const [empresas, setEmpresas] = useState<EmpresaResponse[]>([]);
   const [departamentos, setDepartamentos] = useState<DepartamentoResponse[]>([]);
   const [puestos, setPuestos] = useState<PuestoResponse[]>([]);
   const [dispositivos, setDispositivos] = useState<Dispositivo[]>([]);
   const [horarios, setHorarios] = useState<HorarioSimple[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingLista, setLoadingLista] = useState(false);
   const [saving, setSaving] = useState(false);
+  /** Texto del input (no dispara fetch hasta Buscar/Enter). */
+  const [searchInput, setSearchInput] = useState('');
+  /** Búsqueda aplicada en el servidor. */
   const [search, setSearch] = useState('');
   const [filtroEstado, setFiltroEstado] = useState('activo');
   const [filtroEmpresa, setFiltroEmpresa] = useState('');
@@ -601,45 +618,37 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
   const [avisoReRegistro, setAvisoReRegistro] = useState<string | null>(null);
   const prevBorradoPendiente = useRef(false);
 
-  const loadData = useCallback(async () => {
-    try {
-      const params = new URLSearchParams();
-      if (search) params.append('search', search);
+  const buildFiltrosEmpleadosParams = useCallback((opts?: { forList?: boolean }) => {
+    const params = new URLSearchParams();
+    if (search) params.append('search', search);
+    if (filtroEmpresa) params.append('empresa_id', filtroEmpresa);
+    if (filtroDepto) params.append('departamento_id', filtroDepto);
+    if (opts?.forList) {
       if (filtroEstado) params.append('estado', filtroEstado);
-      params.append('limit', '500');
-      // Usuarios especiales (exento) no son personal operativo: se gestionan en Configuración.
-      const statsParams = new URLSearchParams();
-      if (search) statsParams.append('search', search);
-      statsParams.append('limit', '5000');
-      const candidatosParams = new URLSearchParams();
-      candidatosParams.append('limit', '2000');
-      candidatosParams.append('estado', 'activo');
-      // Candidatos a gerente de depto: sí pueden incluir especiales (p. ej. dirección).
-      candidatosParams.append('incluir_exentos', 'true');
-      // /asistencia/devices es solo admin: si falla (403 para RH), no debe tumbar
-      // el resto del listado (empleados/empresas/deptos) vía Promise.all.
-      const [empRes, empStatsRes, empGerRes, devRes, emprsRes, deptosRes, puestosRes, horRes, catRes] = await Promise.all([
-        api.get(`/personal/empleados?${params.toString()}`),
-        api.get(`/personal/empleados?${statsParams.toString()}`),
-        api.get(`/personal/empleados?${candidatosParams.toString()}`),
+      params.append('limit', String(POR_PAGINA));
+      params.append('skip', String((pagina - 1) * POR_PAGINA));
+    }
+    return params;
+  }, [search, filtroEmpresa, filtroDepto, filtroEstado, pagina]);
+
+  const loadCatalogos = useCallback(async () => {
+    try {
+      const [emprsRes, deptosRes, puestosRes, horRes, catRes, devRes] = await Promise.all([
+        api.get('/personal/empresas?limit=500'),
+        api.get('/personal/departamentos?limit=500'),
+        api.get('/personal/puestos'),
+        api.get('/asistencia/horarios?activo=true'),
+        (canEditNomina ? api.get('/nomina/catalogos') : Promise.resolve({ data: null })).catch(() => ({ data: null })),
         (isAdmin
           ? api.get('/asistencia/devices')
           : Promise.resolve({ data: [] as Dispositivo[] })
         ).catch(() => ({ data: [] as Dispositivo[] })),
-        api.get('/personal/empresas?limit=500'),
-        api.get('/personal/departamentos?limit=500'),
-        api.get('/personal/puestos'), // sin activo = todos (para puestos tab); form filtra activos
-        api.get('/asistencia/horarios?activo=true'),
-        (canEditNomina ? api.get('/nomina/catalogos') : Promise.resolve({ data: null })).catch(() => ({ data: null })),
       ]);
-      setEmpleados(empRes.data);
-      setEmpleadosParaStats(Array.isArray(empStatsRes.data) ? empStatsRes.data : []);
-      setEmpleadosCandidatosGerente(Array.isArray(empGerRes.data) ? empGerRes.data : []);
-      setDispositivos(Array.isArray(devRes.data) ? devRes.data : []);
       setEmpresas(emprsRes.data);
       setDepartamentos(deptosRes.data);
       setPuestos(puestosRes.data);
       setHorarios(Array.isArray(horRes.data) ? horRes.data : []);
+      setDispositivos(Array.isArray(devRes.data) ? devRes.data : []);
       if (catRes.data) {
         setCatNomina({
           tipos_contrato: catRes.data.tipos_contrato ?? [],
@@ -652,17 +661,104 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
         });
       }
     } catch (error) {
-      console.error('Error al cargar datos:', error);
+      console.error('Error al cargar catálogos:', error);
+    }
+  }, [canEditNomina, isAdmin]);
+
+  const loadConteos = useCallback(async () => {
+    try {
+      const params = buildFiltrosEmpleadosParams();
+      const res = await api.get<{ total: number; activos: number; inactivos: number; bajas: number }>(
+        `/personal/empleados/conteos?${params.toString()}`,
+      );
+      setStats({
+        total: res.data.total ?? 0,
+        activos: res.data.activos ?? 0,
+        inactivos: res.data.inactivos ?? 0,
+        bajas: res.data.bajas ?? 0,
+      });
+    } catch (error) {
+      console.error('Error al cargar conteos:', error);
+    }
+  }, [buildFiltrosEmpleadosParams]);
+
+  const loadEmpleadosPage = useCallback(async () => {
+    setLoadingLista(true);
+    try {
+      const params = buildFiltrosEmpleadosParams({ forList: true });
+      const res = await api.get<Empleado[]>(`/personal/empleados?${params.toString()}`);
+      setEmpleados(Array.isArray(res.data) ? res.data : []);
+      const totalHdr = res.headers?.['x-total-count'] ?? res.headers?.['X-Total-Count'];
+      const totalNum = totalHdr != null ? Number(totalHdr) : (Array.isArray(res.data) ? res.data.length : 0);
+      setTotalEmpleados(Number.isFinite(totalNum) ? totalNum : 0);
+    } catch (error) {
+      console.error('Error al cargar empleados:', error);
+      setEmpleados([]);
+      setTotalEmpleados(0);
     } finally {
+      setLoadingLista(false);
       setLoading(false);
     }
-  }, [search, filtroEstado, canEditNomina, isAdmin]);
+  }, [buildFiltrosEmpleadosParams]);
+
+  const ensureCandidatosGerente = useCallback(async () => {
+    if (candidatosGerenteLoaded) return;
+    try {
+      const res = await api.get<Empleado[]>(
+        '/personal/empleados?limit=2000&estado=activo&incluir_exentos=true',
+      );
+      setEmpleadosCandidatosGerente(Array.isArray(res.data) ? res.data : []);
+      setCandidatosGerenteLoaded(true);
+    } catch (error) {
+      console.error('Error al cargar candidatos a gerente:', error);
+    }
+  }, [candidatosGerenteLoaded]);
+
+  const ensureEmpleadosParaDeptos = useCallback(async () => {
+    if (empleadosDeptosLoaded) return;
+    try {
+      const res = await api.get<Empleado[]>('/personal/empleados?limit=2000&estado=activo');
+      setEmpleadosParaDeptos(Array.isArray(res.data) ? res.data : []);
+      setEmpleadosDeptosLoaded(true);
+    } catch (error) {
+      console.error('Error al cargar empleados para departamentos:', error);
+    }
+  }, [empleadosDeptosLoaded]);
+
+  const aplicarBusqueda = useCallback(() => {
+    setPagina(1);
+    setSearch(searchInput.trim());
+  }, [searchInput]);
+
+  /** Compat: algunos handlers antiguos llaman loadData() tras guardar. */
+  const loadData = useCallback(async () => {
+    // Importante: también refrescar catálogos (departamentos/puestos/empresas).
+    // Tras la paginación server-side, loadData ya no traía deptos → crear/desactivar
+    // parecía no funcionar aunque la API sí guardaba.
+    await Promise.all([loadEmpleadosPage(), loadConteos(), loadCatalogos()]);
+    setEmpleadosDeptosLoaded(false);
+    setCandidatosGerenteLoaded(false);
+  }, [loadEmpleadosPage, loadConteos, loadCatalogos]);
 
   useEffect(() => {
     if (!canEditNomina && formTab === 'nomina') setFormTab('personales');
   }, [canEditNomina, formTab]);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => {
+    void loadCatalogos();
+  }, [loadCatalogos]);
+
+  useEffect(() => {
+    void loadEmpleadosPage();
+  }, [loadEmpleadosPage]);
+
+  useEffect(() => {
+    void loadConteos();
+  }, [loadConteos]);
+
+  useEffect(() => {
+    if (mainTab === 'departamentos' || mainTab === 'puestos') void ensureEmpleadosParaDeptos();
+  }, [mainTab, ensureEmpleadosParaDeptos]);
 
   // Sincronizar selectedEmpleado cuando se recarga la lista (p.ej. después de editar)
   useEffect(() => {
@@ -1109,6 +1205,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
   };
 
   const openNewDepto = () => {
+    void ensureCandidatosGerente();
     setDeptoForm({ nombre: '', empresa_id: undefined, jefe_id: null, padre_id: null });
     setSubdeptosPendientes([]);
     setEditingDeptoId(null);
@@ -1116,6 +1213,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
   };
 
   const startEditDepto = (d: DepartamentoResponse) => {
+    void ensureCandidatosGerente();
     setDeptoForm({
       nombre: d.nombre,
       empresa_id: d.empresa_id,
@@ -1128,6 +1226,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
   };
 
   const openNewSub = (padreId: number | null, empresaId?: number) => {
+    void ensureEmpleadosParaDeptos();
     setEditingSubId(null);
     setEditingSubPendienteIdx(null);
     setSubForm({
@@ -1143,6 +1242,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
   };
 
   const startEditSub = (h: DepartamentoResponse) => {
+    void ensureEmpleadosParaDeptos();
     setEditingSubId(h.id);
     setEditingSubPendienteIdx(null);
     setSubForm({
@@ -1295,17 +1395,31 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
   };
 
   const toggleDeptoActivo = async (d: DepartamentoResponse) => {
+    const nextActivo = !d.activo;
+    // Optimistic UI: la API sí guarda; antes no se veía el cambio por no refrescar catálogos.
+    setDepartamentos(prev => prev.map(x => (x.id === d.id ? { ...x, activo: nextActivo } : x)));
     try {
-      await api.put(`/personal/departamentos/${d.id}`, { activo: !d.activo });
-      loadData();
+      await api.put(`/personal/departamentos/${d.id}`, { activo: nextActivo });
+      await loadCatalogos();
     } catch (error: unknown) {
+      setDepartamentos(prev => prev.map(x => (x.id === d.id ? { ...x, activo: d.activo } : x)));
       const err = error as { response?: { data?: { detail?: string } } };
       alert(err.response?.data?.detail || 'Error');
     }
   };
 
   // ---- Puesto CRUD ----
-  const PUESTOS_RESERVADOS = ['director', 'subdirector', 'gerente general', 'rh', 'gerente', 'supervisor'];
+  const PUESTOS_RESERVADOS = [
+    'director',
+    'director general',
+    'director general adjunto',
+    'subdirector',
+    'gerente general',
+    'gerente administrativo y operaciones',
+    'rh',
+    'gerente',
+    'supervisor',
+  ];
   const isPuestoReservado = (nombre: string) => PUESTOS_RESERVADOS.includes((nombre || '').trim().toLowerCase());
 
   const openNewPuesto = () => {
@@ -1435,8 +1549,11 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
     return (
       n === 'gerente' ||
       n === 'director' ||
+      n === 'director general' ||
+      n === 'director general adjunto' ||
       n === 'subdirector' ||
-      n === 'gerente general'
+      n === 'gerente general' ||
+      n === 'gerente administrativo y operaciones'
     );
   };
 
@@ -1471,7 +1588,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
       padreId,
       ...departamentos.filter(d => d.padre_id === padreId).map(d => d.id),
     ]);
-    return empleados
+    return empleadosParaDeptos
       .filter(e =>
         e.estado === 'activo'
         && e.departamento_id != null
@@ -1481,22 +1598,8 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
       .sort(cmpNombreEmpleado);
   };
 
-  const filtrarPorEmpresaDepto = (lista: Empleado[]) =>
-    lista.filter(e => {
-      if (filtroEmpresa && String(e.empresa_id) !== filtroEmpresa) return false;
-      if (filtroDepto) {
-        const fid = Number(filtroDepto);
-        const idsFiltro = new Set<number>([
-          fid,
-          ...departamentos.filter(d => d.padre_id === fid).map(d => d.id),
-        ]);
-        if (!e.departamento_id || !idsFiltro.has(e.departamento_id)) return false;
-      }
-      return true;
-    });
-
-  const filteredEmpleados = filtrarPorEmpresaDepto(empleados).sort(cmpNombreEmpleado);
-  const empleadosStatsFiltrados = filtrarPorEmpresaDepto(empleadosParaStats);
+  // Empresa/depto/search/estado ya vienen filtrados del servidor (paginación real).
+  const filteredEmpleados = [...empleados].sort(cmpNombreEmpleado);
 
   const loadChecadas = async (
     empleadoId: number,
@@ -1811,13 +1914,6 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
 
   if (loading && empleados.length === 0) return <div style={{ padding: '20px' }}>Cargando...</div>;
 
-  const stats = {
-    total: empleadosStatsFiltrados.length,
-    activos: empleadosStatsFiltrados.filter(e => e.estado === 'activo').length,
-    inactivos: empleadosStatsFiltrados.filter(e => e.estado === 'inactivo').length,
-    bajas: empleadosStatsFiltrados.filter(e => e.estado === 'baja').length,
-  };
-
   const activeDevices = dispositivos.filter(d => d.activo);
   const activeEmpresas = empresas.filter(e => e.activo);
   // Puestos: globales (Director, Gerente, etc.) + los del departamento de la empresa.
@@ -1953,7 +2049,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                     const hijoIds = new Set(
                       departamentos.filter(h => h.padre_id === d.id).map(h => h.id)
                     );
-                    const count = empleados.filter(
+                    const count = empleadosParaDeptos.filter(
                       e => e.departamento_id === d.id || (e.departamento_id != null && hijoIds.has(e.departamento_id))
                     ).length;
                     const nSubs = countSubdeptos(d.id);
@@ -2034,7 +2130,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                       return true;
                     })
                     .map(p => {
-                    const count = empleados.filter(e => e.puesto_id === p.id).length;
+                    const count = empleadosParaDeptos.filter(e => e.puesto_id === p.id).length;
                     const reservado = isPuestoReservado(p.nombre);
                     return (
                       <tr key={p.id} style={{ borderBottom: '1px solid #eee' }}>
@@ -2104,8 +2200,8 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
           {isMobile ? (
             <div style={rhMobileFilterStack}>
               <input type="text" placeholder="Buscar por nombre, numero o email..."
-                value={search} onChange={e => { setSearch(e.target.value); setPagina(1); }}
-                onKeyDown={e => e.key === 'Enter' && loadData()}
+                value={searchInput} onChange={e => setSearchInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && aplicarBusqueda()}
                 style={rhMobileInput} />
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                 <select value={filtroEstado} onChange={e => { setFiltroEstado(e.target.value); setPagina(1); }} style={rhMobileInput}>
@@ -2135,13 +2231,13 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                   ))
                 }
               </select>
-              <button onClick={loadData} style={{ ...btnPrimary, width: '100%', minHeight: 44 }}>Buscar</button>
+              <button onClick={aplicarBusqueda} style={{ ...btnPrimary, width: '100%', minHeight: 44 }}>Buscar</button>
             </div>
           ) : (
           <div style={{ ...cardStyle, marginBottom: '20px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
             <input type="text" placeholder="Buscar por nombre, numero o email..."
-              value={search} onChange={e => { setSearch(e.target.value); setPagina(1); }}
-              onKeyDown={e => e.key === 'Enter' && loadData()}
+              value={searchInput} onChange={e => setSearchInput(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && aplicarBusqueda()}
               style={{ ...inputStyle, maxWidth: '300px' }} />
             <select value={filtroEstado} onChange={e => { setFiltroEstado(e.target.value); setPagina(1); }} style={{ ...inputStyle, maxWidth: '160px' }}>
               <option value="">Todos los estados</option>
@@ -2169,16 +2265,17 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                 ))
               }
             </select>
-            <button onClick={loadData} style={btnPrimary}>Buscar</button>
+            <button onClick={aplicarBusqueda} style={btnPrimary}>Buscar</button>
+            {loadingLista && <span style={{ fontSize: '0.85rem', color: '#6b7280' }}>Cargando…</span>}
           </div>
           )}
 
           {/* Table */}
           {(() => {
-            const totalPaginas = Math.max(1, Math.ceil(filteredEmpleados.length / POR_PAGINA));
+            const totalPaginas = Math.max(1, Math.ceil(totalEmpleados / POR_PAGINA));
             const paginaReal = Math.min(pagina, totalPaginas);
-            const inicio = (paginaReal - 1) * POR_PAGINA;
-            const empPagina = filteredEmpleados.slice(inicio, inicio + POR_PAGINA);
+            const inicio = totalEmpleados === 0 ? 0 : (paginaReal - 1) * POR_PAGINA;
+            const empPagina = filteredEmpleados;
 
             const btnPag = (activo: boolean): React.CSSProperties => ({
               padding: '5px 10px', border: '1px solid #d1d5db', borderRadius: '5px',
@@ -2188,7 +2285,9 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
             });
 
             return filteredEmpleados.length === 0 ? (
-              <p style={{ textAlign: 'center', color: '#888', padding: '40px 0' }}>No se encontraron empleados.</p>
+              <p style={{ textAlign: 'center', color: '#888', padding: '40px 0' }}>
+                {loadingLista ? 'Cargando...' : 'No se encontraron empleados.'}
+              </p>
             ) : isMobile ? (
               <>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -2226,7 +2325,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '14px', flexWrap: 'wrap', gap: '8px' }}>
                   <span style={{ fontSize: '0.82rem', color: '#6b7280' }}>
-                    {filteredEmpleados.length} · {inicio + 1}–{Math.min(inicio + POR_PAGINA, filteredEmpleados.length)}
+                    {totalEmpleados} · {inicio + 1}–{Math.min(inicio + POR_PAGINA, totalEmpleados)}
                   </span>
                   <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
                     <button style={{ ...btnPag(false), opacity: paginaReal === 1 ? 0.4 : 1 }} disabled={paginaReal === 1} onClick={() => setPagina(p => Math.max(1, p - 1))}>‹</button>
@@ -2270,7 +2369,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                 {/* Paginación */}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '14px', flexWrap: 'wrap', gap: '8px' }}>
                   <span style={{ fontSize: '0.82rem', color: '#6b7280' }}>
-                    {filteredEmpleados.length} empleado(s) · mostrando {inicio + 1}–{Math.min(inicio + POR_PAGINA, filteredEmpleados.length)}
+                    {totalEmpleados} empleado(s) · mostrando {inicio + 1}–{Math.min(inicio + POR_PAGINA, totalEmpleados)}
                   </span>
                   <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
                     <button style={{ ...btnPag(false), opacity: paginaReal === 1 ? 0.4 : 1 }} disabled={paginaReal === 1} onClick={() => setPagina(1)}>«</button>

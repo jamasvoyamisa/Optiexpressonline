@@ -134,7 +134,7 @@ function ChecadaChip({ c }: { c: DetalleChecada }) {
       <span>{c.hora} {TIPO_CHECADA[c.tipo] ?? c.tipo}</span>
       {label && (
         <span style={{ fontWeight: 500, fontSize: '0.68rem', opacity: 0.95 }}>
-          Portal: {label}
+          {label}
           {hasGeo && (
             <>
               {' · '}
