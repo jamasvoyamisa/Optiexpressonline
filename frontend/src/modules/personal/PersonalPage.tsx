@@ -616,11 +616,16 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
       candidatosParams.append('estado', 'activo');
       // Candidatos a gerente de depto: sí pueden incluir especiales (p. ej. dirección).
       candidatosParams.append('incluir_exentos', 'true');
+      // /asistencia/devices es solo admin: si falla (403 para RH), no debe tumbar
+      // el resto del listado (empleados/empresas/deptos) vía Promise.all.
       const [empRes, empStatsRes, empGerRes, devRes, emprsRes, deptosRes, puestosRes, horRes, catRes] = await Promise.all([
         api.get(`/personal/empleados?${params.toString()}`),
         api.get(`/personal/empleados?${statsParams.toString()}`),
         api.get(`/personal/empleados?${candidatosParams.toString()}`),
-        api.get('/asistencia/devices'),
+        (isAdmin
+          ? api.get('/asistencia/devices')
+          : Promise.resolve({ data: [] as Dispositivo[] })
+        ).catch(() => ({ data: [] as Dispositivo[] })),
         api.get('/personal/empresas?limit=500'),
         api.get('/personal/departamentos?limit=500'),
         api.get('/personal/puestos'), // sin activo = todos (para puestos tab); form filtra activos
@@ -630,7 +635,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
       setEmpleados(empRes.data);
       setEmpleadosParaStats(Array.isArray(empStatsRes.data) ? empStatsRes.data : []);
       setEmpleadosCandidatosGerente(Array.isArray(empGerRes.data) ? empGerRes.data : []);
-      setDispositivos(devRes.data);
+      setDispositivos(Array.isArray(devRes.data) ? devRes.data : []);
       setEmpresas(emprsRes.data);
       setDepartamentos(deptosRes.data);
       setPuestos(puestosRes.data);
@@ -651,7 +656,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
     } finally {
       setLoading(false);
     }
-  }, [search, filtroEstado, canEditNomina]);
+  }, [search, filtroEstado, canEditNomina, isAdmin]);
 
   useEffect(() => {
     if (!canEditNomina && formTab === 'nomina') setFormTab('personales');
