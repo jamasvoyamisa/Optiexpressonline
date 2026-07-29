@@ -2640,6 +2640,27 @@ def reporte_export_xlsx(
     # Etiqueta corta: usa siglas si están definidas, si no el nombre completo
     empresas_label = {em.id: (em.siglas.strip() if em.siglas and em.siglas.strip() else em.nombre) for em in _empresas_rows}
 
+    # Departamento raíz (nombre) por cada departamento_id: agrupa subdepartamentos con su padre
+    # para que la exportación no abra una pestaña/bloque separado por cada subdepto.
+    _padre_id_map: dict = {
+        d.id: d.padre_id
+        for d in db.query(pm.Departamento.id, pm.Departamento.padre_id).filter(pm.Departamento.id.in_(dep_ids)).all()
+    } if dep_ids else {}
+
+    def _depto_raiz_nombre(depto_id: Optional[int]) -> str:
+        """Nombre del departamento raíz (sube por padre_id); si no hay info, usa el propio."""
+        if not depto_id:
+            return ""
+        cur = depto_id
+        vistos: set = set()
+        while cur is not None and cur not in vistos:
+            vistos.add(cur)
+            padre = _padre_id_map.get(cur)
+            if padre is None:
+                break
+            cur = padre
+        return deptos_map.get(cur, deptos_map.get(depto_id, ""))
+
     # ── Datos ──
     dt_inicio_utc, _ = mexico_date_to_utc_range(fi)
     ff_end_utc, _ = mexico_date_to_utc_range(ff + timedelta(days=1))
@@ -2793,7 +2814,7 @@ def reporte_export_xlsx(
             grupos_detalle[depto_name].append(emp)
     elif empresa_id:
         for emp in empleados:
-            key = deptos_map.get(emp.departamento_id, "Sin Depto") if emp.departamento_id else "Sin Depto"
+            key = _depto_raiz_nombre(emp.departamento_id) or "Sin Depto"
             grupos_detalle[key].append(emp)
     else:
         for emp in empleados:

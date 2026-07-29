@@ -1,10 +1,8 @@
 // Avisos: imágenes de la carpeta images/Avisos/
-// Quiniela: al cambiar imagen, actualizar ruta aquí y el preload en index.html
+// Al cambiar imagen, actualizar ruta aquí y el preload en index.html
 const avisos = [
-    { imagen: 'images/Avisos/quiniela-20-julio.png', titulo: 'Quiniela Mundialista — España Campeón · Ganadores 20 julio', ampliar: true, destacado: true },
-    { imagen: 'images/Avisos/jornada-salud-22julio.png', titulo: 'Jornada de Salud y Servicios — 22 de julio', ampliar: true },
     { imagen: 'images/Avisos/correos-falsos.png', titulo: 'Precaución con los correos electrónicos falsos', ampliar: true },
-    { imagen: 'images/Avisos/cumpleaños-julio.jpeg', titulo: 'Cumpleaños julio' },
+    { imagen: 'images/Avisos/cumpleaños-agosto.png', titulo: 'Cumpleaños agosto' },
     { imagen: 'images/Avisos/dias-feriados-oficiales.jpg', titulo: 'Días Feriados Oficiales' },
     { imagen: 'images/Avisos/dias-feriados-no-oficiales.jpg', titulo: 'Días Feriados No Oficiales' }
 ];

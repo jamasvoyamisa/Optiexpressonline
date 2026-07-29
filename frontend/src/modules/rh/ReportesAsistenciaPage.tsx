@@ -19,7 +19,7 @@ import {
 const FILAS_POR_PAGINA = 25;
 
 interface Empresa { id: number; nombre: string; }
-interface Departamento { id: number; nombre: string; empresa_id: number; }
+interface Departamento { id: number; nombre: string; empresa_id: number; padre_id?: number | null; }
 
 interface ResumenEmpleado {
   empleado_id: number;
@@ -329,10 +329,15 @@ export const ReportesAsistenciaPage = ({ embeddedRh = false }: { embeddedRh?: bo
     }
   }, [fechaInicio, fechaFin, buscarConFechas]);
 
-  // Por defecto: mostrar quincena actual
+  // No se autogenera al entrar: solo se sugieren las fechas de la quincena actual.
+  // El usuario debe pulsar "Generar reporte" para no saturar la app innecesariamente.
   useEffect(() => {
     const q = quincenaActual();
-    buscarConFechas(q.fi, q.ff, q.label);
+    setQuinLabel(q.label);
+    setFiNominal(q.fi);
+    setFfNominal(q.ff);
+    setFechaInicio(q.fi);
+    setFechaFin(q.ff);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const cargarDetalle = async (emp: ResumenEmpleado, q: { fi: string; ff: string; label: string }) => {
@@ -492,7 +497,7 @@ export const ReportesAsistenciaPage = ({ embeddedRh = false }: { embeddedRh?: bo
             <label style={{ display: 'block', fontSize: '0.75rem', fontWeight: 600, color: '#6b7280', marginBottom: 4 }}>Departamento</label>
             <select value={filtroDepto} onChange={e => setFiltroDepto(e.target.value)} disabled={!filtroEmpresa} style={{ ...filterControlStyle, backgroundColor: !filtroEmpresa ? '#f9fafb' : 'white' }}>
               <option value="">Todos</option>
-              {deptos.map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}
+              {deptos.filter(d => !d.padre_id).map(d => <option key={d.id} value={d.id}>{d.nombre}</option>)}
             </select>
           </div>
           <div>
