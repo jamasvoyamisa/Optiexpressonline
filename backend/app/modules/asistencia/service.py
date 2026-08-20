@@ -881,6 +881,29 @@ class AsistenciaService:
         return {int(r[0]) for r in rows}
 
     @staticmethod
+    def _empresa_gestiona_descansos(empresa) -> bool:
+        return bool(empresa is not None and getattr(empresa, "gestiona_descansos_rotativos", False))
+
+    @staticmethod
+    def tiene_descanso_programado(db: Session, empleado_id: int, fecha_mex: date) -> bool:
+        return (
+            db.query(models.DescansoProgramado.id)
+            .filter(
+                models.DescansoProgramado.empleado_id == empleado_id,
+                models.DescansoProgramado.fecha == fecha_mex,
+            )
+            .first()
+            is not None
+        )
+
+    @staticmethod
+    def _checadas_fin_semana_empresa(empresa) -> int:
+        """Sáb/dom laborable: 4 si la empresa lo pide; si no, jornada corta (2)."""
+        if empresa is not None and bool(getattr(empresa, "fin_semana_4_checadas", False)):
+            return 4
+        return 2
+
+    @staticmethod
     def _checadas_requeridas_dia_horario(
         db: Session,
         empleado: personal_models.Empleado,
@@ -894,14 +917,35 @@ class AsistenciaService:
         if AsistenciaService.es_dia_festivo(db, fecha_mex) and not trabaja_festivos:
             return 0, "festivo"
 
+        if AsistenciaService._empresa_gestiona_descansos(empresa) and AsistenciaService.tiene_descanso_programado(
+            db, empleado.id, fecha_mex
+        ):
+            return 0, "descanso_programado"
+
         wd = fecha_mex.weekday()
         dia_num = wd + 1
         dias_laborales_emp = ((empleado.empresa.dias_laborales if empleado.empresa else None) or "lun-sab").strip().lower()
+        n_fs = AsistenciaService._checadas_fin_semana_empresa(empresa)
 
         if wd == 6:
-            if dias_laborales_emp == "lun-dom":
-                return 2, "domingo_laborable"
-            return 0, "domingo"
+            if dias_laborales_emp != "lun-dom":
+                return 0, "domingo"
+            if AsistenciaService._empresa_gestiona_descansos(empresa):
+                eh = (
+                    db.query(models.EmpleadoHorario)
+                    .filter(
+                        models.EmpleadoHorario.empleado_id == empleado.id,
+                        models.EmpleadoHorario.activo == True,
+                    )
+                    .first()
+                )
+                if eh and eh.horario and eh.horario.activo and eh.horario.dias_semana:
+                    dias_permitidos = [
+                        int(d.strip()) for d in eh.horario.dias_semana.split(",") if d.strip().isdigit()
+                    ]
+                    if dias_permitidos and 7 not in dias_permitidos:
+                        return 0, "no_laborable"
+            return n_fs, "domingo_laborable"
 
         eh = (
             db.query(models.EmpleadoHorario)
@@ -917,11 +961,14 @@ class AsistenciaService:
         horario = eh.horario
 
         if wd == 5:
-            # Empleado trabaja sábado si:
-            #   - Tiene empleado.horario_sabado_id (legacy), o
-            #   - Su horario L-V tiene hora_salida_sabado definida (modal actual).
+            # Prioridad: override "" = no sábado; override con hora; horario_sabado_id; hora del L-V.
             trabaja_sabado = False
-            if empleado.horario_sabado_id:
+            ov = getattr(eh, "hora_salida_sabado", None)
+            if ov is not None and str(ov).strip() == "":
+                return 0, "no_sabado"
+            if ov is not None and str(ov).strip():
+                trabaja_sabado = True
+            elif empleado.horario_sabado_id:
                 horario_sab = (
                     db.query(models.Horario)
                     .filter(
@@ -932,11 +979,11 @@ class AsistenciaService:
                 )
                 if horario_sab:
                     trabaja_sabado = True
-            if not trabaja_sabado and getattr(horario, "hora_salida_sabado", None):
+            elif getattr(horario, "hora_salida_sabado", None):
                 trabaja_sabado = True
             if not trabaja_sabado:
                 return 0, "no_sabado"
-            return 2, "sabado"
+            return n_fs, "sabado"
 
         if horario.dias_semana:
             dias_permitidos = [int(d.strip()) for d in horario.dias_semana.split(",") if d.strip().isdigit()]
@@ -990,7 +1037,8 @@ class AsistenciaService:
         ff_eval: date,
     ) -> Dict[int, int]:
         """
-        Día completo = checadas registradas >= requeridas (2 sáb/dom reducido, 4 entre semana).
+        Día completo = checadas registradas >= requeridas (2 sáb/dom reducido o 4 si
+        empresa.fin_semana_4_checadas; 4 entre semana).
         Alineado con generación de incidencias (_checadas_requeridas_dia_horario).
         """
         dias_completos: Dict[int, int] = {eid: 0 for eid in empleados_by_id}
@@ -1327,6 +1375,7 @@ class AsistenciaService:
             "sin_horario": "Sin horario asignado",
             "no_sabado": "Sin jornada de sábado",
             "no_laborable": "No laborable (horario)",
+            "descanso_programado": "Descanso programado",
             "checada_especial": "Horario / checada especial",
             "jornada_reducida": "Jornada reducida",
             "entre_semana": "Jornada entre semana",
@@ -1457,6 +1506,64 @@ class AsistenciaService:
             "detalle": detalle[:500],
         }
 
+    @staticmethod
+    def justificar_faltas_por_solicitud_vacaciones(
+        db: Session,
+        empleado_id: int,
+        fecha_inicio,
+        fecha_fin,
+        justificado_por_id: int,
+        solicitud_id: int,
+        do_commit: bool = True,
+    ) -> int:
+        """
+        Justifica faltas automáticas del empleado en el rango de la solicitud de vacaciones.
+        No reabre ni toca incompletas/retardos. Idempotente si ya estaban justificadas.
+        """
+        from app.core.timezone_utils import mexico_date_to_utc_range, to_mexico
+        from datetime import datetime as dt_cls
+
+        if isinstance(fecha_inicio, dt_cls):
+            fi = to_mexico(fecha_inicio)
+            fi = fi.date() if fi else fecha_inicio.date()
+        else:
+            fi = fecha_inicio
+        if isinstance(fecha_fin, dt_cls):
+            ff = to_mexico(fecha_fin)
+            ff = ff.date() if ff else fecha_fin.date()
+        else:
+            ff = fecha_fin
+        if ff < fi:
+            return 0
+
+        lo = mexico_date_to_utc_range(fi)[0]
+        hi = mexico_date_to_utc_range(ff)[1]
+        incs = (
+            db.query(models.Incidencia)
+            .filter(
+                models.Incidencia.empleado_id == empleado_id,
+                models.Incidencia.tipo == models.TipoIncidencia.FALTA,
+                models.Incidencia.origen == "automatico",
+                models.Incidencia.justificada == False,
+                models.Incidencia.fecha >= lo,
+                models.Incidencia.fecha < hi,
+            )
+            .all()
+        )
+        msg = f"Autojustificada por vacaciones solicitud #{solicitud_id}."
+        n = 0
+        for inc in incs:
+            inc.justificada = True
+            inc.justificado_por_id = justificado_por_id
+            if inc.comentarios and str(inc.comentarios).strip():
+                inc.comentarios = str(inc.comentarios).strip() + "\n" + msg
+            else:
+                inc.comentarios = msg
+            n += 1
+        if do_commit:
+            db.commit()
+        return n
+
     # ========== PROCESO DIARIO: FALTAS E INCOMPLETAS ==========
 
     @staticmethod
@@ -1554,17 +1661,26 @@ class AsistenciaService:
             if es_festivo_global and not trabaja_festivos_empresa:
                 continue
 
+            if AsistenciaService._empresa_gestiona_descansos(empresa) and AsistenciaService.tiene_descanso_programado(
+                db, asig.empleado_id, fecha
+            ):
+                continue
+
             # ── Sábado (dia_num == 6): lógica especial ──
             if dia_num == 6:
-                # Determinar si el empleado labora sábado y cuál es su salida efectiva.
                 # Prioridad:
-                #   1. empleado.horario_sabado_id → horario separado (legacy).
-                #   2. horario.hora_salida_sabado → columna del mismo horario L-V
-                #      (es como lo guarda el modal actual de crear/editar horario).
-                # Si ninguno define horario sabatino, el empleado NO labora sábados.
+                #   1. asig.hora_salida_sabado == "" → NO labora (Personal: sábados desmarcado).
+                #   2. asig.hora_salida_sabado con hora → override.
+                #   3. empleado.horario_sabado_id → horario separado (legacy).
+                #   4. horario.hora_salida_sabado → hereda del L-V (p. ej. General 14:00).
                 hora_salida_efectiva = None
                 tolerancia_efectiva = horario.tolerancia_minutos or 0
-                if empleado and empleado.horario_sabado_id:
+                ov = getattr(asig, "hora_salida_sabado", None)
+                if ov is not None and str(ov).strip() == "":
+                    continue
+                if ov is not None and str(ov).strip():
+                    hora_salida_efectiva = str(ov).strip()
+                elif empleado and empleado.horario_sabado_id:
                     horario_sab = db.query(models.Horario).filter(
                         models.Horario.id == empleado.horario_sabado_id,
                         models.Horario.activo == True,
@@ -1572,7 +1688,7 @@ class AsistenciaService:
                     if horario_sab:
                         hora_salida_efectiva = horario_sab.hora_salida_sabado or horario_sab.hora_salida
                         tolerancia_efectiva = horario_sab.tolerancia_minutos or 0
-                if hora_salida_efectiva is None and getattr(horario, "hora_salida_sabado", None):
+                elif getattr(horario, "hora_salida_sabado", None):
                     hora_salida_efectiva = horario.hora_salida_sabado
                 if hora_salida_efectiva is None:
                     continue
@@ -1580,7 +1696,13 @@ class AsistenciaService:
                 # Domingo: solo aplica para empresas configuradas como lun-dom.
                 if dias_laborales_empresa != "lun-dom":
                     continue
-                # Domingo se trata como jornada corta (2 checadas: entrada/salida).
+                # Con flag de descansos: respetar dias_semana del horario (admin sin domingo).
+                if AsistenciaService._empresa_gestiona_descansos(empresa) and horario.dias_semana:
+                    dias_permitidos = [
+                        int(d.strip()) for d in horario.dias_semana.split(",") if d.strip().isdigit()
+                    ]
+                    if dias_permitidos and 7 not in dias_permitidos:
+                        continue
                 hora_salida_efectiva = horario.hora_salida
                 tolerancia_efectiva = horario.tolerancia_minutos or 0
             else:
@@ -1604,8 +1726,11 @@ class AsistenciaService:
                 elif ce_pd.hora_salida:
                     hora_salida_efectiva = ce_pd.hora_salida
 
-            # Sábado y domingo laborable: 2 checadas (entrada + salida, sin comida)
-            checadas_requeridas = 2 if dia_num in (6, 7) else 4
+            # Sábado y domingo laborable: 2 checadas por defecto; 4 si la empresa lo configuró.
+            if dia_num in (6, 7):
+                checadas_requeridas = AsistenciaService._checadas_fin_semana_empresa(empresa)
+            else:
+                checadas_requeridas = 4
             if ce_pd and 1 <= dia_num <= 5 and ce_pd.checadas_requeridas is not None:
                 checadas_requeridas = int(ce_pd.checadas_requeridas)
             elif ce_pd and ce_pd.jornada_reducida_lv and 1 <= dia_num <= 5:
@@ -1944,3 +2069,83 @@ class AsistenciaService:
         db.delete(ce)
         db.commit()
         return True
+
+    # ── Descansos programados ──────────────────────────────────────────────
+
+    @staticmethod
+    def listar_descansos_programados(
+        db: Session,
+        fecha_inicio: date,
+        fecha_fin: date,
+        empleado_ids: Optional[List[int]] = None,
+    ) -> List[models.DescansoProgramado]:
+        q = db.query(models.DescansoProgramado).filter(
+            models.DescansoProgramado.fecha >= fecha_inicio,
+            models.DescansoProgramado.fecha <= fecha_fin,
+        )
+        if empleado_ids is not None:
+            if not empleado_ids:
+                return []
+            q = q.filter(models.DescansoProgramado.empleado_id.in_(empleado_ids))
+        return q.order_by(models.DescansoProgramado.fecha, models.DescansoProgramado.empleado_id).all()
+
+    @staticmethod
+    def reemplazar_descansos_semana(
+        db: Session,
+        fecha_inicio: date,
+        fecha_fin: date,
+        items: List[schemas.DescansoProgramadoItem],
+        creado_por_id: int,
+        empleado_ids_alcance: List[int],
+    ) -> List[models.DescansoProgramado]:
+        """
+        Borra descansos del rango para empleados en alcance y vuelve a insertar `items`
+        (solo los de empleados en alcance y fechas dentro del rango).
+        """
+        if fecha_fin < fecha_inicio:
+            raise ValueError("fecha_fin debe ser >= fecha_inicio")
+        alcance = set(int(x) for x in empleado_ids_alcance)
+        if not alcance:
+            return []
+
+        db.query(models.DescansoProgramado).filter(
+            models.DescansoProgramado.empleado_id.in_(list(alcance)),
+            models.DescansoProgramado.fecha >= fecha_inicio,
+            models.DescansoProgramado.fecha <= fecha_fin,
+        ).delete(synchronize_session=False)
+
+        vistos = set()
+        for it in items:
+            eid = int(it.empleado_id)
+            if eid not in alcance:
+                continue
+            if it.fecha < fecha_inicio or it.fecha > fecha_fin:
+                continue
+            key = (eid, it.fecha)
+            if key in vistos:
+                continue
+            vistos.add(key)
+            emp = db.query(personal_models.Empleado).filter(personal_models.Empleado.id == eid).first()
+            if not emp or not emp.empresa_id:
+                continue
+            empresa = (
+                db.query(personal_models.Empresa)
+                .filter(personal_models.Empresa.id == emp.empresa_id)
+                .first()
+            )
+            if not AsistenciaService._empresa_gestiona_descansos(empresa):
+                raise ValueError(
+                    f"El empleado {eid} pertenece a una empresa que no gestiona descansos rotativos."
+                )
+            db.add(
+                models.DescansoProgramado(
+                    empleado_id=eid,
+                    fecha=it.fecha,
+                    nota=(it.nota or None),
+                    creado_por_id=creado_por_id,
+                )
+            )
+        db.commit()
+        return AsistenciaService.listar_descansos_programados(
+            db, fecha_inicio, fecha_fin, empleado_ids=list(alcance)
+        )

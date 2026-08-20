@@ -4,6 +4,12 @@ import api from '../../services/api';
 import { toMexicoDateString } from '../../utils/date';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { useAuth } from '../../hooks/useAuth';
+import type { SolicitudVacaciones } from '../../types';
+import {
+  generarDocumentoVacaciones,
+  type EmpleadoResumenVacaciones,
+} from '../vacaciones/documentoVacaciones';
+import { AccionesDocumentoVacaciones } from '../vacaciones/AccionesDocumentoVacaciones';
 
 interface Solicitud {
   id: number;
@@ -19,6 +25,18 @@ interface Solicitud {
   fecha_aprobacion?: string | null;
   comentarios_aprobacion?: string | null;
   created_at: string;
+  aceptacion_solicitante_at?: string | null;
+  aceptacion_solicitante_ip?: string | null;
+  aceptacion_solicitante_texto?: string | null;
+  aceptacion_jefe_at?: string | null;
+  aceptacion_jefe_ip?: string | null;
+  aceptacion_rh_at?: string | null;
+  aceptacion_rh_ip?: string | null;
+  documento_firmado_ruta?: string | null;
+  documento_firmado_nombre?: string | null;
+  documento_firmado_at?: string | null;
+  documento_firmado_por_id?: number | null;
+  tiene_documento_firmado?: boolean;
 }
 
 interface PeriodoVacaciones {
@@ -113,10 +131,13 @@ export const MisVacacionesPage = () => {
   const [modalSolicitar, setModalSolicitar] = useState(false);
   const [modalRechazo, setModalRechazo] = useState<{ motivo: string | null; comentario: string | null } | null>(null);
   const [modalCancelar, setModalCancelar] = useState<Solicitud | null>(null);
+  const [loadingDoc, setLoadingDoc] = useState<number | null>(null);
   const [cancelando, setCancelando] = useState(false);
   // Festivos: Set de strings 'YYYY-MM-DD' activos, y mapa fecha→nombre
   const [festivosSet, setFestivosSet] = useState<Set<string>>(new Set());
   const [festivosNombre, setFestivosNombre] = useState<Record<string, string>>({});
+  /** Días pasados con falta elegible para vacaciones retroactivas (ventana 7 días). */
+  const [faltasRetroSet, setFaltasRetroSet] = useState<Set<string>>(new Set());
 
   const loadFestivos = (year: number) => {
     api.get<DiaFestivo[]>(`/asistencia/festivos?año=${year}&solo_activos=true`)
@@ -126,6 +147,16 @@ export const MisVacacionesPage = () => {
         setFestivosNombre(Object.fromEntries(arr.map(f => [f.fecha, f.nombre])));
       })
       .catch(() => {});
+  };
+
+  const loadFaltasRetro = () => {
+    api
+      .get<{ fechas: string[] }>('/vacaciones/mis-faltas-retroactivas')
+      .then((res) => {
+        const fechas = Array.isArray(res.data?.fechas) ? res.data.fechas : [];
+        setFaltasRetroSet(new Set(fechas));
+      })
+      .catch(() => setFaltasRetroSet(new Set()));
   };
 
   const load = () => {
@@ -145,6 +176,7 @@ export const MisVacacionesPage = () => {
         setBalance(null);
       })
       .finally(() => setLoading(false));
+    loadFaltasRetro();
   };
 
   useEffect(() => {
@@ -207,7 +239,8 @@ export const MisVacacionesPage = () => {
 
   const handleDayClick = (iso: string, isSundayDay: boolean, isPastDay: boolean, isTomado: boolean) => {
     if (!puedeElegirFechasEnCalendario) return;
-    if (isSundayDay || isPastDay || isTomado) return;
+    const pastOk = isPastDay && faltasRetroSet.has(iso);
+    if (isSundayDay || (isPastDay && !pastOk) || isTomado) return;
     if (!rangeStart) {
       setRangeStart(iso);
       setRangeEnd(null);
@@ -320,6 +353,96 @@ export const MisVacacionesPage = () => {
       })
       .catch(err => alert(err.response?.data?.detail || 'Error al cancelar la solicitud'))
       .finally(() => setCancelando(false));
+  };
+
+  const empDesdeAuth = (): EmpleadoResumenVacaciones | null => {
+    if (!authMe) return null;
+    return {
+      id: authMe.id,
+      nombre: authMe.nombre,
+      apellido_paterno: authMe.apellido_paterno,
+      apellido_materno: authMe.apellido_materno,
+      numero_empleado: authMe.numero_empleado,
+      fecha_ingreso: authMe.fecha_ingreso ?? null,
+      departamento: authMe.departamentos?.[0]
+        ? { id: authMe.departamentos[0].id, nombre: authMe.departamentos[0].nombre }
+        : null,
+    };
+  };
+
+  const verDocumento = async (sol: Solicitud) => {
+    const w = window.open('', '_blank', 'width=820,height=920,scrollbars=yes');
+    if (!w) {
+      alert('Permite ventanas emergentes para ver el documento');
+      return;
+    }
+    w.document.write(
+      '<html><body style="font-family:system-ui;padding:40px;text-align:center;color:#666">Cargando documento...</body></html>',
+    );
+    setLoadingDoc(sol.id);
+    const payload = sol as SolicitudVacaciones;
+    try {
+      const res = await api.get<EmpleadoResumenVacaciones>(`/personal/empleados/${sol.empleado_id}`);
+      generarDocumentoVacaciones(payload, res.data, w);
+    } catch {
+      generarDocumentoVacaciones(payload, empDesdeAuth(), w);
+    } finally {
+      setLoadingDoc(null);
+    }
+  };
+
+  const patchSolicitudDoc = (updated: Partial<Solicitud> & { id: number }) => {
+    setSolicitudes((prev) =>
+      prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s)),
+    );
+  };
+
+  const accionesDoc = (s: Solicitud, mobile: boolean) => (
+    <AccionesDocumentoVacaciones
+      solicitud={s}
+      loadingPlantilla={loadingDoc === s.id}
+      onVerPlantilla={() => verDocumento(s)}
+      onActualizado={(u) => patchSolicitudDoc({ ...s, ...u })}
+      permitirSubida={authMe?.vacaciones_pdf_firmado_habilitado === true}
+      compact={!mobile}
+      btnStyle={mobile ? btnDocMobile : btnDocDesktop}
+      btnUploadStyle={
+        mobile
+          ? {
+              ...btnDocMobile,
+              backgroundColor: '#ccfbf1',
+              color: '#0f766e',
+              border: '1px solid #5eead4',
+            }
+          : {
+              ...btnDocDesktop,
+              backgroundColor: '#0f766e',
+            }
+      }
+    />
+  );
+
+  const btnDocMobile: React.CSSProperties = {
+    padding: '6px 14px',
+    backgroundColor: '#e0f2fe',
+    color: '#0369a1',
+    border: '1px solid #7dd3fc',
+    borderRadius: 20,
+    cursor: 'pointer',
+    fontSize: '0.78rem',
+    fontWeight: 700,
+  };
+
+  const btnDocDesktop: React.CSSProperties = {
+    padding: '4px 10px',
+    backgroundColor: '#0369a1',
+    color: 'white',
+    border: 'none',
+    borderRadius: 5,
+    cursor: 'pointer',
+    fontSize: '0.78rem',
+    fontWeight: 600,
+    whiteSpace: 'nowrap',
   };
 
   const sheetOverlay: React.CSSProperties = { position: 'fixed', inset: 0, zIndex: 100, backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: isMobile ? 'flex-end' : 'center', justifyContent: 'center' };
@@ -490,10 +613,13 @@ export const MisVacacionesPage = () => {
                         <div style={{ fontSize: '0.65rem', color: '#94a3b8' }}>días</div>
                       </div>
                     </div>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 12px', borderRadius: 20, fontSize: '0.75rem', fontWeight: 700,
                       backgroundColor: completada ? '#d1fae5' : '#e0f2fe', color: completada ? '#065f46' : '#0369a1' }}>
                       {completada ? '✅ Completada' : '📅 Programada'}
                     </span>
+                    {accionesDoc(s, true)}
+                    </div>
                   </div>
                 );
               })}
@@ -510,6 +636,7 @@ export const MisVacacionesPage = () => {
                     <th style={th}>Fecha autorización</th>
                     <th style={th}>Comentarios</th>
                     <th style={{ ...th, textAlign: 'center' }}>Estado</th>
+                    <th style={{ ...th, textAlign: 'center' }}>Documento</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -533,6 +660,9 @@ export const MisVacacionesPage = () => {
                           ? <span style={{ backgroundColor: '#d1fae5', color: '#065f46', borderRadius: 5, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 600, whiteSpace: 'nowrap' }}>Completada</span>
                           : <span style={{ backgroundColor: '#e0f2fe', color: '#0369a1', borderRadius: 5, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 600, whiteSpace: 'nowrap' }}>Programada</span>
                         }
+                      </td>
+                      <td style={{ ...td, textAlign: 'center' }}>
+                        {accionesDoc(s, false)}
                       </td>
                     </tr>
                     );
@@ -582,6 +712,7 @@ export const MisVacacionesPage = () => {
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '4px 12px', borderRadius: 20, fontSize: '0.75rem', fontWeight: 700, backgroundColor: estadoInfo.bg, color: estadoInfo.color }}>
                         {estadoInfo.label}
                       </span>
+                      {accionesDoc(s, true)}
                       {s.estado === 'rechazada' && (
                         <button onClick={() => setModalRechazo({ motivo: s.motivo ?? null, comentario: s.comentarios_aprobacion ?? null })}
                           style={{ padding: '6px 14px', backgroundColor: '#fee2e2', color: '#991b1b', border: '1px solid #fca5a5', borderRadius: 20, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 700 }}>
@@ -625,7 +756,8 @@ export const MisVacacionesPage = () => {
                         {s.estado === 'rechazada' && <span style={{ backgroundColor: '#fee2e2', color: '#991b1b', borderRadius: 5, padding: '3px 10px', fontSize: '0.78rem', fontWeight: 600, whiteSpace: 'nowrap' }}>Rechazada</span>}
                       </td>
                       <td style={{ ...td, textAlign: 'center' }}>
-                        <div style={{ display: 'flex', gap: '6px', justifyContent: 'center', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', gap: '6px', justifyContent: 'center', alignItems: 'center', flexWrap: 'wrap' }}>
+                          {accionesDoc(s, false)}
                           {s.estado === 'rechazada' && (
                             <button onClick={() => setModalRechazo({ motivo: s.motivo ?? null, comentario: s.comentarios_aprobacion ?? null })}
                               style={{ padding: '4px 10px', backgroundColor: '#fee2e2', color: '#991b1b', border: '1px solid #fca5a5', borderRadius: 5, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600 }}>
@@ -638,7 +770,6 @@ export const MisVacacionesPage = () => {
                               Cancelar
                             </button>
                           )}
-                          {s.estado !== 'rechazada' && s.estado !== 'pendiente' && <span style={{ color: '#d1d5db' }}>—</span>}
                         </div>
                       </td>
                     </tr>
@@ -670,6 +801,10 @@ export const MisVacacionesPage = () => {
               </button>
             )}
           </div>
+          <p style={{ margin: '0 0 12px', fontSize: '0.82rem', color: '#64748b', lineHeight: 1.4 }}>
+            Los días en ámbar son faltas de los últimos 7 días: puedes solicitarlos como vacaciones.
+            Al autorizar el jefe se descuenta el saldo y se justifica la falta automáticamente.
+          </p>
 
           {/* Navegación: flechas al lado del mes, grupo centrado */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '12px', marginBottom: '12px' }}>
@@ -735,45 +870,68 @@ export const MisVacacionesPage = () => {
                 const iso = toISO(new Date(calYear, calMonth, day));
                 const sun = isSunday(calYear, calMonth, day);
                 const past = isPast(iso);
+                const pastConFalta = past && faltasRetroSet.has(iso);
                 const yaTomado = isDiaTomado(iso);
                 const esFestivo = festivosSet.has(iso);
                 const festivoNombre = festivosNombre[iso] ?? null;
-                // Festivos y domingos son no elegibles (no se pueden seleccionar)
-                const noElegible = sun || past || yaTomado || esFestivo || !puedeElegirFechasEnCalendario;
+                // Festivos y domingos no elegibles; pasado solo si hay falta en ventana de 7 días
+                const noElegible = sun || (past && !pastConFalta) || yaTomado || esFestivo || !puedeElegirFechasEnCalendario;
                 const inRange = isInRange(iso);
                 const mexicoLabel = festivoNombre ?? getMexicoLabel(calMonth, day);
 
-                // Colores: festivo (naranja), pasado (gris), domingo (violeta), ya tomado (azul), en rango (verde), normal
+                // Colores: festivo (naranja), pasado con falta (ámbar), pasado (gris), domingo (violeta), ya tomado (azul), en rango (verde), normal
                 const bg =
-                  past
-                    ? '#f3f4f6'
-                    : esFestivo
-                      ? '#fff7ed'
-                      : sun
-                        ? '#f5f3ff'
-                        : yaTomado
-                          ? '#e0f2fe'
-                          : inRange
-                            ? '#dcfce7'
-                            : '#fff';
+                  pastConFalta && !inRange
+                    ? '#fef3c7'
+                    : past
+                      ? '#f3f4f6'
+                      : esFestivo
+                        ? '#fff7ed'
+                        : sun
+                          ? '#f5f3ff'
+                          : yaTomado
+                            ? '#e0f2fe'
+                            : inRange
+                              ? '#dcfce7'
+                              : '#fff';
                 const fg =
-                  past
+                  pastConFalta && !inRange
+                    ? '#92400e'
+                    : past
+                      ? '#9ca3af'
+                      : esFestivo
+                        ? '#c2410c'
+                        : sun
+                          ? '#8b7fa8'
+                          : yaTomado
+                            ? '#0369a1'
+                            : inRange
+                              ? '#15803d'
+                              : '#1f2937';
+                const labelColor = pastConFalta && !inRange
+                  ? '#b45309'
+                  : past
                     ? '#9ca3af'
                     : esFestivo
-                      ? '#c2410c'
+                      ? '#ea580c'
                       : sun
                         ? '#8b7fa8'
                         : yaTomado
-                          ? '#0369a1'
+                          ? '#1e3a8a'
                           : inRange
                             ? '#15803d'
-                            : '#1f2937';
-                const labelColor = past ? '#9ca3af' : esFestivo ? '#ea580c' : sun ? '#8b7fa8' : yaTomado ? '#1e3a8a' : inRange ? '#15803d' : '#6b7280';
+                            : '#6b7280';
                 return (
                   <button
                     key={iso}
                     type="button"
-                    title={mexicoLabel ? (esFestivo ? `🎉 ${mexicoLabel}` : mexicoLabel) : undefined}
+                    title={
+                      pastConFalta
+                        ? 'Día con falta: puedes solicitarlo como vacaciones (máx. 7 días)'
+                        : mexicoLabel
+                          ? (esFestivo ? `🎉 ${mexicoLabel}` : mexicoLabel)
+                          : undefined
+                    }
                     onClick={() => handleDayClick(iso, sun, past, yaTomado || esFestivo)}
                     disabled={noElegible}
                     style={{

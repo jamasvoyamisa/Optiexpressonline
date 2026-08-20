@@ -233,6 +233,20 @@ class DiaFestivo(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
 
+class DescansoProgramado(Base):
+    """Día de descanso asignado a un empleado (solo empresas con gestiona_descansos_rotativos)."""
+
+    __tablename__ = "descansos_programados"
+    __table_args__ = (UniqueConstraint("empleado_id", "fecha", name="uq_descanso_empleado_fecha"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    empleado_id = Column(Integer, ForeignKey("empleados.id"), nullable=False, index=True)
+    fecha = Column(Date, nullable=False, index=True)
+    nota = Column(String(255), nullable=True)
+    creado_por_id = Column(Integer, ForeignKey("empleados.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
 class ChecadaEspecial(Base):
     """
     Reglas de horario y tolerancia para fechas concretas (medio día, jornadas especiales, sábado distinto).

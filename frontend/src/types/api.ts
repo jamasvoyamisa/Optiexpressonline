@@ -103,6 +103,8 @@ export interface EmpresaResponse {
   checadas_remotas?: boolean;
   dias_laborales?: 'lun-sab' | 'lun-dom';
   trabaja_festivos?: boolean;
+  fin_semana_4_checadas?: boolean;
+  gestiona_descansos_rotativos?: boolean;
   rango_inicio?: number | null;
   rango_fin?: number | null;
   created_at?: string;
@@ -127,6 +129,8 @@ export interface EmpresaCreate {
   checadas_remotas?: boolean;
   dias_laborales?: 'lun-sab' | 'lun-dom';
   trabaja_festivos?: boolean;
+  fin_semana_4_checadas?: boolean;
+  gestiona_descansos_rotativos?: boolean;
 }
 
 export interface EmpresaUpdate {
@@ -148,6 +152,8 @@ export interface EmpresaUpdate {
   checadas_remotas?: boolean;
   dias_laborales?: 'lun-sab' | 'lun-dom';
   trabaja_festivos?: boolean;
+  fin_semana_4_checadas?: boolean;
+  gestiona_descansos_rotativos?: boolean;
 }
 
 export interface UsuarioEspecialCreate {
@@ -344,6 +350,10 @@ export interface EmpleadoResponse {
   horario_sabado_id?: number | null;
   exento_incidencias?: boolean;
   puede_checar_remoto?: boolean;
+  /** Bloqueo anti-fuerza bruta (intentos fallidos de login). */
+  cuenta_bloqueada?: boolean;
+  login_bloqueado_hasta?: string | null;
+  login_fallos_consecutivos?: number;
   created_at?: string;
   updated_at?: string | null;
   empresa?: EmpresaResponse | null;

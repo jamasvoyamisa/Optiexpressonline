@@ -76,11 +76,16 @@ const fmtPartes = (fecha: string) => {
   };
 };
 
-export const generarDocumentoPrestamo = (
+export type GenerarDocumentoPrestamoOpts = {
+  /** Data URL temporal (PNG/JPEG). No se persiste; solo se incrusta en el PDF de esta solicitud. */
+  firmaSolicitanteDataUrl?: string | null;
+};
+
+export function buildHtmlDocumentoPrestamo(
   sol: SolicitudPrestamoDoc,
   emp: EmpleadoDoc | null,
-  targetWindow?: Window | null
-) => {
+  opts?: GenerarDocumentoPrestamoOpts,
+): string {
   const hoy = fmtPartes(new Date().toISOString().slice(0, 10));
   const esBorrador = sol.estado === 'pendiente';
   const refBancaria = val(sol.referencia_bancaria);
@@ -88,9 +93,19 @@ export const generarDocumentoPrestamo = (
     ? fmtPartes(sol.fecha_deposito.includes('T') ? sol.fecha_deposito : sol.fecha_deposito + 'T12:00:00')
     : null;
   const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
-
-  // nombreCompleto no se usa directamente (los campos se inyectan por separado en el HTML)
-  // const nombreCompleto = emp ? [emp.apellido_paterno, emp.apellido_materno, emp.nombre].filter(Boolean).join(' ') : '';
+  const firmaUrl = (opts?.firmaSolicitanteDataUrl || '').trim();
+  const tieneFirma = Boolean(firmaUrl) && /^data:image\/(png|jpeg|jpg);base64,/i.test(firmaUrl);
+  const nombreSolicitante = emp
+    ? [emp.nombre, emp.apellido_paterno, emp.apellido_materno].filter(Boolean).join(' ')
+    : '';
+  const bloqueFirmaSolicitante = tieneFirma
+    ? `<img class="firma-img" src="${firmaUrl}" alt="Firma" />
+      ${nombreSolicitante ? `<div class="firma-nombre">${val(nombreSolicitante)}</div>` : ''}
+      <div class="firma-small-label">NOMBRE Y FIRMA</div>
+      <div class="firma-cargo">Solicitante</div>`
+    : `<div class="firma-line-h"></div>
+      <div class="firma-small-label">NOMBRE Y FIRMA</div>
+      <div class="firma-cargo">Solicitante</div>`;
 
   const html = `<!DOCTYPE html>
 <html lang="es">
@@ -332,6 +347,13 @@ export const generarDocumentoPrestamo = (
     width: 100%;
     border-top: 1px solid #555;
     margin-bottom: 5px;
+  }
+  .firma-img {
+    max-height: 52px;
+    max-width: 100%;
+    object-fit: contain;
+    margin-bottom: 4px;
+    display: block;
   }
   .firma-nombre {
     font-size: 10pt;
@@ -578,9 +600,7 @@ export const generarDocumentoPrestamo = (
   <!-- ── Firmas (3 columnas) ── -->
   <div class="firmas-top">
     <div class="firma-col">
-      <div class="firma-line-h"></div>
-      <div class="firma-small-label">NOMBRE Y FIRMA</div>
-      <div class="firma-cargo">Solicitante</div>
+      ${bloqueFirmaSolicitante}
     </div>
     <div class="firma-col">
       <div class="firma-line-h"></div>
@@ -607,6 +627,17 @@ export const generarDocumentoPrestamo = (
 </body>
 </html>`;
 
+  return html;
+}
+
+export const generarDocumentoPrestamo = (
+  sol: SolicitudPrestamoDoc,
+  emp: EmpleadoDoc | null,
+  targetWindow?: Window | null,
+  opts?: GenerarDocumentoPrestamoOpts,
+) => {
+  const html = buildHtmlDocumentoPrestamo(sol, emp, opts);
+
   // Ancho: A4 (794px) + padding body (0) + borde + sombra + scrollbar ≈ 870px
   // Alto: limitado al 90% de la pantalla disponible; el documento se desplaza si no entra
   const screenH = typeof window !== 'undefined' ? Math.round(window.screen.availHeight * 0.9) : 950;
@@ -624,3 +655,65 @@ export const generarDocumentoPrestamo = (
     } catch (_) { /* algunos navegadores bloquean moveTo */ }
   }
 };
+
+/** Genera un Blob PDF con la firma incrustada (solo en memoria; no guarda la imagen). */
+export async function generarPdfPrestamoConFirma(
+  sol: SolicitudPrestamoDoc,
+  emp: EmpleadoDoc | null,
+  firmaSolicitanteDataUrl: string,
+): Promise<Blob> {
+  const { toPng } = await import('html-to-image');
+  const { jsPDF } = await import('jspdf');
+
+  const html = buildHtmlDocumentoPrestamo(sol, emp, { firmaSolicitanteDataUrl });
+  const iframe = document.createElement('iframe');
+  iframe.setAttribute('aria-hidden', 'true');
+  iframe.style.cssText = 'position:fixed;left:-10000px;top:0;width:900px;height:1400px;opacity:0;pointer-events:none;border:0;';
+  document.body.appendChild(iframe);
+
+  try {
+    const doc = iframe.contentDocument;
+    if (!doc) throw new Error('No se pudo preparar el documento para PDF.');
+    doc.open();
+    doc.write(html);
+    doc.close();
+
+    await new Promise<void>((resolve) => {
+      const imgs = Array.from(doc.images || []);
+      if (imgs.length === 0) {
+        resolve();
+        return;
+      }
+      let left = imgs.length;
+      const done = () => {
+        left -= 1;
+        if (left <= 0) resolve();
+      };
+      imgs.forEach((img) => {
+        if (img.complete) done();
+        else {
+          img.onload = done;
+          img.onerror = done;
+        }
+      });
+      setTimeout(resolve, 4000);
+    });
+
+    const page = doc.querySelector('.page') as HTMLElement | null;
+    if (!page) throw new Error('No se encontró la página del documento.');
+
+    const dataUrl = await toPng(page, {
+      cacheBust: true,
+      pixelRatio: 2,
+      backgroundColor: '#ffffff',
+    });
+
+    const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    pdf.addImage(dataUrl, 'PNG', 0, 0, pageW, pageH);
+    return pdf.output('blob');
+  } finally {
+    iframe.remove();
+  }
+}

@@ -49,6 +49,7 @@ def on_startup():
     from app.modules.soporte import models as _sm      # noqa: F401 – registra la tabla
     from app.modules.audit import models as _audit_m  # noqa: F401 – actividad_log
     from app.modules.nomina import models as _nom_m   # noqa: F401 – nómina
+    from app.core import sistema_flags as _sf  # noqa: F401 – sistema_flags
     from app.core.security import get_password_hash
 
     Base.metadata.create_all(bind=engine)

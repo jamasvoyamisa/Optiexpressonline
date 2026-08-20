@@ -37,6 +37,11 @@ class Empresa(Base):
     dias_laborales = Column(String(20), nullable=False, default="lun-sab")
     # Si True, la empresa labora en días festivos del calendario global.
     trabaja_festivos = Column(Boolean, nullable=False, default=False)
+    # Si True, sáb/dom laborables exigen 4 checadas (con comida), como entre semana.
+    # Default False = jornada corta de fin de semana (entrada + salida).
+    fin_semana_4_checadas = Column(Boolean, nullable=False, default=False)
+    # Solo Optivisión/COF u otras lun-dom con rotación: descansos por fecha + domingo según horario.
+    gestiona_descansos_rotativos = Column(Boolean, nullable=False, default=False)
     siglas = Column(String(20), nullable=True)
     rango_inicio = Column(Integer, nullable=True)
     rango_fin = Column(Integer, nullable=True)

@@ -42,11 +42,18 @@ class SolicitudVacaciones(Base):
     aceptacion_rh_at = Column(DateTime(timezone=True), nullable=True)
     aceptacion_rh_ip = Column(String(64), nullable=True)
     rh_confirmador_id = Column(Integer, ForeignKey("empleados.id"), nullable=True)
+
+    # PDF firmado (escaneo / documento firmado en papel), sustituye la plantilla generada en UI
+    documento_firmado_ruta = Column(String(500), nullable=True)
+    documento_firmado_nombre = Column(String(255), nullable=True)
+    documento_firmado_at = Column(DateTime(timezone=True), nullable=True)
+    documento_firmado_por_id = Column(Integer, ForeignKey("empleados.id"), nullable=True)
     
     # Relaciones
     empleado = relationship("Empleado", foreign_keys=[empleado_id], backref="solicitudes_vacaciones")
     jefe_aprobador = relationship("Empleado", foreign_keys=[jefe_aprobador_id])
     rh_confirmador = relationship("Empleado", foreign_keys=[rh_confirmador_id])
+    documento_firmado_por = relationship("Empleado", foreign_keys=[documento_firmado_por_id])
 
 
 class BalanceVacaciones(Base):

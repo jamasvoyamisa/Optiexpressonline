@@ -14,7 +14,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { ChecadaMiniGrid } from '../../components/asistencia/ChecadaMiniGrid';
 import { canAccessNomina } from '../../config/features';
-import { Empleado, EmpleadoCreate, Dispositivo, Asistencia, EmpresaResponse, DepartamentoResponse, PuestoResponse, SolicitudVacaciones } from '../../types';
+import { Empleado, EmpleadoCreate, EmpleadoResponse, Dispositivo, Asistencia, EmpresaResponse, DepartamentoResponse, PuestoResponse, SolicitudVacaciones } from '../../types';
 import {
   rhMobileCard,
   rhMobileCardRow,
@@ -454,6 +454,8 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
   const isAdmin = authMe?.is_superuser === true;
   const isRH = authMe?.is_rh === true;
   const canExport = isAdmin || isRH;
+  /** Admin o RH: enroll/réplica/alta en checadores (como antes del endurecimiento solo-Admin). */
+  const canManageHuella = isAdmin || isRH;
   /** Solo administrador: módulo nómina (no RH). */
   const canEditNomina = canAccessNomina(isAdmin);
   const [mainTab, setMainTab] = useState<'empleados' | 'departamentos' | 'puestos'>('empleados');
@@ -639,7 +641,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
         api.get('/personal/puestos'),
         api.get('/asistencia/horarios?activo=true'),
         (canEditNomina ? api.get('/nomina/catalogos') : Promise.resolve({ data: null })).catch(() => ({ data: null })),
-        (isAdmin
+        (canManageHuella
           ? api.get('/asistencia/devices')
           : Promise.resolve({ data: [] as Dispositivo[] })
         ).catch(() => ({ data: [] as Dispositivo[] })),
@@ -663,7 +665,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
     } catch (error) {
       console.error('Error al cargar catálogos:', error);
     }
-  }, [canEditNomina, isAdmin]);
+  }, [canEditNomina, canManageHuella]);
 
   const loadConteos = useCallback(async () => {
     try {
@@ -1187,6 +1189,27 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
       const err = error as { response?: { data?: { detail?: string } } };
       alert(err.response?.data?.detail || 'No se pudo restablecer la contraseña');
     }
+  };
+
+  const desbloquearCuenta = async (empleadoId: number, nombreLabel: string) => {
+    if (!isAdmin) return;
+    if (!window.confirm(`¿Desbloquear el acceso de ${nombreLabel}?\nSe limpia el bloqueo por intentos fallidos de contraseña.`)) return;
+    try {
+      const res = await api.post<EmpleadoResponse>(`/personal/empleados/${empleadoId}/desbloquear-cuenta`);
+      const updated = res.data;
+      setEmpleados((prev) => prev.map((e) => (e.id === updated.id ? { ...e, ...updated } : e)));
+      setSelectedEmpleado((prev) => (prev && prev.id === updated.id ? { ...prev, ...updated } : prev));
+      alert('Cuenta desbloqueada. Ya puede intentar iniciar sesión.');
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { detail?: string } } };
+      alert(err.response?.data?.detail || 'No se pudo desbloquear la cuenta');
+    }
+  };
+
+  const formEstadoBloqueado = (empleadoId: number | null | undefined): boolean => {
+    if (!empleadoId) return false;
+    const emp = empleados.find((e) => e.id === empleadoId) || selectedEmpleado;
+    return emp?.id === empleadoId && emp?.cuenta_bloqueada === true;
   };
 
   const copiarPasswordTemporal = async () => {
@@ -2718,8 +2741,27 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                                 Restablecer temporal
                               </button>
                             )}
+                            {isAdmin && (
+                              <button
+                                type="button"
+                                onClick={() => desbloquearCuenta(
+                                  editingId,
+                                  `${form.nombre} ${form.apellido_paterno || ''}`.trim(),
+                                )}
+                                style={{
+                                  ...btnSecondary,
+                                  width: '100%',
+                                  height: 38,
+                                  marginTop: 8,
+                                  borderColor: formEstadoBloqueado(editingId) ? '#f59e0b' : undefined,
+                                  color: formEstadoBloqueado(editingId) ? '#b45309' : undefined,
+                                }}
+                              >
+                                {formEstadoBloqueado(editingId) ? 'Desbloquear cuenta (bloqueada)' : 'Desbloquear cuenta'}
+                              </button>
+                            )}
                             <p style={{ margin: '6px 0 0', fontSize: '0.75rem', color: '#6b7280' }}>
-                              RH/Admin no fijan la clave definitiva. Solo restablecen una temporal.
+                              RH/Admin no fijan la clave definitiva. Solo restablecen una temporal. Desbloqueo solo Admin.
                             </p>
                           </>
                         ) : (
@@ -2980,6 +3022,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                     Checadores
                   </button>
                 )}
+                {canManageHuella && (
                 <button style={detTabStyle(detalleTab === 'huella')} onClick={() => {
                   setDetalleTab('huella');
                   setAvisoReRegistro(null);
@@ -2989,6 +3032,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                 }}>
                   Huella
                 </button>
+                )}
               </div>
 
               {/* Área de contenido con scroll */}
@@ -3603,6 +3647,25 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
                                 Solo el colaborador define su contraseña definitiva.
                               </p>
                             )}
+                            {isAdmin && (
+                              <button
+                                type="button"
+                                onClick={() => desbloquearCuenta(
+                                  emp.id,
+                                  `${emp.nombre} ${emp.apellido_paterno || ''}`.trim(),
+                                )}
+                                style={{
+                                  ...btnSecondary,
+                                  width: '100%',
+                                  height: 38,
+                                  marginTop: 8,
+                                  borderColor: emp.cuenta_bloqueada ? '#f59e0b' : undefined,
+                                  color: emp.cuenta_bloqueada ? '#b45309' : undefined,
+                                }}
+                              >
+                                {emp.cuenta_bloqueada ? 'Desbloquear cuenta (bloqueada)' : 'Desbloquear cuenta'}
+                              </button>
+                            )}
                           </div>
                           {isAdmin && (
                             <div style={{ display: 'flex', alignItems: 'flex-start', paddingTop: '2px' }}>
@@ -3671,7 +3734,7 @@ export const PersonalPage = ({ hideImport = false, embeddedRh = false }: Persona
               )}
 
               {/* ── TAB: HUELLA ── */}
-              {detalleTab === 'huella' && (
+              {detalleTab === 'huella' && canManageHuella && (
                 <div>
                   {empleadoDispositivos.some(d => d.pending_delete_id != null) && (
                     <div style={{ padding: '12px 14px', borderRadius: '8px', marginBottom: '16px', backgroundColor: '#fef3c7', border: '1px solid #fde68a', display: 'flex', alignItems: 'center', gap: '10px' }}>

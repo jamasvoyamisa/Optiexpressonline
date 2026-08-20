@@ -18,6 +18,8 @@ import {
   rhMobileTabPill,
   rhMobileTabScroll,
 } from '../rh/rhMobileStyles';
+import { generarDocumentoVacaciones } from '../vacaciones/documentoVacaciones';
+import { AccionesDocumentoVacaciones } from '../vacaciones/AccionesDocumentoVacaciones';
 
 type TipoIncidencia = 'retardo' | 'falta' | 'completa' | 'horas_extra' | 'salida_anticipada' | 'incompleta';
 type TipoChecada = 'entrada' | 'salida' | 'salida_comer' | 'regreso_comer';
@@ -58,6 +60,11 @@ interface SolicitudVacaciones {
   fecha_aprobacion?: string | null;
   comentarios_aprobacion?: string | null;
   created_at: string;
+  documento_firmado_ruta?: string | null;
+  documento_firmado_nombre?: string | null;
+  documento_firmado_at?: string | null;
+  documento_firmado_por_id?: number | null;
+  tiene_documento_firmado?: boolean;
 }
 
 interface SolicitudPrestamo {
@@ -119,6 +126,7 @@ interface AuthMe {
   puede_ver_mi_area?: boolean;
   departamentos: { id: number; nombre: string }[];
   departamentos_que_administro?: { id: number; nombre: string }[];
+  vacaciones_pdf_firmado_habilitado?: boolean;
 }
 
 const tipoLabels: Record<string, string> = {
@@ -461,6 +469,7 @@ export const MiAreaPage = () => {
   const [loadingVacaciones, setLoadingVacaciones] = useState(false);
   const [filtroEstadoVacaciones, setFiltroEstadoVacaciones] = useState<string>('pendientes');
   const [modalAprobar, setModalAprobar] = useState<SolicitudVacaciones | null>(null);
+  const [loadingDocVac, setLoadingDocVac] = useState<number | null>(null);
   const [aprobacionComentarios, setAprobacionComentarios] = useState('');
   const [aprobacionAcepto, setAprobacionAcepto] = useState(false);
   const [aprobacionPassword, setAprobacionPassword] = useState('');
@@ -579,7 +588,7 @@ export const MiAreaPage = () => {
     const deptosAdmin = authMe?.departamentos_que_administro ?? authMe?.departamentos ?? [];
     const isSuperuser = authMe?.is_superuser === true;
     if (isSuperuser) {
-      const params: Record<string, string | number> = { limit: 1000 };
+      const params: Record<string, string | number> = { limit: 1000, estado: 'activo' };
       if (areaFiltroAdmin != null) params.departamento_id = areaFiltroAdmin;
       api
         .get<EmpleadoArea[]>('/personal/empleados', { params })
@@ -603,7 +612,7 @@ export const MiAreaPage = () => {
     Promise.all(
       deptosAdmin.map((d) =>
         api
-          .get<EmpleadoArea[]>('/personal/empleados', { params: { departamento_id: d.id, limit: 200 } })
+          .get<EmpleadoArea[]>('/personal/empleados', { params: { departamento_id: d.id, limit: 200, estado: 'activo' } })
           .then((r) => (Array.isArray(r.data) ? r.data : (r.data as { results?: EmpleadoArea[] })?.results ?? []))
           .catch(() => [] as EmpleadoArea[])
       )
@@ -778,7 +787,7 @@ export const MiAreaPage = () => {
       if (!cancelled) setLoadingAsistEmpleados(false);
     };
     if (isSuperuser) {
-      const params: Record<string, string | number> = { limit: 1000 };
+      const params: Record<string, string | number> = { limit: 1000, estado: 'activo' };
       if (areaFiltroAdmin != null) params.departamento_id = areaFiltroAdmin;
       api
         .get<EmpleadoArea[]>('/personal/empleados', { params })
@@ -805,7 +814,7 @@ export const MiAreaPage = () => {
     Promise.all(
       deptosAdmin.map((d) =>
         api
-          .get<EmpleadoArea[]>('/personal/empleados', { params: { departamento_id: d.id, limit: 200 } })
+          .get<EmpleadoArea[]>('/personal/empleados', { params: { departamento_id: d.id, limit: 200, estado: 'activo' } })
           .then((r) => (Array.isArray(r.data) ? r.data : (r.data as { results?: EmpleadoArea[] })?.results ?? []))
           .catch(() => [] as EmpleadoArea[]),
       ),
@@ -1088,6 +1097,13 @@ export const MiAreaPage = () => {
     api.patch(`/asistencia/incidencias/${modalIncidencia.id}`, {
       justificada, comentarios: justificarComentarios.trim() || null,
     }).then(() => { loadIncidencias(); setModalIncidencia(null); })
+      .catch((err) => {
+        const detail = err.response?.data?.detail;
+        const msg = typeof detail === 'string'
+          ? detail
+          : (Array.isArray(detail) ? detail.map((d: { msg?: string }) => d?.msg).filter(Boolean).join(' ') : null);
+        alert(msg || err.message || 'No se pudo guardar la justificación');
+      })
       .finally(() => setSaving(false));
   };
 
@@ -1117,6 +1133,24 @@ export const MiAreaPage = () => {
       })
       .catch((err) => alert(err.response?.data?.detail ?? err.message ?? 'Error al aprobar o rechazar'))
       .finally(() => setAprobando(false));
+  };
+
+  const verDocumentoVacaciones = async (sol: SolicitudVacaciones) => {
+    setLoadingDocVac(sol.id);
+    try {
+      const r = await api.get(`/personal/empleados/${sol.empleado_id}`);
+      generarDocumentoVacaciones(sol, r.data);
+    } catch {
+      generarDocumentoVacaciones(sol, null);
+    } finally {
+      setLoadingDocVac(null);
+    }
+  };
+
+  const patchSolicitudVacDoc = (updated: Partial<SolicitudVacaciones> & { id: number }) => {
+    setSolicitudesVacaciones((prev) =>
+      prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s)),
+    );
   };
 
   const handleAprobarRechazarPrestamo = (aprobar: boolean) => {
@@ -1958,7 +1992,8 @@ export const MiAreaPage = () => {
             >
               <option value="pendientes">Pendientes de mi aprobación</option>
               <option value="todas">Todas</option>
-              <option value="aprobada">Aprobadas</option>
+              <option value="aprobada_jefe">Aprobadas por jefe</option>
+              <option value="aprobada">Aprobadas (RH)</option>
               <option value="rechazada">Rechazadas</option>
             </select>
             <button
@@ -1995,6 +2030,15 @@ export const MiAreaPage = () => {
                       Aprobar / Rechazar
                     </button>
                   )}
+                  <div style={{ marginTop: 10 }}>
+                    <AccionesDocumentoVacaciones
+                      solicitud={s}
+                      loadingPlantilla={loadingDocVac === s.id}
+                      onVerPlantilla={() => verDocumentoVacaciones(s)}
+                      onActualizado={(u) => patchSolicitudVacDoc({ ...s, ...u })}
+                      permitirSubida={authMe?.vacaciones_pdf_firmado_habilitado === true}
+                    />
+                  </div>
                 </div>
               ))}
             </div>
@@ -2023,18 +2067,28 @@ export const MiAreaPage = () => {
                       <td style={{ ...td, textAlign: 'center' }}>
                         <span style={{ fontWeight: 600, fontSize: '0.85rem',
                           color: s.estado === 'aprobada' ? '#15803d' : s.estado === 'rechazada' ? '#b91c1c' : '#b45309' }}>
-                          {s.estado === 'pendiente' ? 'Pendiente' : s.estado === 'aprobada' ? 'Aprobada' : s.estado === 'rechazada' ? 'Rechazada' : s.estado}
+                          {s.estado === 'pendiente' ? 'Pendiente' : s.estado === 'aprobada' ? 'Aprobada' : s.estado === 'rechazada' ? 'Rechazada' : s.estado === 'aprobada_jefe' ? 'Aprobada jefe' : s.estado}
                         </span>
                       </td>
                       <td style={{ ...td, textAlign: 'center' }}>
-                        {s.estado === 'pendiente' && (
-                          <button
-                            onClick={() => { setModalAprobar(s); setAprobacionComentarios(''); setAprobacionAcepto(false); setAprobacionPassword(''); }}
-                            style={{ padding: '5px 12px', backgroundColor: '#0d9488', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.82rem' }}
-                          >
-                            Aprobar / Rechazar
-                          </button>
-                        )}
+                        <div style={{ display: 'flex', gap: 6, justifyContent: 'center', flexWrap: 'wrap', alignItems: 'center' }}>
+                          {s.estado === 'pendiente' && (
+                            <button
+                              onClick={() => { setModalAprobar(s); setAprobacionComentarios(''); setAprobacionAcepto(false); setAprobacionPassword(''); }}
+                              style={{ padding: '5px 12px', backgroundColor: '#0d9488', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '0.82rem' }}
+                            >
+                              Aprobar / Rechazar
+                            </button>
+                          )}
+                          <AccionesDocumentoVacaciones
+                            solicitud={s}
+                            loadingPlantilla={loadingDocVac === s.id}
+                            onVerPlantilla={() => verDocumentoVacaciones(s)}
+                            onActualizado={(u) => patchSolicitudVacDoc({ ...s, ...u })}
+                            permitirSubida={authMe?.vacaciones_pdf_firmado_habilitado === true}
+                            compact
+                          />
+                        </div>
                       </td>
                     </tr>
                   ))}

@@ -9,6 +9,7 @@ import { OrganigramaPage } from './modules/rh/OrganigramaPage';
 import { AsistenciaPage } from './modules/asistencia/AsistenciaPage';
 import { MiAreaPage } from './modules/mi-area/MiAreaPage';
 import ChecadasEspecialesPage from './modules/mi-area/ChecadasEspecialesPage';
+import DescansosProgramadosPage from './modules/asistencia/DescansosProgramadosPage';
 import { SolicitudesVacacionesAprobarPage } from './modules/vacaciones/SolicitudesVacacionesAprobarPage';
 import { ConfiguracionPage } from './modules/configuracion/ConfiguracionPage';
 import { SoporteTicketsPage } from './modules/soporte/SoporteTicketsPage';
@@ -132,6 +133,16 @@ function App() {
               <ProtectedRoute require="superuser">
                 <Layout>
                   <ChecadasEspecialesPage />
+                </Layout>
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/descansos-programados"
+            element={
+              <ProtectedRoute require="organigrama">
+                <Layout>
+                  <DescansosProgramadosPage />
                 </Layout>
               </ProtectedRoute>
             }

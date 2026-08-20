@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field
 from typing import Optional, List, Literal
 from datetime import datetime, date
 from decimal import Decimal
@@ -63,10 +63,19 @@ class SolicitudVacacionesResponse(SolicitudVacacionesBase):
     aceptacion_rh_at: Optional[datetime] = None
     aceptacion_rh_ip: Optional[str] = None
     rh_confirmador_id: Optional[int] = None
+    # PDF firmado subido (si hay, la UI oculta la plantilla generada)
+    documento_firmado_ruta: Optional[str] = None
+    documento_firmado_nombre: Optional[str] = None
+    documento_firmado_at: Optional[datetime] = None
+    documento_firmado_por_id: Optional[int] = None
+
+    @computed_field
+    @property
+    def tiene_documento_firmado(self) -> bool:
+        return bool((self.documento_firmado_ruta or "").strip())
 
     class Config:
         from_attributes = True
-
 
 # Schemas para BalanceVacaciones
 class BalanceVacacionesBase(BaseModel):

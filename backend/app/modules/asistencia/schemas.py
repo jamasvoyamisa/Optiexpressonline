@@ -176,6 +176,15 @@ class DispositivoResponse(DispositivoBase):
     created_at: datetime
     updated_at: Optional[datetime] = None
 
+    @field_serializer("ultima_sync_agente", "created_at", "updated_at")
+    def serialize_dispositivo_datetime_mexico(self, dt: Optional[datetime]):
+        """UTC en BD → ISO con offset México (evita que el front muestre ~6 h de más)."""
+        if dt is None:
+            return None
+        from app.core.timezone_utils import to_mexico
+        ts_mex = to_mexico(dt) or dt
+        return ts_mex.isoformat()
+
     class Config:
         from_attributes = True
 
@@ -478,6 +487,33 @@ class ChecadaEspecialResponse(BaseModel):
     alcance_legacy: Optional[str] = None
     empresa_id_legacy: Optional[int] = None
     departamento_id_legacy: Optional[int] = None
+
+    class Config:
+        from_attributes = True
+
+# -- Descansos programados (empresas con gestiona_descansos_rotativos) --
+
+class DescansoProgramadoItem(BaseModel):
+    empleado_id: int
+    fecha: date
+    nota: Optional[str] = None
+
+
+class DescansosProgramadosBatch(BaseModel):
+    """Reemplazo de descansos: borra rango para empleado_ids y reinserta items."""
+    fecha_inicio: date
+    fecha_fin: date
+    empleado_ids: List[int] = Field(default_factory=list)
+    items: List[DescansoProgramadoItem] = Field(default_factory=list)
+
+
+class DescansoProgramadoResponse(BaseModel):
+    id: int
+    empleado_id: int
+    fecha: date
+    nota: Optional[str] = None
+    creado_por_id: Optional[int] = None
+    created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True

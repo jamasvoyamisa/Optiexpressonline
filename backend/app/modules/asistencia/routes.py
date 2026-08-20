@@ -100,7 +100,7 @@ def create_dispositivo(dispositivo: schemas.DispositivoCreate, db: Session = Dep
     return service.AsistenciaService.create_dispositivo(db, dispositivo)
 
 
-@router.get("/devices", response_model=List[schemas.DispositivoResponse], dependencies=[Depends(require_superuser)])
+@router.get("/devices", response_model=List[schemas.DispositivoResponse], dependencies=[Depends(require_superuser_or_rh)])
 def get_dispositivos(
     activo: Optional[bool] = None,
     db: Session = Depends(get_db)
@@ -163,7 +163,7 @@ def test_real_device_connection(device_id: int, db: Session = Depends(get_db)):
     return result
 
 
-@router.post("/devices/{device_id}/enqueue-user", response_model=schemas.UsuarioPendienteResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_superuser)])
+@router.post("/devices/{device_id}/enqueue-user", response_model=schemas.UsuarioPendienteResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_superuser_or_rh)])
 def enqueue_user(
     device_id: int,
     data: schemas.EnqueueUserRequest,
@@ -176,7 +176,7 @@ def enqueue_user(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
-@router.post("/enqueue-user-multi", dependencies=[Depends(require_superuser)])
+@router.post("/enqueue-user-multi", dependencies=[Depends(require_superuser_or_rh)])
 def enqueue_user_multi(
     data: schemas.EnqueueUserRequest,
     dispositivo_ids: List[int] = Query(..., description="IDs de dispositivos destino"),
@@ -193,7 +193,7 @@ def enqueue_user_multi(
     return {"results": results}
 
 
-@router.post("/devices/{device_id}/enqueue-replicate", response_model=schemas.PendingReplicateResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_superuser)])
+@router.post("/devices/{device_id}/enqueue-replicate", response_model=schemas.PendingReplicateResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_superuser_or_rh)])
 def enqueue_replicate(
     device_id: int,
     data: schemas.EnqueueReplicateRequest,
@@ -347,7 +347,7 @@ def get_pending_users(
     return service.AsistenciaService.get_pending_users(db, device_id, include_sent=include_sent)
 
 
-@router.post("/devices/{device_id}/start-enroll", response_model=schemas.PendingEnrollResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_superuser)])
+@router.post("/devices/{device_id}/start-enroll", response_model=schemas.PendingEnrollResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_superuser_or_rh)])
 def start_enroll(
     device_id: int,
     data: schemas.StartEnrollRequest,
@@ -366,7 +366,7 @@ def start_enroll(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
-@router.get("/devices/{device_id}/enroll-status/{enroll_id}", response_model=schemas.PendingEnrollResponse, dependencies=[Depends(require_superuser)])
+@router.get("/devices/{device_id}/enroll-status/{enroll_id}", response_model=schemas.PendingEnrollResponse, dependencies=[Depends(require_superuser_or_rh)])
 def get_enroll_status(
     device_id: int,
     enroll_id: int,
@@ -387,7 +387,7 @@ def get_enroll_status(
 @router.get(
     "/empleados/{empleado_id}/dispositivos",
     response_model=List[schemas.EmpleadoDispositivoEstado],
-    dependencies=[Depends(require_superuser)],
+    dependencies=[Depends(require_superuser_or_rh)],
 )
 def get_empleado_dispositivos(empleado_id: int, db: Session = Depends(get_db)):
     """
@@ -514,7 +514,7 @@ def get_empleado_dispositivos(empleado_id: int, db: Session = Depends(get_db)):
     return result
 
 
-@router.post("/devices/{device_id}/queue-delete", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_superuser)])
+@router.post("/devices/{device_id}/queue-delete", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_superuser_or_rh)])
 def queue_delete_user(
     device_id: int,
     data: schemas.QueueDeleteRequest,
@@ -1714,8 +1714,10 @@ def update_incidencia(
 ):
     """
     Actualizar incidencia (justificada, comentarios).
-    Gerente: puede justificar incidencias de empleados y supervisores de su área.
-    Supervisor: puede justificar solo incidencias de empleados (no de supervisores).
+    Puede justificar quien:
+    - es aprobador del área (jefe en cadena / gerente / supervisor del depto), o
+    - administra el departamento del empleado (jefe, encargado, etc.; misma regla que listar mi-área).
+    Supervisor (solo): puede justificar empleados, no incidencias de supervisores/gerentes.
     """
     inc = service.AsistenciaService.get_incidencia(db, incidencia_id)
     if not inc:
@@ -1728,16 +1730,16 @@ def update_incidencia(
         ).filter(personal_models.Empleado.id == inc.empleado_id).first()
         aprobadores = personal_service.PersonalService.get_ids_aprobadores_area(db, empleado.departamento_id if empleado else None)
         depto_ids_admin = current_extra.get("departamento_ids_que_administro") or []
-        gg_puede_justificar_su_area = (
-            current_extra.get("is_gerente_general") is True
-            and empleado
-            and empleado.departamento_id
+        # Alineado a GET /incidencias/mi-area: quien ve el área (incl. encargados) puede justificar.
+        admin_puede_justificar_su_area = (
+            empleado is not None
+            and empleado.departamento_id is not None
             and empleado.departamento_id in depto_ids_admin
         )
-        if current_id not in aprobadores and not gg_puede_justificar_su_area:
+        if current_id not in aprobadores and not admin_puede_justificar_su_area:
             raise HTTPException(
                 status_code=403,
-                detail="Solo el gerente o supervisor del área del empleado puede justificar esta incidencia"
+                detail="Solo el gerente, supervisor o encargado del área del empleado puede justificar esta incidencia"
             )
         # Supervisor solo puede justificar empleados; gerente puede justificar empleados y supervisores
         empleado_puesto = (empleado.puesto_rel.nombre or "").strip().lower() if (empleado and empleado.puesto_rel) else ""
@@ -2159,7 +2161,82 @@ def eliminar_checada_especial(
     )
 
 
+# ========== DESCANSOS PROGRAMADOS ==========
+
+@router.get("/descansos-programados", response_model=List[schemas.DescansoProgramadoResponse])
+def listar_descansos_programados(
+    fecha_inicio: date = Query(...),
+    fecha_fin: date = Query(...),
+    empresa_id: Optional[int] = None,
+    departamento_id: Optional[int] = None,
+    db: Session = Depends(get_db),
+    current: dict = Depends(get_current_empleado_with_rol),
+):
+    """Lista descansos en el rango. Admin/RH/Director o jefe de área."""
+    from app.modules.personal import models as pm
+
+    puede_amplio = bool(
+        current.get("is_superuser") or current.get("is_rh") or current.get("is_director")
+    )
+    depto_ids = list(current.get("departamento_ids_que_administro") or [])
+    if not puede_amplio and not depto_ids:
+        raise HTTPException(status_code=403, detail="Sin permiso para ver descansos programados")
+
+    q = db.query(pm.Empleado).filter(pm.Empleado.estado == pm.EstadoEmpleado.ACTIVO)
+    if empresa_id:
+        q = q.filter(pm.Empleado.empresa_id == empresa_id)
+    if departamento_id:
+        q = q.filter(pm.Empleado.departamento_id == departamento_id)
+    if not puede_amplio:
+        q = q.filter(pm.Empleado.departamento_id.in_(depto_ids))
+    emp_ids = [e.id for e in q.all()]
+    return service.AsistenciaService.listar_descansos_programados(db, fecha_inicio, fecha_fin, emp_ids)
+
+
+@router.put("/descansos-programados", response_model=List[schemas.DescansoProgramadoResponse])
+def guardar_descansos_programados(
+    body: schemas.DescansosProgramadosBatch,
+    db: Session = Depends(get_db),
+    current: dict = Depends(get_current_empleado_with_rol),
+):
+    """Reemplaza descansos del rango para empleado_ids. Admin/RH/Director o jefe de area."""
+    from app.modules.personal import models as pm
+
+    puede_amplio = bool(
+        current.get("is_superuser") or current.get("is_rh") or current.get("is_director")
+    )
+    depto_ids = list(current.get("departamento_ids_que_administro") or [])
+    if not puede_amplio and not depto_ids:
+        raise HTTPException(status_code=403, detail="Sin permiso para editar descansos programados")
+
+    ids = list({int(x) for x in (getattr(body, "empleado_ids", None) or [])})
+    if not ids:
+        ids = list({int(i.empleado_id) for i in body.items})
+    if not ids:
+        return []
+
+    q = db.query(pm.Empleado).filter(pm.Empleado.id.in_(ids))
+    if not puede_amplio:
+        q = q.filter(pm.Empleado.departamento_id.in_(depto_ids))
+    alcance = [e.id for e in q.all()]
+    if not alcance:
+        raise HTTPException(status_code=403, detail="Ningun empleado del lote esta en tu alcance")
+
+    try:
+        return service.AsistenciaService.reemplazar_descansos_semana(
+            db,
+            fecha_inicio=body.fecha_inicio,
+            fecha_fin=body.fecha_fin,
+            items=body.items,
+            creado_por_id=int(current["user_id"]),
+            empleado_ids_alcance=alcance,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 # ========== REPORTES ==========
+
 
 @router.get("/reporte-resumen")
 def reporte_resumen_asistencia(

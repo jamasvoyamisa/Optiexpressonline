@@ -1,8 +1,8 @@
 from decimal import Decimal
 
-from pydantic import BaseModel, EmailStr, field_validator, Field
+from pydantic import BaseModel, EmailStr, field_validator, Field, computed_field
 from typing import Optional, List, Literal, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from .models import EstadoEmpleado
 from .regimen_fiscal_sat import is_valid_regimen_fiscal
 
@@ -26,6 +26,8 @@ class EmpresaBase(BaseModel):
     telefono: Optional[str] = None
     dias_laborales: Literal["lun-sab", "lun-dom"] = "lun-sab"
     trabaja_festivos: bool = False
+    fin_semana_4_checadas: bool = False
+    gestiona_descansos_rotativos: bool = False
 
     @field_validator(
         "rfc",
@@ -95,6 +97,8 @@ class EmpresaUpdate(BaseModel):
     checadas_remotas: Optional[bool] = None
     dias_laborales: Optional[Literal["lun-sab", "lun-dom"]] = None
     trabaja_festivos: Optional[bool] = None
+    fin_semana_4_checadas: Optional[bool] = None
+    gestiona_descansos_rotativos: Optional[bool] = None
 
     @field_validator(
         "rfc",
@@ -147,6 +151,8 @@ class EmpresaResponse(EmpresaBase):
     checadas_remotas: bool = False
     dias_laborales: Literal["lun-sab", "lun-dom"] = "lun-sab"
     trabaja_festivos: bool = False
+    fin_semana_4_checadas: bool = False
+    gestiona_descansos_rotativos: bool = False
     rango_inicio: Optional[int] = None
     rango_fin: Optional[int] = None
     created_at: datetime
@@ -385,6 +391,8 @@ class EmpleadoResponse(EmpleadoBase):
     horario_sabado_id: Optional[int] = None  # Horario sábado (None = no labora sábados)
     exento_incidencias: bool = False
     puede_checar_remoto: bool = False
+    login_bloqueado_hasta: Optional[datetime] = None
+    login_fallos_consecutivos: int = 0
     created_at: datetime
     updated_at: Optional[datetime] = None
     rol: Optional[RolResponse] = None
@@ -393,6 +401,17 @@ class EmpleadoResponse(EmpleadoBase):
     departamento: Optional[DepartamentoResponse] = None
     puesto: Optional[PuestoResponse] = None
     empresas_supervisadas_ids: Optional[List[int]] = None
+
+    @computed_field
+    @property
+    def cuenta_bloqueada(self) -> bool:
+        until = self.login_bloqueado_hasta
+        if until is None:
+            return False
+        now = datetime.now(timezone.utc)
+        if getattr(until, "tzinfo", None) is None:
+            until = until.replace(tzinfo=timezone.utc)
+        return until > now
 
     @field_validator("estado", mode="before")
     @classmethod

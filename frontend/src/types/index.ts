@@ -70,4 +70,10 @@ export interface SolicitudVacaciones {
   aceptacion_rh_at?: string | null;
   aceptacion_rh_ip?: string | null;
   rh_confirmador_id?: number | null;
+  /** PDF firmado en disco; si existe, la UI oculta la plantilla HTML. */
+  documento_firmado_ruta?: string | null;
+  documento_firmado_nombre?: string | null;
+  documento_firmado_at?: string | null;
+  documento_firmado_por_id?: number | null;
+  tiene_documento_firmado?: boolean;
 }

@@ -75,7 +75,8 @@ class SyncService:
     def _determinar_tipo(db: Session, empleado_id: int, timestamp: datetime) -> tuple:
         """Auto-asigna tipo segun cuantas checadas tiene el empleado ese dia (en hora México).
         Lunes a viernes: entrada, salida_comer, regreso_comer, salida (4 checadas).
-        Sabado/Domingo: entrada, salida (2 checadas).
+        Sabado/Domingo: entrada + salida (2) por defecto; 4 si la empresa tiene
+        fin_semana_4_checadas.
         Returns (TipoChecada, es_tiempo_extra)
         """
         ts_mex = to_mexico(timestamp) or timestamp
@@ -107,7 +108,12 @@ class SyncService:
         elif ce and ce.jornada_reducida_lv and dia_semana < 5:
             secuencia = TIPO_FIN_SEMANA
         elif es_fin_semana:
-            secuencia = TIPO_FIN_SEMANA
+            fin4 = bool(
+                empleado_row
+                and empleado_row.empresa
+                and getattr(empleado_row.empresa, "fin_semana_4_checadas", False)
+            )
+            secuencia = TIPO_LUNES_VIERNES if fin4 else TIPO_FIN_SEMANA
         else:
             secuencia = TIPO_LUNES_VIERNES
 
@@ -180,7 +186,12 @@ class SyncService:
         elif ce and ce.jornada_reducida_lv and dia_semana < 5:
             requeridas = 2
         elif es_fin_semana:
-            requeridas = 2
+            fin4 = bool(
+                empleado_row
+                and empleado_row.empresa
+                and getattr(empleado_row.empresa, "fin_semana_4_checadas", False)
+            )
+            requeridas = 4 if fin4 else 2
         else:
             requeridas = 4
 

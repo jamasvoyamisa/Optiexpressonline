@@ -100,17 +100,33 @@ def tiempos_incidencia_entrada_salida(
     tol = horario_lv.tolerancia_minutos or 0
 
     # ── Sábado (wd == 5) ──
-    # Prioridad para determinar horario sabatino:
-    #   1. empleado.horario_sabado_id → horario separado (legacy).
-    #   2. horario_lv.hora_salida_sabado → columna del mismo horario L-V
-    #      (es como lo guarda el modal actual de crear/editar horario).
-    #   3. EmpleadoHorario.hora_salida_sabado → override a nivel asignación.
-    # Si ninguno define horario de sábado (y tampoco hay checada especial),
-    # el empleado NO trabaja sábados y no se debe generar incidencia.
+    # Prioridad:
+    #   1. EmpleadoHorario.hora_salida_sabado == "" → NO trabaja sábado (Personal desmarcado).
+    #   2. EmpleadoHorario.hora_salida_sabado con hora → override de salida.
+    #   3. empleado.horario_sabado_id → horario separado (legacy).
+    #   4. horario_lv.hora_salida_sabado → hereda del horario L-V (p. ej. General).
+    # Si ninguno aplica (y no hay checada especial), no hay incidencia sabatina.
     if wd == 5:
         trabaja_sabado = False
-
-        if empleado and empleado.horario_sabado_id:
+        eh = (
+            db.query(asistencia_models.EmpleadoHorario)
+            .filter(
+                asistencia_models.EmpleadoHorario.empleado_id == empleado_id,
+                asistencia_models.EmpleadoHorario.activo == True,
+            )
+            .first()
+        )
+        ov = getattr(eh, "hora_salida_sabado", None) if eh else None
+        if ov is not None and str(ov).strip() == "":
+            ce_define_sabado = bool(
+                ce and (ce.hora_salida_sabado or ce.hora_entrada_sabado or ce.hora_salida or ce.hora_entrada)
+            )
+            if not ce_define_sabado:
+                return None, None, 0
+        elif ov is not None and str(ov).strip():
+            h_sal = str(ov).strip()
+            trabaja_sabado = True
+        elif empleado and empleado.horario_sabado_id:
             hs = (
                 db.query(asistencia_models.Horario)
                 .filter(
@@ -124,21 +140,8 @@ def tiempos_incidencia_entrada_salida(
                 h_sal = hs.hora_salida_sabado or hs.hora_salida
                 tol = hs.tolerancia_minutos or 0
                 trabaja_sabado = True
-
-        if not trabaja_sabado and getattr(horario_lv, "hora_salida_sabado", None):
+        elif getattr(horario_lv, "hora_salida_sabado", None):
             h_sal = horario_lv.hora_salida_sabado
-            trabaja_sabado = True
-
-        eh = (
-            db.query(asistencia_models.EmpleadoHorario)
-            .filter(
-                asistencia_models.EmpleadoHorario.empleado_id == empleado_id,
-                asistencia_models.EmpleadoHorario.activo == True,
-            )
-            .first()
-        )
-        if eh and getattr(eh, "hora_salida_sabado", None):
-            h_sal = eh.hora_salida_sabado
             trabaja_sabado = True
 
         ce_define_sabado = bool(
@@ -153,6 +156,11 @@ def tiempos_incidencia_entrada_salida(
         if empleado and empleado.empresa:
             dias_lab = (empleado.empresa.dias_laborales or "lun-sab").strip().lower()
         if dias_lab == "lun-dom":
+            gestiona = bool(getattr(empleado.empresa, "gestiona_descansos_rotativos", False)) if empleado.empresa else False
+            if gestiona and horario_lv.dias_semana:
+                dias_ok = [int(d.strip()) for d in horario_lv.dias_semana.split(",") if d.strip().isdigit()]
+                if dias_ok and 7 not in dias_ok and not ce:
+                    return None, None, 0
             h_ent = horario_lv.hora_entrada
             h_sal = horario_lv.hora_salida
             tol = horario_lv.tolerancia_minutos or 0

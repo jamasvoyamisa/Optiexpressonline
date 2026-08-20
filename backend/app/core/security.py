@@ -138,6 +138,14 @@ async def _validate_token(token: str, db: Session) -> dict:
     if emp is None:
         raise credentials_exception
 
+    from app.core.login_protection import empleado_acceso_habilitado, MSG_ACCESO_DESHABILITADO
+    if not empleado_acceso_habilitado(emp):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=MSG_ACCESO_DESHABILITADO,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
     # Bloqueo temporal opcional: limita acceso solo a Administrador/Gerente/Supervisor.
     if settings.LOGIN_MAINTENANCE_RESTRICTED:
         allowed = False

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, computed_field
 from typing import Optional
 from datetime import datetime
 from decimal import Decimal
@@ -111,11 +111,20 @@ class SolicitudPrestamoResponse(BaseModel):
     referencia_bancaria: Optional[str] = None
     fecha_deposito: Optional[datetime] = None
     fecha_confirmacion_rh: Optional[datetime] = None
+    documento_firmado_ruta: Optional[str] = None
+    documento_firmado_nombre: Optional[str] = None
+    documento_firmado_at: Optional[datetime] = None
+    documento_firmado_por_id: Optional[int] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
     empleado: Optional[EmpleadoResumen] = None
     aprobador: Optional[EmpleadoResumen] = None
     saldo_restante: Optional[Decimal] = None  # calculado en backend (quincenas día 15 y fin de mes)
+
+    @computed_field
+    @property
+    def tiene_documento_firmado(self) -> bool:
+        return bool((self.documento_firmado_ruta or "").strip())
 
     class Config:
         from_attributes = True

@@ -1,7 +1,8 @@
 import logging
 from datetime import datetime as dt
 from decimal import Decimal
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request, UploadFile, File
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from app.core.database import get_db
@@ -14,6 +15,7 @@ from app.modules.audit.service import ActividadService
 from app.modules.personal import models as personal_models
 
 from . import schemas, service
+from .models import EstadoSolicitud
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +166,22 @@ def create_solicitud(solicitud: schemas.SolicitudVacacionesCreate, db: Session =
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e)
         )
+
+
+@router.get("/mis-faltas-retroactivas")
+def mis_faltas_retroactivas(
+    current: dict = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Fechas (YYYY-MM-DD) con falta automática injustificada en los últimos 7 días.
+    Sirven para solicitar vacaciones retroactivas desde el calendario.
+    """
+    empleado_id = int(current["user_id"])
+    return {
+        "fechas": service.VacacionesService.listar_fechas_faltas_retroactivas_elegibles(db, empleado_id),
+        "ventana_dias": service.VENTANA_DIAS_VACACIONES_RETROACTIVAS,
+    }
 
 
 @router.get("/mis-solicitudes", response_model=List[schemas.SolicitudVacacionesResponse])
@@ -373,6 +391,123 @@ def cancelar_mi_solicitud(
         return result
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+def _assert_acceso_documento_firmado(db: Session, solicitud, current: dict) -> None:
+    if not service.VacacionesService.puede_gestionar_documento_firmado(db, solicitud, current):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes permiso para gestionar el documento firmado de esta solicitud.",
+        )
+
+
+@router.get("/config/pdf-firmado")
+def get_pdf_firmado_config(
+    current: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db),
+):
+    """Estado del interruptor: subida de PDF firmado (solo Admin lo cambia)."""
+    from app.core.sistema_flags import vacaciones_pdf_firmado_habilitado
+
+    return {"habilitado": vacaciones_pdf_firmado_habilitado(db)}
+
+
+@router.put("/config/pdf-firmado")
+def set_pdf_firmado_config(
+    body: dict,
+    current: dict = Depends(require_superuser),
+    db: Session = Depends(get_db),
+):
+    """Admin activa o desactiva la subida de PDF firmado en vacaciones."""
+    from app.core.sistema_flags import (
+        FLAG_VACACIONES_PDF_FIRMADO,
+        set_flag_bool,
+        vacaciones_pdf_firmado_habilitado,
+    )
+
+    enabled = bool(body.get("habilitado"))
+    set_flag_bool(
+        db,
+        FLAG_VACACIONES_PDF_FIRMADO,
+        enabled,
+        updated_by_id=int(current["user_id"]),
+    )
+    registrar_negocio(
+        db,
+        empleado_id=int(current["user_id"]),
+        mensaje=f"PDF firmado vacaciones {'activado' if enabled else 'desactivado'} por admin",
+        contexto={"habilitado": enabled},
+    )
+    return {"habilitado": vacaciones_pdf_firmado_habilitado(db)}
+
+
+@router.post(
+    "/solicitudes/{solicitud_id}/documento-firmado",
+    response_model=schemas.SolicitudVacacionesResponse,
+)
+async def subir_documento_firmado(
+    solicitud_id: int,
+    archivo: UploadFile = File(...),
+    current: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db),
+):
+    """Sube o reemplaza el PDF firmado. Solo con estado aprobada_jefe o aprobada."""
+    from app.core.sistema_flags import vacaciones_pdf_firmado_habilitado
+
+    if not vacaciones_pdf_firmado_habilitado(db):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="La subida de PDF firmado no está habilitada. Un administrador debe autorizarla en Configuración.",
+        )
+    sol = service.VacacionesService.get_solicitud(db, solicitud_id)
+    if not sol:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Solicitud no encontrada")
+    _assert_acceso_documento_firmado(db, sol, current)
+    raw = await archivo.read()
+    try:
+        result = service.VacacionesService.guardar_documento_firmado(
+            db,
+            solicitud_id=solicitud_id,
+            uploader_id=int(current["user_id"]),
+            filename=archivo.filename or "documento.pdf",
+            raw_bytes=raw,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    _set_jefe_aprobador_nombre(result)
+    registrar_negocio(
+        db,
+        empleado_id=int(current["user_id"]),
+        mensaje=f"PDF firmado vacaciones subido solicitud_id={solicitud_id}",
+        contexto={"solicitud_id": solicitud_id},
+    )
+    return result
+
+
+@router.get("/solicitudes/{solicitud_id}/documento-firmado")
+def descargar_documento_firmado(
+    solicitud_id: int,
+    current: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db),
+):
+    """Descarga el PDF firmado almacenado en disco."""
+    sol = service.VacacionesService.get_solicitud(db, solicitud_id)
+    if not sol:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Solicitud no encontrada")
+    _assert_acceso_documento_firmado(db, sol, current)
+    if not (sol.documento_firmado_ruta or "").strip():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No hay documento firmado")
+    try:
+        path = service.VacacionesService.documento_firmado_abs_path(sol)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    nombre = sol.documento_firmado_nombre or f"vacaciones_{solicitud_id}.pdf"
+    return FileResponse(
+        path=str(path),
+        media_type="application/pdf",
+        filename=nombre,
+        headers={"Content-Disposition": f'inline; filename="{nombre}"'},
+    )
 
 
 @router.put("/solicitudes/{solicitud_id}/aprobar", response_model=schemas.SolicitudVacacionesResponse)

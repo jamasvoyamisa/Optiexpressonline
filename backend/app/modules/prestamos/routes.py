@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
 from app.core.database import get_db
-from app.core.deps import get_current_empleado_with_rol
+from app.core.deps import get_current_empleado_with_rol, require_superuser
 from app.core.config import settings
 from app.modules.audit.negocio import registrar_negocio
 from . import service, schemas
@@ -14,6 +15,54 @@ router = APIRouter(prefix=f"{settings.API_V1_PREFIX}/prestamos", tags=["prestamo
 def _puede_gestion_rh_prestamos(current: dict) -> bool:
     """Admin, RH o Director: listados amplios y alta en nombre de terceros (módulo RH)."""
     return bool(current.get("is_superuser") or current.get("is_rh") or current.get("is_director"))
+
+
+def _assert_acceso_documento_firmado(db: Session, solicitud, current: dict) -> None:
+    if not service.puede_gestionar_documento_firmado(db, solicitud, current):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tienes permiso para gestionar el documento firmado de esta solicitud.",
+        )
+
+
+@router.get("/config/pdf-firmado")
+def get_pdf_firmado_config(
+    current: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db),
+):
+    """Estado del interruptor: PDF firmado / firma en pantalla (solo Admin lo cambia)."""
+    from app.core.sistema_flags import prestamos_pdf_firmado_habilitado
+
+    return {"habilitado": prestamos_pdf_firmado_habilitado(db)}
+
+
+@router.put("/config/pdf-firmado")
+def set_pdf_firmado_config(
+    body: dict,
+    current: dict = Depends(require_superuser),
+    db: Session = Depends(get_db),
+):
+    """Admin activa o desactiva PDF firmado en préstamos."""
+    from app.core.sistema_flags import (
+        FLAG_PRESTAMOS_PDF_FIRMADO,
+        set_flag_bool,
+        prestamos_pdf_firmado_habilitado,
+    )
+
+    enabled = bool(body.get("habilitado"))
+    set_flag_bool(
+        db,
+        FLAG_PRESTAMOS_PDF_FIRMADO,
+        enabled,
+        updated_by_id=int(current["user_id"]),
+    )
+    registrar_negocio(
+        db,
+        empleado_id=int(current["user_id"]),
+        mensaje=f"PDF firmado préstamos {'activado' if enabled else 'desactivado'} por admin",
+        contexto={"habilitado": enabled},
+    )
+    return {"habilitado": prestamos_pdf_firmado_habilitado(db)}
 
 
 @router.get("", response_model=List[schemas.SolicitudPrestamoResponse])
@@ -391,6 +440,77 @@ def confirmar_rh(
         mensaje=f"Préstamo id={solicitud_id} confirmado en nómina por RH",
     )
     return service.to_response(db, result)
+
+
+@router.post(
+    "/{solicitud_id}/documento-firmado",
+    response_model=schemas.SolicitudPrestamoResponse,
+)
+async def subir_documento_firmado(
+    solicitud_id: int,
+    archivo: UploadFile = File(...),
+    current: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db),
+):
+    """
+    Sube o reemplaza el PDF firmado.
+    Solo se almacena el PDF (no la imagen de firma suelta).
+    """
+    from app.core.sistema_flags import prestamos_pdf_firmado_habilitado
+
+    if not prestamos_pdf_firmado_habilitado(db):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="La subida de PDF firmado no está habilitada. Un administrador debe autorizarla en Configuración.",
+        )
+    sol = service.get_solicitud(db, solicitud_id)
+    if not sol:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Solicitud no encontrada")
+    _assert_acceso_documento_firmado(db, sol, current)
+    raw = await archivo.read()
+    try:
+        result = service.guardar_documento_firmado(
+            db,
+            solicitud_id=solicitud_id,
+            uploader_id=int(current["user_id"]),
+            filename=archivo.filename or "documento.pdf",
+            raw_bytes=raw,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    registrar_negocio(
+        db,
+        empleado_id=int(current["user_id"]),
+        mensaje=f"PDF firmado préstamos subido solicitud_id={solicitud_id}",
+        contexto={"solicitud_id": solicitud_id},
+    )
+    return service.to_response(db, result)
+
+
+@router.get("/{solicitud_id}/documento-firmado")
+def descargar_documento_firmado(
+    solicitud_id: int,
+    current: dict = Depends(get_current_empleado_with_rol),
+    db: Session = Depends(get_db),
+):
+    """Descarga el PDF firmado almacenado en disco."""
+    sol = service.get_solicitud(db, solicitud_id)
+    if not sol:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Solicitud no encontrada")
+    _assert_acceso_documento_firmado(db, sol, current)
+    if not (sol.documento_firmado_ruta or "").strip():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No hay documento firmado")
+    try:
+        path = service.documento_firmado_abs_path(sol)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+    nombre = sol.documento_firmado_nombre or f"prestamo_{solicitud_id}.pdf"
+    return FileResponse(
+        path=str(path),
+        media_type="application/pdf",
+        filename=nombre,
+        headers={"Content-Disposition": f'inline; filename="{nombre}"'},
+    )
 
 
 @router.delete("/{solicitud_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -61,4 +61,46 @@ export async function descargarArchivo(
   URL.revokeObjectURL(blobUrl);
 }
 
+/**
+ * Abre un archivo autenticado (p. ej. PDF) en una pestaña nueva vía blob URL.
+ */
+export async function abrirArchivoAutenticado(ruta: string): Promise<void> {
+  const token = authStorage.getToken();
+  if (!token) {
+    throw new Error('Sesión expirada. Por favor vuelve a iniciar sesión.');
+  }
+  const base = (api.defaults.baseURL ?? '/api/v1').replace(/\/$/, '');
+  const rutaLimpia = ruta.replace(/^\//, '');
+  const url = `${base}/${rutaLimpia}`;
+
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const contentType = (res.headers.get('content-type') || '').toLowerCase();
+  const esJson = contentType.includes('application/json');
+
+  if (!res.ok || esJson) {
+    const text = await res.text();
+    let detail = `Error al abrir archivo (HTTP ${res.status})`;
+    try {
+      const parsed = JSON.parse(text) as { detail?: string };
+      if (parsed?.detail) detail = parsed.detail;
+    } catch {
+      if (text?.trim()) detail = text.trim();
+    }
+    throw new Error(detail);
+  }
+
+  const blob = await res.blob();
+  const blobUrl = URL.createObjectURL(blob);
+  const w = window.open(blobUrl, '_blank');
+  if (!w) {
+    URL.revokeObjectURL(blobUrl);
+    throw new Error('Permite ventanas emergentes para ver el documento.');
+  }
+  // Liberar después de un tiempo; el navegador ya tiene el contenido.
+  window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+}
+
 export const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';

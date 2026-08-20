@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     SOPORTE_ADJUNTOS_DIR: str = "/opt/optiexpress/storage/soporte/adjuntos"
     SOPORTE_PORTAL_BG_DIR: str = "/opt/optiexpress/storage/soporte/backgrounds"
     CHECADOR_PORTAL_BG_DIR: str = "/opt/optiexpress/storage/portal/checador-backgrounds"
+    VACACIONES_FIRMADOS_DIR: str = "/opt/optiexpress/storage/vacaciones/firmados"
+    PRESTAMOS_FIRMADOS_DIR: str = "/opt/optiexpress/storage/prestamos/firmados"
 
     # Módulo nómina (API /nomina). Desactivar con NOMINA_ENABLED=false en .env si hace falta.
     NOMINA_ENABLED: bool = True

@@ -23,6 +23,7 @@ IP_ALERT_COOLDOWN_SEC = 30 * 60
 
 MSG_CREDENCIALES = "Credenciales incorrectas"
 MSG_DEMASIADOS = "Demasiados intentos. Espera unos minutos e inténtalo de nuevo."
+MSG_ACCESO_DESHABILITADO = "Tu acceso está deshabilitado. Contacta a Recursos Humanos."
 
 _lock = Lock()
 _user_fails: Dict[str, Deque[float]] = defaultdict(deque)
@@ -134,6 +135,15 @@ def clear_account_failures(db: Session, empleado) -> None:
     empleado.login_bloqueado_hasta = None
     db.add(empleado)
     db.commit()
+
+
+def empleado_acceso_habilitado(empleado) -> bool:
+    """Solo empleados activos pueden iniciar sesión / usar la app."""
+    est = getattr(empleado, "estado", None)
+    if est is None:
+        return True
+    valor = getattr(est, "value", str(est)).strip().lower()
+    return valor in ("activo", "")
 
 
 def log_bruteforce_ip_alert(db: Session, *, ip: str, ruta: str) -> None:

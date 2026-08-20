@@ -15,13 +15,16 @@ from app.modules.auth.schemas import (
     CambiarPasswordRequest,
 )
 from app.core.config import settings
+from app.core.sistema_flags import vacaciones_pdf_firmado_habilitado, prestamos_pdf_firmado_habilitado
 from app.core.rate_limit import limiter
 from app.core.login_protection import (
     MSG_CREDENCIALES,
     MSG_DEMASIADOS,
+    MSG_ACCESO_DESHABILITADO,
     account_is_locked,
     clear_account_failures,
     clear_user_failures,
+    empleado_acceso_habilitado,
     is_user_rate_limited,
     log_account_lock,
     log_bruteforce_ip_alert,
@@ -139,6 +142,12 @@ def login(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=MSG_DEMASIADOS,
+        )
+
+    if not empleado_acceso_habilitado(empleado):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=MSG_ACCESO_DESHABILITADO,
         )
 
     # Bloqueo temporal opcional por mantenimiento.
@@ -267,6 +276,8 @@ def login(
         "departamentos_que_administro": departamentos_que_administro,
         "exento_incidencias": bool(getattr(empleado, "exento_incidencias", False)),
         "must_change_password": bool(getattr(empleado, "must_change_password", False)),
+        "vacaciones_pdf_firmado_habilitado": vacaciones_pdf_firmado_habilitado(db),
+        "prestamos_pdf_firmado_habilitado": prestamos_pdf_firmado_habilitado(db),
     }
     
     return TokenResponse(
@@ -290,6 +301,11 @@ def refresh_token(payload: RefreshTokenRequest, db: Session = Depends(get_db)):
     empleado = db.query(Empleado).options(joinedload(Empleado.puesto_rel)).filter(Empleado.id == int(sub)).first()
     if not empleado:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario no encontrado")
+    if not empleado_acceso_habilitado(empleado):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=MSG_ACCESO_DESHABILITADO,
+        )
     if settings.LOGIN_MAINTENANCE_RESTRICTED and not _puede_acceso_bloqueo_mantenimiento(db, empleado):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -427,6 +443,8 @@ def get_me(
         "departamentos_que_administro": departamentos_que_administro,
         "exento_incidencias": bool(getattr(empleado, "exento_incidencias", False)),
         "must_change_password": bool(getattr(empleado, "must_change_password", False)),
+        "vacaciones_pdf_firmado_habilitado": vacaciones_pdf_firmado_habilitado(db),
+        "prestamos_pdf_firmado_habilitado": prestamos_pdf_firmado_habilitado(db),
     }
 
 

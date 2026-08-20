@@ -822,6 +822,31 @@ def restablecer_password_empleado(
     }
 
 
+@router.post("/empleados/{empleado_id}/desbloquear-cuenta", response_model=schemas.EmpleadoResponse)
+def desbloquear_cuenta_empleado(
+    empleado_id: int,
+    request: Request,
+    current: dict = Depends(require_superuser),
+    db: Session = Depends(get_db),
+):
+    """Admin: quita el bloqueo por intentos fallidos de login (15 min)."""
+    emp = service.PersonalService.desbloquear_cuenta_login(db, empleado_id)
+    if emp is None:
+        raise HTTPException(status_code=404, detail="Empleado no encontrado")
+    registrar_accion_rh(
+        db,
+        current=current,
+        request=request,
+        accion="desbloquear_cuenta_login",
+        mensaje=f"Cuenta desbloqueada No. {emp.numero_empleado}",
+        empleado_afectado=emp,
+        metodo_http="POST",
+        ruta=f"{settings.API_V1_PREFIX}/personal/empleados/{empleado_id}/desbloquear-cuenta",
+        codigo_http=200,
+    )
+    return service.PersonalService.get_empleado(db, empleado_id) or emp
+
+
 @router.patch("/empleados/{empleado_id}/permisos-especiales", response_model=schemas.EmpleadoResponse)
 def set_permisos_especiales(
     empleado_id: int,

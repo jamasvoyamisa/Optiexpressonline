@@ -711,3 +711,130 @@ def _con_relaciones(db: Session, solicitud_id: int) -> Optional[models.Solicitud
         joinedload(models.SolicitudPrestamo.empleado).joinedload(pm.Empleado.departamento_rel),
         joinedload(models.SolicitudPrestamo.aprobador),
     ).filter(models.SolicitudPrestamo.id == solicitud_id).first()
+
+
+# ── Documento PDF firmado (solo se guarda el PDF; nunca la imagen de firma) ──
+
+MAX_PDF_BYTES = 10 * 1024 * 1024  # 10 MB
+
+
+def resolve_firmados_base_dir():
+    from pathlib import Path
+    from app.core.config import settings
+
+    preferred = Path(settings.PRESTAMOS_FIRMADOS_DIR).resolve()
+    try:
+        preferred.mkdir(parents=True, exist_ok=True)
+        return preferred
+    except (PermissionError, FileNotFoundError, OSError):
+        local = Path(__file__).resolve().parents[3] / "storage" / "prestamos" / "firmados"
+        local.mkdir(parents=True, exist_ok=True)
+        return local
+
+
+def _estado_permite_documento_firmado(solicitud: models.SolicitudPrestamo) -> bool:
+    est = getattr(solicitud.estado, "value", str(solicitud.estado)).lower()
+    return est in (
+        models.EstadoSolicitudPrestamo.PENDIENTE.value,
+        models.EstadoSolicitudPrestamo.APROBADA_DEPARTAMENTO.value,
+        models.EstadoSolicitudPrestamo.DEPOSITADO.value,
+    )
+
+
+def puede_gestionar_documento_firmado(
+    db: Session,
+    solicitud: models.SolicitudPrestamo,
+    current: dict,
+) -> bool:
+    """Empleado dueño, jefe de área / director / GG, RH o Admin."""
+    uid = int(current["user_id"])
+    if current.get("is_superuser") or current.get("is_rh"):
+        return True
+    if solicitud.empleado_id == uid:
+        return True
+    if current.get("is_director") or current.get("is_gerente_general"):
+        return True
+    emp = solicitud.empleado
+    if not emp:
+        emp = (
+            db.query(pm.Empleado)
+            .options(joinedload(pm.Empleado.departamento_rel))
+            .filter(pm.Empleado.id == solicitud.empleado_id)
+            .first()
+        )
+    if emp and getattr(emp, "jefe_id", None) == uid:
+        return True
+    if (
+        emp
+        and getattr(emp, "departamento_rel", None)
+        and getattr(emp.departamento_rel, "jefe_id", None) == uid
+    ):
+        return True
+    depto_ids = current.get("departamento_ids_que_administro") or []
+    if emp and emp.departamento_id and emp.departamento_id in depto_ids:
+        return True
+    return False
+
+
+def guardar_documento_firmado(
+    db: Session,
+    solicitud_id: int,
+    uploader_id: int,
+    filename: str,
+    raw_bytes: bytes,
+) -> models.SolicitudPrestamo:
+    from pathlib import Path
+
+    sol = get_solicitud(db, solicitud_id)
+    if not sol:
+        raise ValueError("Solicitud no encontrada")
+    if not _estado_permite_documento_firmado(sol):
+        raise ValueError(
+            "Solo se puede subir el PDF firmado en solicitudes pendientes, "
+            "autorizadas por departamento o depositadas."
+        )
+    original = (filename or "").strip()
+    if not original.lower().endswith(".pdf"):
+        raise ValueError("Solo se permiten archivos PDF.")
+    if not raw_bytes:
+        raise ValueError("Archivo vacío.")
+    if len(raw_bytes) > MAX_PDF_BYTES:
+        raise ValueError("El PDF no puede superar 10 MB.")
+    if not raw_bytes[:5].startswith(b"%PDF-"):
+        raise ValueError("El archivo no es un PDF válido.")
+
+    base = resolve_firmados_base_dir()
+    emp_dir = base / str(int(sol.empleado_id))
+    emp_dir.mkdir(parents=True, exist_ok=True)
+    stored_name = f"{int(sol.id)}.pdf"
+    abs_path = emp_dir / stored_name
+    abs_path.write_bytes(raw_bytes)
+    try:
+        ruta_rel = str(abs_path.relative_to(base)).replace("\\", "/")
+    except ValueError:
+        ruta_rel = f"{sol.empleado_id}/{stored_name}"
+
+    sol.documento_firmado_ruta = ruta_rel
+    sol.documento_firmado_nombre = Path(original).name[:255]
+    sol.documento_firmado_at = datetime.now(timezone.utc)
+    sol.documento_firmado_por_id = uploader_id
+    db.commit()
+    refreshed = _con_relaciones(db, sol.id)
+    return refreshed or sol
+
+
+def documento_firmado_abs_path(solicitud: models.SolicitudPrestamo):
+    from pathlib import Path
+
+    rel = (solicitud.documento_firmado_ruta or "").strip().replace("\\", "/")
+    if not rel or ".." in rel.split("/"):
+        raise ValueError("No hay documento firmado.")
+    base = resolve_firmados_base_dir()
+    safe = (base / rel).resolve()
+    try:
+        safe.relative_to(base)
+    except ValueError:
+        raise ValueError("Ruta de documento inválida.")
+    if not safe.is_file():
+        raise ValueError("Archivo de documento firmado no encontrado.")
+    return safe

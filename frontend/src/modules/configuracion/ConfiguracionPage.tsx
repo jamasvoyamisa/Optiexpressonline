@@ -5,6 +5,7 @@ import { useAuth } from '../../hooks/useAuth';
 import { ActividadLogResponse, ActividadPurgeRequest, DepartamentoResponse, Dispositivo, DispositivoCreate, DispositivoUpdate, EmpresaResponse, EmpleadoResponse, PuestoResponse, SoporteTicketClaseResponse, SoporteTicketTipoResponse, UsuarioEspecialCreate } from '../../types';
 import { VacacionesGeneralesPage } from '../vacaciones/VacacionesGeneralesPage';
 import { ChecadasEspecialesPage } from './ChecadasEspecialesPage';
+import DescansosProgramadosPage from '../asistencia/DescansosProgramadosPage';
 import { isNominaEnabled } from '../../config/features';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import {
@@ -21,11 +22,16 @@ import {
   rhMobileTabScroll,
 } from '../rh/rhMobileStyles';
 
-/** Fecha/hora de actividad: siempre en zona México. */
-const fmtDate = (iso: string) => {
+/** Parsea ISO del API: con offset/Z tal cual; sin zona se asume UTC (BD). */
+const parseApiDate = (iso: string) => {
   const s = String(iso);
   const hasTz = s.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(s);
-  const d = new Date(hasTz ? s : s);
+  return new Date(hasTz ? s : `${s}Z`);
+};
+
+/** Fecha/hora de actividad: siempre en zona México. */
+const fmtDate = (iso: string) => {
+  const d = parseApiDate(iso);
   return d.toLocaleString('es-MX', {
     day: '2-digit',
     month: '2-digit',
@@ -35,6 +41,15 @@ const fmtDate = (iso: string) => {
     second: '2-digit',
     timeZone: 'America/Mexico_City',
   });
+};
+
+/** Texto relativo para ver latidos del agente (cada ~30s). */
+const fmtHace = (iso: string) => {
+  const sec = Math.max(0, Math.floor((Date.now() - parseApiDate(iso).getTime()) / 1000));
+  if (sec < 60) return `hace ${sec}s`;
+  if (sec < 3600) return `hace ${Math.floor(sec / 60)} min`;
+  if (sec < 86400) return `hace ${Math.floor(sec / 3600)} h`;
+  return `hace ${Math.floor(sec / 86400)} d`;
 };
 
 /** Extrae la empresa del empleado afectado desde el contexto (JSON) del log, si existe. */
@@ -77,7 +92,7 @@ function filtrarDispositivosConfiguracion(list: Dispositivo[]): Dispositivo[] {
 }
 
 type ConfigTab = 'dispositivos' | 'empresas' | 'horarios' | 'eventos_especiales' | 'usuarios_especiales' | 'soporte' | 'actividad';
-type EventosEspecialesTab = 'festivos' | 'vacaciones_generales' | 'checadas_especiales';
+type EventosEspecialesTab = 'festivos' | 'vacaciones_generales' | 'checadas_especiales' | 'descansos_programados';
 
 const CONFIG_TABS: { key: ConfigTab; label: string; short: string; superOnly?: boolean }[] = [
   { key: 'dispositivos', label: 'Dispositivos', short: 'Disp.' },
@@ -93,6 +108,7 @@ const EVENTOS_TABS: { key: EventosEspecialesTab; label: string; short: string }[
   { key: 'festivos', label: 'Días festivos', short: 'Festivos' },
   { key: 'vacaciones_generales', label: 'Vacaciones generales', short: 'Vac. gen.' },
   { key: 'checadas_especiales', label: 'Checadas especiales', short: 'Checadas' },
+  { key: 'descansos_programados', label: 'Descansos programados', short: 'Descansos' },
 ];
 
 function configTabSubtitle(tab: ConfigTab): string {
@@ -207,6 +223,8 @@ type EmpresaFormState = {
   telefono: string;
   dias_laborales: 'lun-sab' | 'lun-dom';
   trabaja_festivos: boolean;
+  fin_semana_4_checadas: boolean;
+  gestiona_descansos_rotativos: boolean;
   // Nómina / timbrado
   registro_patronal: string;
   codigo_postal_expedicion: string;
@@ -229,6 +247,8 @@ const emptyEmpresaForm = (): EmpresaFormState => ({
   telefono: '',
   dias_laborales: 'lun-sab',
   trabaja_festivos: false,
+  fin_semana_4_checadas: false,
+  gestiona_descansos_rotativos: false,
   registro_patronal: '',
   codigo_postal_expedicion: '',
   periodicidad_nomina: '04',
@@ -291,9 +311,43 @@ const actividadSelectInline: React.CSSProperties = {
 };
 
 export const ConfiguracionPage = () => {
-  const { authMe } = useAuth();
+  const { authMe, refreshAuthMe } = useAuth();
   const isMobile = useIsMobile();
   const isSuperuser = authMe?.is_superuser === true;
+  const [savingPdfFlag, setSavingPdfFlag] = useState(false);
+  const [savingPdfPrestamosFlag, setSavingPdfPrestamosFlag] = useState(false);
+
+  const togglePdfFirmado = async (habilitado: boolean) => {
+    if (!isSuperuser) return;
+    setSavingPdfFlag(true);
+    try {
+      await api.put('/vacaciones/config/pdf-firmado', { habilitado });
+      await refreshAuthMe();
+    } catch (e: unknown) {
+      const msg =
+        (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        'No se pudo guardar el interruptor';
+      alert(typeof msg === 'string' ? msg : 'No se pudo guardar el interruptor');
+    } finally {
+      setSavingPdfFlag(false);
+    }
+  };
+
+  const togglePdfFirmadoPrestamos = async (habilitado: boolean) => {
+    if (!isSuperuser) return;
+    setSavingPdfPrestamosFlag(true);
+    try {
+      await api.put('/prestamos/config/pdf-firmado', { habilitado });
+      await refreshAuthMe();
+    } catch (e: unknown) {
+      const msg =
+        (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        'No se pudo guardar el interruptor de préstamos';
+      alert(typeof msg === 'string' ? msg : 'No se pudo guardar el interruptor de préstamos');
+    } finally {
+      setSavingPdfPrestamosFlag(false);
+    }
+  };
 
   const [configTab, setConfigTab] = useState<ConfigTab>('dispositivos');
   const [eventosEspecialesTab, setEventosEspecialesTab] = useState<EventosEspecialesTab>('festivos');
@@ -342,6 +396,7 @@ export const ConfiguracionPage = () => {
   const [horarioForm, setHorarioForm] = useState(emptyHorario);
   const [diasSeleccionados, setDiasSeleccionados] = useState<number[]>([1, 2, 3, 4, 5]);
   const [trabajaSabado, setTrabajaSabado] = useState(false);
+  const [trabajaDomingo, setTrabajaDomingo] = useState(false);
 
   // Usuarios especiales (exento de incidencias)
   const [usuariosEspeciales, setUsuariosEspeciales] = useState<EmpleadoResponse[]>([]);
@@ -472,6 +527,14 @@ export const ConfiguracionPage = () => {
     cargarSoloDispositivos();
     const interval = setInterval(cargarSoloDispositivos, 10000);
     return () => clearInterval(interval);
+  }, [configTab]);
+
+  // Reloj local para que el texto «hace Xs» avance entre refrescos del API
+  const [, setConnTick] = useState(0);
+  useEffect(() => {
+    if (configTab !== 'dispositivos') return;
+    const t = setInterval(() => setConnTick((n) => n + 1), 1000);
+    return () => clearInterval(t);
   }, [configTab]);
 
   const loadUsuariosEspeciales = async () => {
@@ -929,6 +992,7 @@ export const ConfiguracionPage = () => {
     setHorarioForm(emptyHorario);
     setDiasSeleccionados([1, 2, 3, 4, 5]);
     setTrabajaSabado(false);
+    setTrabajaDomingo(false);
     setEditingHorarioId(null);
     setShowHorarioModal(true);
   };
@@ -936,8 +1000,10 @@ export const ConfiguracionPage = () => {
   const startEditHorario = (h: Horario) => {
     const tieneSabado = !!h.hora_salida_sabado;
     setTrabajaSabado(tieneSabado);
-    const dias = h.dias_semana ? h.dias_semana.split(',').map(Number).filter(d => d !== 6).filter(Boolean) : [];
-    setDiasSeleccionados(dias);
+    const nums = h.dias_semana ? h.dias_semana.split(',').map(Number).filter(Boolean) : [];
+    setTrabajaDomingo(nums.includes(7));
+    const dias = nums.filter(d => d !== 6 && d !== 7);
+    setDiasSeleccionados(dias.length ? dias : [1, 2, 3, 4, 5]);
     setHorarioForm({
       nombre: h.nombre,
       hora_entrada: h.hora_entrada,
@@ -956,7 +1022,8 @@ export const ConfiguracionPage = () => {
     if (trabajaSabado && !horarioForm.hora_salida_sabado) { alert('Indica la hora de salida del sábado'); return; }
     setSaving(true);
     try {
-      const diasBase = diasSeleccionados.filter(d => d !== 6).sort();
+      const diasBase = diasSeleccionados.filter(d => d !== 6 && d !== 7).sort();
+      if (trabajaDomingo) diasBase.push(7);
       const payload = {
         ...horarioForm,
         hora_salida_sabado: trabajaSabado ? horarioForm.hora_salida_sabado : null,
@@ -1121,6 +1188,8 @@ export const ConfiguracionPage = () => {
       telefono: emp.telefono || '',
       dias_laborales: emp.dias_laborales === 'lun-dom' ? 'lun-dom' : 'lun-sab',
       trabaja_festivos: !!emp.trabaja_festivos,
+      fin_semana_4_checadas: !!emp.fin_semana_4_checadas,
+      gestiona_descansos_rotativos: !!emp.gestiona_descansos_rotativos,
       registro_patronal: '',
       codigo_postal_expedicion: '',
       periodicidad_nomina: '04',
@@ -1187,6 +1256,8 @@ export const ConfiguracionPage = () => {
       if (dirParts.length) payload.direccion = dirParts.join(', ');
       payload.dias_laborales = empresaForm.dias_laborales;
       payload.trabaja_festivos = empresaForm.trabaja_festivos;
+      payload.fin_semana_4_checadas = empresaForm.fin_semana_4_checadas;
+      payload.gestiona_descansos_rotativos = empresaForm.gestiona_descansos_rotativos;
       payload.checadas_remotas = true;
       let savedEmpresaId = editingEmpresaId;
       if (editingEmpresaId) {
@@ -1511,6 +1582,9 @@ export const ConfiguracionPage = () => {
                 ) : device.ultima_sync_agente ? (
                   <span style={{ color: '#1565c0', fontWeight: 600 }}>
                     {fmtDate(device.ultima_sync_agente)}
+                    <span style={{ color: '#64748b', fontWeight: 500, marginLeft: 8 }}>
+                      ({fmtHace(device.ultima_sync_agente)})
+                    </span>
                   </span>
                 ) : (
                   <span style={{ color: '#e65100', fontWeight: 500 }}>Sin conexión — el agente no ha llamado al servidor</span>
@@ -1593,6 +1667,7 @@ export const ConfiguracionPage = () => {
                     <div style={rhMobileCardSub}>{emp.rfc || 'Sin RFC'}</div>
                     <div style={rhMobileCardRow}><span>Empleados</span><span style={{ fontWeight: 700 }}>{count}</span></div>
                     <div style={rhMobileCardRow}><span>Jornada</span><span>{emp.dias_laborales === 'lun-dom' ? 'Lun-Dom' : 'Lun-Sáb'}</span></div>
+                    <div style={rhMobileCardRow}><span>Sáb/Dom</span><span>{emp.fin_semana_4_checadas ? '4 checadas' : '2 checadas'}</span></div>
                     <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
                       <button type="button" onClick={() => startEditEmpresa(emp)} style={{ ...rhMobileBtnSecondary, flex: 1 }}>Editar</button>
                       <button type="button" onClick={() => toggleEmpresaActivo(emp)} style={{ ...rhMobileBtnSecondary, flex: 1, color: emp.activo ? '#b91c1c' : '#15803d' }}>
@@ -1608,7 +1683,7 @@ export const ConfiguracionPage = () => {
               <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '10px', overflow: 'hidden', boxShadow: '0 1px 3px rgba(0,0,0,0.04)' }}>
                 <thead>
                   <tr style={{ backgroundColor: '#f8f9fa' }}>
-                    {['Razón social', 'RFC', 'Domicilio fiscal', 'C.P.', 'Régimen fiscal', 'Teléfono', 'Jornada', 'Festivos', 'Empleados', 'Estado', 'Acciones'].map(h => (
+                    {['Razón social', 'RFC', 'Domicilio fiscal', 'C.P.', 'Régimen fiscal', 'Teléfono', 'Jornada', 'Festivos', 'Sáb/Dom', 'Empleados', 'Estado', 'Acciones'].map(h => (
                       <th key={h} style={{ padding: '12px 14px', textAlign: 'left', borderBottom: '2px solid #dee2e6', fontSize: '0.85rem', color: '#555', fontWeight: 600 }}>{h}</th>
                     ))}
                   </tr>
@@ -1629,6 +1704,9 @@ export const ConfiguracionPage = () => {
                         </td>
                         <td style={{ padding: '11px 14px', color: emp.trabaja_festivos ? '#166534' : '#6b7280', fontWeight: 600 }}>
                           {emp.trabaja_festivos ? 'Sí' : 'No'}
+                        </td>
+                        <td style={{ padding: '11px 14px', color: emp.fin_semana_4_checadas ? '#166534' : '#6b7280', fontWeight: 600 }} title={emp.fin_semana_4_checadas ? '4 checadas (con comida)' : '2 checadas (entrada/salida)'}>
+                          {emp.fin_semana_4_checadas ? '4' : '2'}
                         </td>
                         <td style={{ padding: '11px 14px', fontWeight: 600 }}>{count}</td>
                         <td style={{ padding: '11px 14px' }}>
@@ -1811,6 +1889,21 @@ export const ConfiguracionPage = () => {
                     </p>
                   )}
                 </div>
+
+                <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '12px' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontWeight: 600, fontSize: '0.88rem', color: '#374151' }}>
+                    <input
+                      type="checkbox"
+                      checked={trabajaDomingo}
+                      onChange={e => setTrabajaDomingo(e.target.checked)}
+                      style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                    />
+                    ¿Trabaja los domingos?
+                  </label>
+                  <p style={{ fontSize: '0.78rem', color: '#6b7280', margin: '6px 0 0 24px' }}>
+                    Solo aplica en empresas lun–dom con «gestiona descansos rotativos». Si está desmarcado, no se genera falta el domingo para quien tenga este horario.
+                  </p>
+                </div>
               </div>
               <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
                 <button type="button" onClick={() => setShowHorarioModal(false)} style={btnSecondary}>Cancelar</button>
@@ -1938,19 +2031,46 @@ export const ConfiguracionPage = () => {
                     Define si el domingo cuenta como día laborable para la lógica de checadas.
                   </span>
                 </div>
-                <div>
-                  <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <input
-                      type="checkbox"
-                      checked={empresaForm.trabaja_festivos}
-                      onChange={e => setEmpresaForm(p => ({ ...p, trabaja_festivos: e.target.checked }))}
-                    />
-                    ¿La empresa trabaja días festivos?
-                  </label>
-                  <span style={{ fontSize: '0.78rem', color: '#6b7280' }}>
-                    Si está activo, en festivos sí se consideran checadas para esta empresa.
-                  </span>
-                </div>
+                  <div>
+                    <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <input
+                        type="checkbox"
+                        checked={empresaForm.trabaja_festivos}
+                        onChange={e => setEmpresaForm(p => ({ ...p, trabaja_festivos: e.target.checked }))}
+                      />
+                      ¿La empresa trabaja días festivos?
+                    </label>
+                    <span style={{ fontSize: '0.78rem', color: '#6b7280' }}>
+                      Si está activo, en festivos sí se consideran checadas para esta empresa.
+                    </span>
+                  </div>
+                  <div>
+                    <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <input
+                        type="checkbox"
+                        checked={empresaForm.fin_semana_4_checadas}
+                        onChange={e => setEmpresaForm(p => ({ ...p, fin_semana_4_checadas: e.target.checked }))}
+                      />
+                      ¿Sábado/domingo laborable con 4 checadas?
+                    </label>
+                    <span style={{ fontSize: '0.78rem', color: '#6b7280' }}>
+                      Por defecto el fin de semana laborable pide 2 (entrada y salida). Actívalo solo si
+                      esa empresa también registra comida esos días (como entre semana).
+                    </span>
+                  </div>
+                  <div>
+                    <label style={{ ...labelStyle, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <input
+                        type="checkbox"
+                        checked={empresaForm.gestiona_descansos_rotativos}
+                        onChange={e => setEmpresaForm(p => ({ ...p, gestiona_descansos_rotativos: e.target.checked }))}
+                      />
+                      ¿Gestiona descansos rotativos?
+                    </label>
+                    <span style={{ fontSize: '0.78rem', color: '#6b7280' }}>
+                      Solo Optivisión/COF (u otras lun–dom con rotación). Activa domingo según horario y la captura semanal de descansos. Empresas fijas: dejar apagado.
+                    </span>
+                  </div>
 
                 {isNominaEnabled && (
                   <>
@@ -2060,6 +2180,13 @@ export const ConfiguracionPage = () => {
               onClick={() => setEventosEspecialesTab('checadas_especiales')}
             >
               Checadas especiales
+            </button>
+            <button
+              type="button"
+              style={tabStyle(eventosEspecialesTab === 'descansos_programados')}
+              onClick={() => setEventosEspecialesTab('descansos_programados')}
+            >
+              Descansos programados
             </button>
           </div>
           )}
@@ -2227,11 +2354,81 @@ export const ConfiguracionPage = () => {
 
       {/* ====== SUBTAB: VACACIONES GENERALES ====== */}
       {isSuperuser && configTab === 'eventos_especiales' && eventosEspecialesTab === 'vacaciones_generales' && (
-        <VacacionesGeneralesPage embedded />
+        <>
+          <div
+            style={{
+              marginBottom: 16,
+              padding: '14px 16px',
+              backgroundColor: authMe?.vacaciones_pdf_firmado_habilitado ? '#ecfdf5' : '#fff7ed',
+              border: `1px solid ${authMe?.vacaciones_pdf_firmado_habilitado ? '#6ee7b7' : '#fed7aa'}`,
+              borderRadius: 8,
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 12,
+              alignItems: 'center',
+              justifyContent: 'space-between',
+            }}
+          >
+            <div style={{ flex: '1 1 240px' }}>
+              <div style={{ fontWeight: 700, color: '#1e3a5f', fontSize: '0.95rem' }}>
+                Subida de PDF firmado (vacaciones)
+              </div>
+              <p style={{ margin: '4px 0 0', fontSize: '0.82rem', color: '#64748b' }}>
+                Si está desactivado, empleados/jefes/RH solo ven la plantilla HTML. Al activarlo aparece «Subir PDF firmado».
+              </p>
+            </div>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: savingPdfFlag ? 'wait' : 'pointer', fontWeight: 600, fontSize: '0.9rem' }}>
+              <input
+                type="checkbox"
+                checked={authMe?.vacaciones_pdf_firmado_habilitado === true}
+                disabled={savingPdfFlag}
+                onChange={(e) => void togglePdfFirmado(e.target.checked)}
+              />
+              {authMe?.vacaciones_pdf_firmado_habilitado ? 'Habilitado' : 'Deshabilitado'}
+            </label>
+          </div>
+          <div
+            style={{
+              marginBottom: 16,
+              padding: '14px 16px',
+              backgroundColor: authMe?.prestamos_pdf_firmado_habilitado ? '#ecfdf5' : '#fff7ed',
+              border: `1px solid ${authMe?.prestamos_pdf_firmado_habilitado ? '#6ee7b7' : '#fed7aa'}`,
+              borderRadius: 8,
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 12,
+              alignItems: 'center',
+              justifyContent: 'space-between',
+            }}
+          >
+            <div style={{ flex: '1 1 240px' }}>
+              <div style={{ fontWeight: 700, color: '#1e3a5f', fontSize: '0.95rem' }}>
+                PDF firmado y firma en pantalla (préstamos)
+              </div>
+              <p style={{ margin: '4px 0 0', fontSize: '0.82rem', color: '#64748b' }}>
+                El solicitante puede firmar en pantalla (dibujar o subir imagen temporal). Solo se guarda el PDF final; no se resguardan firmas. También se puede subir un PDF escaneado.
+              </p>
+            </div>
+            <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: savingPdfPrestamosFlag ? 'wait' : 'pointer', fontWeight: 600, fontSize: '0.9rem' }}>
+              <input
+                type="checkbox"
+                checked={authMe?.prestamos_pdf_firmado_habilitado === true}
+                disabled={savingPdfPrestamosFlag}
+                onChange={(e) => void togglePdfFirmadoPrestamos(e.target.checked)}
+              />
+              {authMe?.prestamos_pdf_firmado_habilitado ? 'Habilitado' : 'Deshabilitado'}
+            </label>
+          </div>
+          <VacacionesGeneralesPage embedded />
+        </>
       )}
 
       {isSuperuser && configTab === 'eventos_especiales' && eventosEspecialesTab === 'checadas_especiales' && (
         <ChecadasEspecialesPage embedded />
+      )}
+
+      {isSuperuser && configTab === 'eventos_especiales' && eventosEspecialesTab === 'descansos_programados' && (
+        <DescansosProgramadosPage />
       )}
 
       {/* ====== TAB: USUARIOS ESPECIALES ====== */}

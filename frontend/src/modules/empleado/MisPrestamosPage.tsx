@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Navigate } from 'react-router-dom';
 import api from '../../services/api';
 import { generarDocumentoPrestamo } from '../prestamos/documentoPrestamo';
+import { AccionesDocumentoPrestamos } from '../prestamos/AccionesDocumentoPrestamos';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { useAuth } from '../../hooks/useAuth';
 
@@ -21,6 +22,9 @@ interface SolicitudPrestamo {
   referencia_bancaria?: string | null;
   /** Saldo restante calculado en el servidor (quincenas día 15 y fin de mes). Tiene prioridad si viene. */
   saldo_restante?: number | string | null;
+  tiene_documento_firmado?: boolean;
+  documento_firmado_ruta?: string | null;
+  documento_firmado_nombre?: string | null;
 }
 
 const ESTADO_LABEL: Record<string, string> = {
@@ -254,6 +258,10 @@ export const MisPrestamosPage = () => {
     })();
   };
 
+  const patchSolicitud = (updated: Partial<SolicitudPrestamo> & { id: number }) => {
+    setSolicitudes((prev) => prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s)));
+  };
+
   if (authMe?.exento_incidencias) return <Navigate to="/" replace />;
   if ((authMe?.anios_empresa ?? 0) < PRESTAMOS_ANTIGUEDAD_MINIMA_ANIOS) return <Navigate to="/" replace />;
 
@@ -448,11 +456,15 @@ export const MisPrestamosPage = () => {
                 </div>
 
                 {/* Acciones */}
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <button onClick={() => verDocumento(sol)}
-                    style={{ flex: 1, padding: '10px', backgroundColor: '#f1f5f9', color: '#475569', border: '1px solid #e2e8f0', borderRadius: 10, cursor: 'pointer', fontSize: '0.82rem', fontWeight: 600 }}>
-                    📄 Ver documento
-                  </button>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <AccionesDocumentoPrestamos
+                    solicitud={sol}
+                    esSolicitante
+                    permitirSubida={authMe?.prestamos_pdf_firmado_habilitado === true}
+                    onVerPlantilla={() => verDocumento(sol)}
+                    onActualizado={(u) => patchSolicitud(u)}
+                    compact
+                  />
                   {sol.estado === 'pendiente' && (
                     <button onClick={() => cancelar(sol.id)} disabled={cancelando}
                       style={{ padding: '10px 16px', backgroundColor: '#fff7ed', color: '#c2410c', border: '1px solid #fed7aa', borderRadius: 10, cursor: cancelando ? 'not-allowed' : 'pointer', fontSize: '0.82rem', fontWeight: 700 }}>
@@ -526,7 +538,14 @@ export const MisPrestamosPage = () => {
                     </td>
                     <td style={{ ...td, textAlign: 'center' }}>
                       <div style={{ display: 'flex', gap: 6, justifyContent: 'center', flexWrap: 'wrap' }}>
-                        <button onClick={() => verDocumento(sol)} style={{ padding: '4px 10px', backgroundColor: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1', borderRadius: 5, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600 }}>Ver documento</button>
+                        <AccionesDocumentoPrestamos
+                          solicitud={sol}
+                          esSolicitante
+                          permitirSubida={authMe?.prestamos_pdf_firmado_habilitado === true}
+                          onVerPlantilla={() => verDocumento(sol)}
+                          onActualizado={(u) => patchSolicitud(u)}
+                          compact
+                        />
                         {sol.estado === 'pendiente' && (
                           <button onClick={() => cancelar(sol.id)} disabled={cancelando} style={{ padding: '4px 10px', backgroundColor: '#fff7ed', color: '#c2410c', border: '1px solid #fed7aa', borderRadius: 5, cursor: cancelando ? 'not-allowed' : 'pointer', fontSize: '0.78rem', fontWeight: 600 }}>Cancelar</button>
                         )}

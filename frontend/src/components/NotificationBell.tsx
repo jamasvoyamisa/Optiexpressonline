@@ -62,7 +62,8 @@ export const NotificationBell = ({ dispositivos = [] }: Props) => {
   const sinConexion = dispositivosConAlertas.filter(d => {
     const u = d.ultima_sync_agente;
     if (!u) return true;
-    const diff = Date.now() - new Date(u.endsWith('Z') || u.includes('+') ? u : u + 'Z').getTime();
+    const hasTz = u.endsWith('Z') || /[+-]\d{2}:\d{2}$/.test(u);
+    const diff = Date.now() - new Date(hasTz ? u : `${u}Z`).getTime();
     return diff > MS_1_DIA;
   });
   const totalAlertas = new Set([...inactivos.map(d => d.id), ...sinConexion.map(d => d.id)]).size;

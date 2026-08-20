@@ -332,9 +332,9 @@ class PersonalService:
 
     @staticmethod
     def _nombre_es_director_top(nombre: Optional[str]) -> bool:
-        """Director General (incluye legado «Director»). No incluye Adjunto."""
+        """Director General / Adjunto (incluye legado «Director»). Aprueba gerentes/supervisores."""
         n = (nombre or "").strip().lower()
-        return n in ("director", "director general")
+        return n in ("director", "director general", "director general adjunto")
 
     @staticmethod
     def _nombre_es_gerente_general(nombre: Optional[str]) -> bool:
@@ -652,6 +652,8 @@ class PersonalService:
                     horario_id=empleado.horario_id,
                     fecha_inicio=datetime.now(timezone.utc),
                     activo=True,
+                    # Sin horario_sabado_id: no heredar sábado del L-V (coincide con checkbox Personal).
+                    hora_salida_sabado="" if empleado.horario_sabado_id is None else None,
                 )
                 db.add(eh)
                 db.commit()
@@ -1037,6 +1039,16 @@ class PersonalService:
             if hasattr(db_empleado, field):
                 setattr(db_empleado, field, value)
 
+        # Si pasó a baja/inactivo vía edición, revocar sesión de inmediato.
+        if "estado" in update_data:
+            est = update_data.get("estado")
+            valor = getattr(est, "value", str(est) if est is not None else "").strip().lower()
+            if valor in ("baja", "inactivo"):
+                db_empleado.session_id = None
+                if valor == "baja" and not db_empleado.fecha_baja:
+                    from datetime import datetime, timezone
+                    db_empleado.fecha_baja = datetime.now(timezone.utc)
+
         db.flush()
 
         puesto = db.query(models.Puesto).filter(models.Puesto.id == db_empleado.puesto_id).first()
@@ -1071,6 +1083,23 @@ class PersonalService:
 
         if horario_sabado_was_sent:
             db_empleado.horario_sabado_id = horario_sabado_id
+            # El checkbox de Personal debe ganar sobre hora_salida_sabado del horario L-V
+            # (p. ej. General con sábado 14:00). "" = no labora sábado; NULL = heredar del L-V.
+            from app.modules.asistencia import models as asist_models
+            eh_activo = (
+                db.query(asist_models.EmpleadoHorario)
+                .filter(
+                    asist_models.EmpleadoHorario.empleado_id == empleado_id,
+                    asist_models.EmpleadoHorario.activo == True,
+                )
+                .order_by(asist_models.EmpleadoHorario.id.desc())
+                .first()
+            )
+            if eh_activo:
+                if horario_sabado_id is None:
+                    eh_activo.hora_salida_sabado = ""
+                elif eh_activo.hora_salida_sabado is not None and str(eh_activo.hora_salida_sabado).strip() == "":
+                    eh_activo.hora_salida_sabado = None
 
         db.commit()
         return PersonalService.get_empleado(db, empleado_id)
@@ -1085,6 +1114,10 @@ class PersonalService:
         db_empleado.estado = models.EstadoEmpleado.BAJA
         from datetime import datetime, timezone
         db_empleado.fecha_baja = datetime.now(timezone.utc)
+        # Revoca acceso a la app de inmediato (sesión activa + login bloqueado limpio).
+        db_empleado.session_id = None
+        db_empleado.login_fallos_consecutivos = 0
+        db_empleado.login_bloqueado_hasta = None
 
         # Encolar borrado del empleado en cada reloj donde fue enviado.
         # IMPORTANTE: filtrar por pin_checador (único globalmente). Si filtramos solo por
@@ -1137,8 +1170,22 @@ class PersonalService:
         db_empleado.must_change_password = True
         # Invalida sesión activa: debe volver a entrar con la temporal.
         db_empleado.session_id = None
+        db_empleado.login_fallos_consecutivos = 0
+        db_empleado.login_bloqueado_hasta = None
         db.commit()
         return temporal
+
+    @staticmethod
+    def desbloquear_cuenta_login(db: Session, empleado_id: int) -> Optional[models.Empleado]:
+        """Quita bloqueo anti-fuerza bruta (fallos + login_bloqueado_hasta). Solo Admin vía ruta."""
+        db_empleado = db.query(models.Empleado).filter(models.Empleado.id == empleado_id).first()
+        if not db_empleado:
+            return None
+        db_empleado.login_fallos_consecutivos = 0
+        db_empleado.login_bloqueado_hasta = None
+        db.commit()
+        db.refresh(db_empleado)
+        return db_empleado
     
     @staticmethod
     def get_subordinados(db: Session, jefe_id: int) -> List[models.Empleado]:
@@ -1175,7 +1222,7 @@ class PersonalService:
 
     @staticmethod
     def get_es_director(db: Session, empleado_id: int) -> bool:
-        """True si el empleado tiene puesto Director General (aprueba vacaciones solo de gerentes/supervisores)."""
+        """True si es Director General o Adjunto (aprueba vacaciones de gerentes/supervisores)."""
         emp = db.query(models.Empleado).options(joinedload(models.Empleado.puesto_rel)).filter(models.Empleado.id == empleado_id).first()
         return emp is not None and emp.puesto_rel is not None and PersonalService._nombre_es_director_top(emp.puesto_rel.nombre)
 

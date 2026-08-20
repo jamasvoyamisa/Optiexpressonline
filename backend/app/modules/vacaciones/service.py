@@ -14,6 +14,8 @@ from app.core.timezone_utils import hoy_mexico, to_mexico
 
 # Prescripción LFT: disfrute dentro de 18 meses tras el aniversario (pasado ese plazo se pierde el derecho)
 MESES_PRESCRIPCION_VACACIONES = 18
+# Vacaciones de días ya pasados: solo con falta automática injustificada y dentro de esta ventana.
+VENTANA_DIAS_VACACIONES_RETROACTIVAS = 7
 
 
 def compute_aprobador_es_jefe_directo(solicitud: models.SolicitudVacaciones) -> Optional[bool]:
@@ -634,6 +636,95 @@ class VacacionesService:
                 count += 1
             current += timedelta(days=1)
         return count
+
+    @staticmethod
+    def _festivos_set_rango(db: Session, inicio: date, fin: date) -> set:
+        from app.modules.asistencia import models as asistencia_models
+
+        rows = (
+            db.query(asistencia_models.DiaFestivo.fecha)
+            .filter(
+                asistencia_models.DiaFestivo.activo == True,
+                asistencia_models.DiaFestivo.fecha >= inicio,
+                asistencia_models.DiaFestivo.fecha <= fin,
+            )
+            .all()
+        )
+        return {r.fecha for r in rows}
+
+    @staticmethod
+    def iter_dias_laborables_vacaciones(
+        fecha_inicio: datetime,
+        fecha_fin: datetime,
+        db: Session,
+    ):
+        """Días del rango que cuentan para vacaciones (sin domingo ni festivo activo)."""
+        inicio = fecha_inicio.date() if isinstance(fecha_inicio, datetime) else fecha_inicio
+        fin = fecha_fin.date() if isinstance(fecha_fin, datetime) else fecha_fin
+        if fin < inicio:
+            return
+        festivos = VacacionesService._festivos_set_rango(db, inicio, fin)
+        current = inicio
+        while current <= fin:
+            if current.weekday() != 6 and current not in festivos:
+                yield current
+            current += timedelta(days=1)
+
+    @staticmethod
+    def _falta_auto_injustificada_en_dia(db: Session, empleado_id: int, fecha_mex: date) -> bool:
+        from app.core.timezone_utils import mexico_date_to_utc_range
+        from app.modules.asistencia import models as asistencia_models
+
+        start_utc, end_utc = mexico_date_to_utc_range(fecha_mex)
+        row = (
+            db.query(asistencia_models.Incidencia.id)
+            .filter(
+                asistencia_models.Incidencia.empleado_id == empleado_id,
+                asistencia_models.Incidencia.tipo == asistencia_models.TipoIncidencia.FALTA,
+                asistencia_models.Incidencia.origen == "automatico",
+                asistencia_models.Incidencia.justificada == False,
+                asistencia_models.Incidencia.fecha >= start_utc,
+                asistencia_models.Incidencia.fecha < end_utc,
+            )
+            .first()
+        )
+        return row is not None
+
+    @staticmethod
+    def listar_fechas_faltas_retroactivas_elegibles(db: Session, empleado_id: int) -> List[str]:
+        """Fechas (YYYY-MM-DD) de faltas automáticas injustificadas dentro de la ventana de 7 días."""
+        hoy = hoy_mexico()
+        desde = hoy - timedelta(days=VENTANA_DIAS_VACACIONES_RETROACTIVAS)
+        fechas: List[str] = []
+        d = desde
+        while d < hoy:
+            if VacacionesService._falta_auto_injustificada_en_dia(db, empleado_id, d):
+                fechas.append(d.isoformat())
+            d += timedelta(days=1)
+        return fechas
+
+    @staticmethod
+    def _validar_dias_retroactivos_solicitud(
+        db: Session,
+        empleado_id: int,
+        fecha_inicio: datetime,
+        fecha_fin: datetime,
+    ) -> None:
+        hoy = hoy_mexico()
+        for dia in VacacionesService.iter_dias_laborables_vacaciones(fecha_inicio, fecha_fin, db):
+            if dia >= hoy:
+                continue
+            dias_atras = (hoy - dia).days
+            if dias_atras > VENTANA_DIAS_VACACIONES_RETROACTIVAS:
+                raise ValueError(
+                    f"El día {dia.isoformat()} ya supera los {VENTANA_DIAS_VACACIONES_RETROACTIVAS} días "
+                    "permitidos para solicitar vacaciones retroactivas."
+                )
+            if not VacacionesService._falta_auto_injustificada_en_dia(db, empleado_id, dia):
+                raise ValueError(
+                    f"Solo puedes solicitar vacaciones retroactivas en días con falta registrada. "
+                    f"El {dia.isoformat()} no tiene una falta automática pendiente de justificar."
+                )
     
     @staticmethod
     def _dias_disponibles_para_solicitar(db: Session, empleado_id: int) -> Tuple[Decimal, Decimal]:
@@ -675,11 +766,6 @@ class VacacionesService:
     @staticmethod
     def create_solicitud(db: Session, solicitud: schemas.SolicitudVacacionesCreate) -> models.SolicitudVacaciones:
         """Crear nueva solicitud de vacaciones"""
-        # No permitir solicitar vacaciones para días ya pasados (solo desde la fecha actual en adelante)
-        inicio_date = solicitud.fecha_inicio.date()
-        if inicio_date < hoy_mexico():
-            raise ValueError("No se pueden solicitar vacaciones para días ya pasados. La fecha de inicio debe ser hoy o una fecha futura.")
-
         # Validar que el empleado existe
         empleado = db.query(personal_models.Empleado).filter(
             personal_models.Empleado.id == solicitud.empleado_id
@@ -688,6 +774,14 @@ class VacacionesService:
             raise ValueError("Empleado no encontrado")
         if getattr(empleado, "exento_incidencias", False):
             raise ValueError("Los usuarios especiales no pueden solicitar vacaciones.")
+
+        # Pasado: solo días con falta automática injustificada y dentro de 7 días.
+        VacacionesService._validar_dias_retroactivos_solicitud(
+            db,
+            solicitud.empleado_id,
+            solicitud.fecha_inicio,
+            solicitud.fecha_fin,
+        )
 
         # Calcular días solicitados (excluye domingos y festivos activos)
         dias_solicitados = VacacionesService.calcular_dias_entre_fechas(
@@ -895,6 +989,17 @@ class VacacionesService:
                 db.rollback()
                 raise
             solicitud.estado = models.EstadoSolicitud.APROBADA_JEFE
+            from app.modules.asistencia.service import AsistenciaService
+
+            AsistenciaService.justificar_faltas_por_solicitud_vacaciones(
+                db,
+                empleado_id=solicitud.empleado_id,
+                fecha_inicio=solicitud.fecha_inicio,
+                fecha_fin=solicitud.fecha_fin,
+                justificado_por_id=jefe_id,
+                solicitud_id=solicitud.id,
+                do_commit=False,
+            )
         else:
             solicitud.estado = models.EstadoSolicitud.RECHAZADA
         
@@ -1393,3 +1498,128 @@ class VacacionesService:
             "omitidos": omitidos,
             "errores": errores,
         }
+
+    # ── Documento PDF firmado ──────────────────────────────────────────────
+
+    MAX_PDF_BYTES = 10 * 1024 * 1024  # 10 MB
+
+    @staticmethod
+    def resolve_firmados_base_dir():
+        from pathlib import Path
+        from app.core.config import settings
+
+        preferred = Path(settings.VACACIONES_FIRMADOS_DIR).resolve()
+        try:
+            preferred.mkdir(parents=True, exist_ok=True)
+            return preferred
+        except (PermissionError, FileNotFoundError, OSError):
+            local = Path(__file__).resolve().parents[3] / "storage" / "vacaciones" / "firmados"
+            local.mkdir(parents=True, exist_ok=True)
+            return local
+
+    @staticmethod
+    def _estado_permite_documento_firmado(solicitud: models.SolicitudVacaciones) -> bool:
+        est = getattr(solicitud.estado, "value", str(solicitud.estado)).lower()
+        return est in (
+            models.EstadoSolicitud.APROBADA_JEFE.value,
+            models.EstadoSolicitud.APROBADA.value,
+        )
+
+    @staticmethod
+    def puede_gestionar_documento_firmado(
+        db: Session,
+        solicitud: models.SolicitudVacaciones,
+        current: dict,
+    ) -> bool:
+        """Empleado dueño, jefe de área / director / GG, RH o Admin."""
+        uid = int(current["user_id"])
+        if current.get("is_superuser") or current.get("is_rh"):
+            return True
+        if solicitud.empleado_id == uid:
+            return True
+        if current.get("is_director") or current.get("is_gerente_general"):
+            return True
+        emp = solicitud.empleado
+        if not emp:
+            emp = (
+                db.query(personal_models.Empleado)
+                .options(joinedload(personal_models.Empleado.departamento_rel))
+                .filter(personal_models.Empleado.id == solicitud.empleado_id)
+                .first()
+            )
+        if emp and getattr(emp, "jefe_id", None) == uid:
+            return True
+        if (
+            emp
+            and getattr(emp, "departamento_rel", None)
+            and getattr(emp.departamento_rel, "jefe_id", None) == uid
+        ):
+            return True
+        depto_ids = current.get("departamento_ids_que_administro") or []
+        if emp and emp.departamento_id and emp.departamento_id in depto_ids:
+            return True
+        return False
+
+    @staticmethod
+    def guardar_documento_firmado(
+        db: Session,
+        solicitud_id: int,
+        uploader_id: int,
+        filename: str,
+        raw_bytes: bytes,
+    ) -> models.SolicitudVacaciones:
+        from pathlib import Path
+
+        sol = VacacionesService.get_solicitud(db, solicitud_id)
+        if not sol:
+            raise ValueError("Solicitud no encontrada")
+        if not VacacionesService._estado_permite_documento_firmado(sol):
+            raise ValueError(
+                "Solo se puede subir el PDF firmado cuando la solicitud ya fue aprobada por el jefe."
+            )
+        original = (filename or "").strip()
+        if not original.lower().endswith(".pdf"):
+            raise ValueError("Solo se permiten archivos PDF.")
+        if not raw_bytes:
+            raise ValueError("Archivo vacío.")
+        if len(raw_bytes) > VacacionesService.MAX_PDF_BYTES:
+            raise ValueError("El PDF no puede superar 10 MB.")
+        # Validación básica de cabecera PDF
+        if not raw_bytes[:5].startswith(b"%PDF-"):
+            raise ValueError("El archivo no es un PDF válido.")
+
+        base = VacacionesService.resolve_firmados_base_dir()
+        emp_dir = base / str(int(sol.empleado_id))
+        emp_dir.mkdir(parents=True, exist_ok=True)
+        stored_name = f"{int(sol.id)}.pdf"
+        abs_path = emp_dir / stored_name
+        abs_path.write_bytes(raw_bytes)
+        try:
+            ruta_rel = str(abs_path.relative_to(base)).replace("\\", "/")
+        except ValueError:
+            ruta_rel = f"{sol.empleado_id}/{stored_name}"
+
+        sol.documento_firmado_ruta = ruta_rel
+        sol.documento_firmado_nombre = Path(original).name[:255]
+        sol.documento_firmado_at = datetime.now(timezone.utc)
+        sol.documento_firmado_por_id = uploader_id
+        db.commit()
+        db.refresh(sol)
+        return sol
+
+    @staticmethod
+    def documento_firmado_abs_path(solicitud: models.SolicitudVacaciones):
+        from pathlib import Path
+
+        rel = (solicitud.documento_firmado_ruta or "").strip().replace("\\", "/")
+        if not rel or ".." in rel.split("/"):
+            raise ValueError("No hay documento firmado.")
+        base = VacacionesService.resolve_firmados_base_dir()
+        safe = (base / rel).resolve()
+        try:
+            safe.relative_to(base)
+        except ValueError:
+            raise ValueError("Ruta de documento inválida.")
+        if not safe.is_file():
+            raise ValueError("Archivo de documento firmado no encontrado.")
+        return safe

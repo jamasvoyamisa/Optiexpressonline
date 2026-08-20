@@ -33,6 +33,10 @@ export interface AuthMe {
   departamentos: { id: number; nombre: string }[];
   /** Departamentos que administra (como gerente o supervisor) para mostrar en Mi Área. */
   departamentos_que_administro?: { id: number; nombre: string }[];
+  /** Admin habilitó la subida de PDF firmado en vacaciones. */
+  vacaciones_pdf_firmado_habilitado?: boolean;
+  /** Admin habilitó PDF firmado / firma en pantalla en préstamos. */
+  prestamos_pdf_firmado_habilitado?: boolean;
 }
 
 interface AuthState {

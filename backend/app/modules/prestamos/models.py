@@ -73,8 +73,15 @@ class SolicitudPrestamo(Base):
     # RH confirma registro en nómina después del depósito (notificación al empleado).
     fecha_confirmacion_rh = Column(DateTime(timezone=True), nullable=True)
 
+    # PDF firmado (escaneo o generado al firmar en pantalla). No se guarda la imagen de firma aparte.
+    documento_firmado_ruta = Column(String(500), nullable=True)
+    documento_firmado_nombre = Column(String(255), nullable=True)
+    documento_firmado_at = Column(DateTime(timezone=True), nullable=True)
+    documento_firmado_por_id = Column(Integer, ForeignKey("empleados.id"), nullable=True)
+
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     empleado = relationship("Empleado", foreign_keys=[empleado_id])
     aprobador = relationship("Empleado", foreign_keys=[aprobado_por_id])
+    documento_firmado_por = relationship("Empleado", foreign_keys=[documento_firmado_por_id])

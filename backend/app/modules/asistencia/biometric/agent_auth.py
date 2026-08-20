@@ -56,8 +56,7 @@ def require_device_api_key_or_superuser(
 ) -> dict:
     """
     Para endpoints consultados tanto por el agente local (X-API-Key de un dispositivo
-    activo) como por el frontend de administración (JWT de Administrador/Superuser).
-    Antes no exigía ninguna de las dos cosas.
+    activo) como por el frontend (JWT de Administrador/Superuser o RH).
     """
     if x_api_key:
         if verify_api_key(db, x_api_key):
@@ -66,19 +65,24 @@ def require_device_api_key_or_superuser(
 
     if token:
         from app.core.security import decode_access_token
-        from app.modules.personal.models import Empleado, Rol
+        from app.modules.personal.models import Empleado, Rol, Puesto
 
         payload = decode_access_token(token)
         user_id = payload.get("sub") if payload else None
         if user_id:
             empleado = db.query(Empleado).filter(Empleado.id == int(user_id)).first()
-            if empleado and empleado.rol_id:
-                rol = db.query(Rol).filter(Rol.id == empleado.rol_id).first()
-                if rol and rol.nombre in ("Administrador", "Superuser"):
-                    return {"via": "jwt", "user_id": user_id}
+            if empleado:
+                if empleado.rol_id:
+                    rol = db.query(Rol).filter(Rol.id == empleado.rol_id).first()
+                    if rol and rol.nombre in ("Administrador", "Superuser", "RH", "Recursos Humanos"):
+                        return {"via": "jwt", "user_id": user_id}
+                if empleado.puesto_id:
+                    puesto = db.query(Puesto).filter(Puesto.id == empleado.puesto_id).first()
+                    if puesto and (puesto.nombre or "").strip().lower() in ("rh", "recursos humanos"):
+                        return {"via": "jwt", "user_id": user_id}
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Solo administradores o un dispositivo autorizado pueden consultar esto",
+            detail="Solo administradores, RH o un dispositivo autorizado pueden consultar esto",
         )
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="No autenticado")

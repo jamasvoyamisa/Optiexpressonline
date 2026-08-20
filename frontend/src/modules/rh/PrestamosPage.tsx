@@ -4,6 +4,7 @@ import { fmtNombreEmpleado } from '../../utils/format';
 import { useAuth } from '../../hooks/useAuth';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { generarDocumentoPrestamo } from '../prestamos/documentoPrestamo';
+import { AccionesDocumentoPrestamos } from '../prestamos/AccionesDocumentoPrestamos';
 import {
   rhMobileBadge,
   rhMobileBtnPrimary,
@@ -46,6 +47,9 @@ interface SolicitudPrestamo {
   created_at: string;
   empleado?: Empleado | null;
   aprobador?: Empleado | null;
+  tiene_documento_firmado?: boolean;
+  documento_firmado_ruta?: string | null;
+  documento_firmado_nombre?: string | null;
 }
 
 interface Empresa {
@@ -225,6 +229,34 @@ export const PrestamosPage = ({ embeddedRh = false }: { embeddedRh?: boolean } =
       setLoading(false);
     }
   }, [isRH, authMe?.id]);
+
+  const patchSolicitud = (updated: Partial<SolicitudPrestamo> & { id: number }) => {
+    setSolicitudes((prev) => prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s)));
+  };
+
+  const verDocumento = (sol: SolicitudPrestamo) => {
+    const w = window.open('', '_blank', 'width=820,height=920,scrollbars=yes');
+    if (!w) {
+      alert('Permite ventanas emergentes para ver el documento');
+      return;
+    }
+    w.document.write('<html><body style="font-family:system-ui;padding:40px;text-align:center;color:#666">Cargando documento...</body></html>');
+    void (async () => {
+      try {
+        const res = await api.get(`/personal/empleados/${sol.empleado_id}`);
+        generarDocumentoPrestamo(sol, res.data, w);
+      } catch {
+        const fallbackEmp = sol.empleado ?? null;
+        if (!fallbackEmp) {
+          w.document.open();
+          w.document.write('<html><body style="font-family:system-ui;padding:40px;color:#dc2626"><h2>Error al cargar el documento</h2><p>No se pudo obtener la información del empleado.</p><button onclick="window.close()">Cerrar</button></body></html>');
+          w.document.close();
+          return;
+        }
+        generarDocumentoPrestamo(sol, fallbackEmp, w);
+      }
+    })();
+  };
 
   useEffect(() => {
     if (isRH) {
@@ -631,34 +663,15 @@ export const PrestamosPage = ({ embeddedRh = false }: { embeddedRh?: boolean } =
                     {(isRH || puedeDepositarGG || puedeAutorizarDepto) && (
                       <td style={{ ...td, textAlign: 'center' }}>
                         <div style={{ display: 'flex', gap: 6, justifyContent: 'center', flexWrap: 'wrap' }}>
-                          <button
-                            onClick={() => {
-                              const w = window.open('', '_blank', 'width=820,height=920,scrollbars=yes');
-                              if (!w) {
-                                alert('Permite ventanas emergentes para ver el documento');
-                                return;
-                              }
-                              w.document.write('<html><body style="font-family:system-ui;padding:40px;text-align:center;color:#666">Cargando documento...</body></html>');
-                              (async () => {
-                                try {
-                                  const res = await api.get(`/personal/empleados/${sol.empleado_id}`);
-                                  generarDocumentoPrestamo(sol, res.data, w);
-                                } catch (err: any) {
-                                  const fallbackEmp = sol.empleado ?? null;
-                                  if (!fallbackEmp) {
-                                    w.document.open();
-                                    w.document.write('<html><body style="font-family:system-ui;padding:40px;color:#dc2626"><h2>Error al cargar el documento</h2><p>No se pudo obtener la información del empleado. Verifica que el servidor esté en línea e intenta de nuevo.</p><button onclick="window.close()">Cerrar</button></body></html>');
-                                    w.document.close();
-                                    return;
-                                  }
-                                  generarDocumentoPrestamo(sol, fallbackEmp, w);
-                                }
-                              })();
-                            }}
-                            style={{ padding: '4px 10px', backgroundColor: '#f1f5f9', color: '#475569', border: '1px solid #cbd5e1', borderRadius: 5, cursor: 'pointer', fontSize: '0.78rem', fontWeight: 600 }}
-                          >
-                            Ver documento
-                          </button>
+                          <AccionesDocumentoPrestamos
+                            solicitud={sol}
+                            esSolicitante={authMe?.id === sol.empleado_id}
+                            permitirSubida={authMe?.prestamos_pdf_firmado_habilitado === true}
+                            empleadoDoc={sol.empleado ?? null}
+                            onVerPlantilla={() => verDocumento(sol)}
+                            onActualizado={(u) => patchSolicitud(u)}
+                            compact
+                          />
                           {sol.estado === 'pendiente' && puedeAutorizarDepto && (
                             <button
                               type="button"
